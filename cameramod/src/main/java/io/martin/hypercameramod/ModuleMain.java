@@ -270,7 +270,7 @@ public class ModuleMain extends XposedModule {
 
     // The camera registers the Essential mode (256) only when its support() answers true, which
     // is a device feature that is off when the Leica customisation is off, so the standard UI has
-    // no such mode. With camera.feature.essential_std set to 1, support() answers true, mode 256
+    // no such mode. Unless camera.feature.essential_std is set to 0, support() answers true, mode 256
     // is added to the standard UI's mode order (v2.S.y), in front of "More" (254), and the check
     // that decides between the strip and "More" (v2.S.E) accepts it.
     private static final String ESSENTIAL_STD_KEY = "camera.feature.essential_std";
@@ -298,7 +298,7 @@ public class ModuleMain extends XposedModule {
             }
             hook(order).intercept(chain -> {
                 Object result = chain.proceed();
-                if (!(result instanceof int[] modes) || !propertyOn(ESSENTIAL_STD_KEY)) {
+                if (!(result instanceof int[] modes) || !essentialStdEnabled()) {
                     return result;
                 }
                 for (int mode : modes) {
@@ -337,7 +337,7 @@ public class ModuleMain extends XposedModule {
                 hook(visible).intercept(chain -> {
                     Object result = chain.proceed();
                     if (Boolean.FALSE.equals(result) && chain.getArg(0) instanceof Integer mode
-                            && mode == ESSENTIAL_MODE && propertyOn(ESSENTIAL_STD_KEY)) {
+                            && mode == ESSENTIAL_MODE && essentialStdEnabled()) {
                         return true;
                     }
                     return result;
@@ -351,7 +351,7 @@ public class ModuleMain extends XposedModule {
                 Method support = entry.getDeclaredMethod("support");
                 hook(support).intercept(chain -> {
                     Object result = chain.proceed();
-                    if (Boolean.FALSE.equals(result) && propertyOn(ESSENTIAL_STD_KEY)) {
+                    if (Boolean.FALSE.equals(result) && essentialStdEnabled()) {
                         if (supportLogged.compareAndSet(false, true)) {
                             log(Log.INFO, TAG, "LegendaryEnter.support() was false, answering true");
                         }
@@ -374,7 +374,7 @@ public class ModuleMain extends XposedModule {
                 key.setAccessible(true);
                 hook(build).intercept(chain -> {
                     Object result = chain.proceed();
-                    if (propertyOn(ESSENTIAL_STD_KEY) && modeListReported.compareAndSet(false, true)) {
+                    if (essentialStdEnabled() && modeListReported.compareAndSet(false, true)) {
                         try {
                             Object self = chain.getThisObject();
                             log(Log.INFO, TAG, "mode list: all " + keys((List<?>) result, key)
@@ -437,6 +437,17 @@ public class ModuleMain extends XposedModule {
             out.add(String.valueOf(key.get(item)));
         }
         return out;
+    }
+
+    // On unless camera.feature.essential_std is 0.
+    private static boolean essentialStdEnabled() {
+        try {
+            Class<?> props = Class.forName("android.os.SystemProperties");
+            return !"0".equals(props.getMethod("get", String.class, String.class)
+                    .invoke(null, ESSENTIAL_STD_KEY, "1"));
+        } catch (Throwable t) {
+            return true;
+        }
     }
 
     private static boolean propertyOn(String key) {

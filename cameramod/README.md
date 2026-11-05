@@ -8,7 +8,7 @@ An LSPosed/Vector module (libxposed API 101-102) that turns on features the Xiao
 | ------- | -------------------------- |
 | Palette and Parameters | The filter edit panel gets the Palette tab and the full Parameters list (tone, saturation, cold/warm, cyan/magenta, noise, soft light, texture, vignette), plus saving, sharing and importing filter presets. The two tabs are made as wide as their labels need (the camera makes them 60 dp wide, which fits two Chinese words, not "Palette" and "Parameters"). |
 | Original colour style | "Original" appears next to Leica Authentic and Leica Vibrant in the photography style picker. In the Leica UI it gets its own "ORIG" badge, because the camera would otherwise draw it as the Authentic badge. |
-| Leica Essential mode in the standard UI, off by default | The Leica Essential mode (the M3/M9 camera) is added to the standard UI's mode strip, which only the Leica UI has. See Use. |
+| Leica Essential mode in the standard UI | The Leica Essential mode (the M3/M9 camera) is added to the standard UI's mode strip, which only the Leica UI has. See Use. |
 | Leica Essential CMOS (M10R), off by default | "CMOS" is added to the Leica Essential style list, between B&W (M3) and CCD (M9), once enabled (see Use). |
 
 Original colour style and CMOS only change the photo if the phone's camera hardware layer implements them. The camera sends the chosen style to the hardware layer; the module only makes the choice available.
@@ -23,7 +23,7 @@ The module does not check the camera's version number. Each feature looks for wh
 | ------- | --------------- | ------------------ |
 | Palette and Parameters | The system property `camera.feature.styleVersion`, which the camera reads to decide whether to build the full Parameters list. | None. |
 | Original colour style | The camera characteristic `xiaomi.capabilities.stylizationTypeMask`, bit 3. | None. |
-| Essential mode in the standard UI | Only when `camera.feature.essential_std` is 1. The mode order class `v2.S` and `LegendaryEnter`. | Tested: camera 6.7.000500.0. |
+| Essential mode in the standard UI | On unless `camera.feature.essential_std` is 0. The mode order class `v2.S` and `LegendaryEnter`. | Tested: camera 6.7.000500.0. |
 | CMOS (M10R) | Only when `camera.feature.m10r` is 1. The Leica Essential list class, by a layout ("profile") that names it. | Tested: camera 6.7.000280.0 (HyperOS 4.0.5.0). 6.7.000070.0 already has the entry. |
 
 When the Leica Essential list is not one the module knows, it leaves the camera unchanged and shows a toast in Camera, once per camera version.
@@ -48,13 +48,13 @@ su -c "setprop camera.feature.m10r 1"
 
 It resets on reboot (set it to 0 or reboot to turn it off). To keep it, run the command from a boot script such as Magisk's `service.sh`.
 
-To add the Leica Essential mode to the standard UI, run as root and force-stop Camera:
+The Leica Essential mode is added to the standard UI's mode strip, in front of "More", with no setting needed. To turn it off, run as root and force-stop Camera:
 
 ```bash
-su -c "setprop camera.feature.essential_std 1"
+su -c "setprop camera.feature.essential_std 0"
 ```
 
-The mode appears in the mode strip, in front of "More". It resets on reboot like the CMOS setting. Tested on camera 6.7.000500.0 (Xiaomi 17 Ultra, standard UI).
+The setting resets on reboot (the mode comes back). Tested on camera 6.7.000500.0 (Xiaomi 17 Ultra, standard UI).
 
 If the camera misbehaves, disable the module and force-stop Camera to restore the stock behaviour.
 
