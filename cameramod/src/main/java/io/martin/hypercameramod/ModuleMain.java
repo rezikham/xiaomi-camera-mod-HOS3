@@ -99,6 +99,7 @@ public class ModuleMain extends XposedModule {
     private volatile boolean propertiesHooked;
     private volatile boolean tabsHooked;
     private volatile boolean modeListHooked;
+    private volatile boolean nameStyleHooked;
     private volatile boolean stylizationHooked;
     private volatile boolean legendHooked;
     private volatile boolean assetsHooked;
@@ -131,6 +132,7 @@ public class ModuleMain extends XposedModule {
         installPropertyHook();
         installTabHook();
         installModeListHook(loader);
+        installNameStyleHook(loader);
         installStylizationHook();
         installLegendHook(loader);
         installStyleHook(loader);
@@ -264,6 +266,46 @@ public class ModuleMain extends XposedModule {
         indicatorParams.width = tab + Math.round(TAB_INDICATOR_EXTRA_DP * density);
         indicator.setLayoutParams(indicatorParams);
         log(Log.INFO, TAG, "filter edit tabs widened to " + Math.round(tab * 2 / density) + " dp");
+    }
+
+    // ---- 1b2. Presets in the Leica UI's filter strip ---------------------------------------------
+
+    // The Leica UI shows a filter's name as a picture (com.android.camera.fragment.G, "image name
+    // style"). A preset the user saves has no name picture, so the strip asks that class to show
+    // its text name, and the method for that is a placeholder in this camera that throws
+    // "An operation is not implemented", which closes the camera whenever the strip reaches the
+    // preset. Without the exception the preset is shown by its thumbnail only; its name goes into
+    // the thumbnail's content description.
+    private void installNameStyleHook(ClassLoader loader) {
+        if (nameStyleHooked) {
+            return;
+        }
+        try {
+            Class<?> style = Class.forName("com.android.camera.fragment.G", false, loader);
+            Method setName = style.getDeclaredMethod("h", String.class);
+            Field image = null;
+            for (Field f : style.getDeclaredFields()) {
+                if (ImageView.class.isAssignableFrom(f.getType())) {
+                    f.setAccessible(true);
+                    image = f;
+                }
+            }
+            Field imageField = image;
+            hook(setName).intercept(chain -> {
+                try {
+                    if (imageField != null && imageField.get(chain.getThisObject()) instanceof ImageView view
+                            && chain.getArg(0) instanceof String name) {
+                        view.setContentDescription(name);
+                    }
+                } catch (Throwable ignored) {
+                }
+                return null;
+            });
+            nameStyleHooked = true;
+            log(Log.INFO, TAG, "hooked " + style.getName() + ".h (preset names in the Leica UI)");
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot hook the Leica UI name style: " + t);
+        }
     }
 
     // ---- 1c. Leica Essential in the standard UI's mode list --------------------------------------
