@@ -276,6 +276,7 @@ public class ModuleMain extends XposedModule {
     private static final int ESSENTIAL_MODE = 256;
     private static final int MORE_MODE = 254;
     private final AtomicBoolean modeListLogged = new AtomicBoolean();
+    private final AtomicBoolean supportLogged = new AtomicBoolean();
 
     private void installModeListHook(ClassLoader loader) {
         if (modeListHooked) {
@@ -339,6 +340,25 @@ public class ModuleMain extends XposedModule {
                     }
                     return result;
                 });
+            }
+            // The Essential entry is only registered when its support() answers true, which is a
+            // device feature that is off with the Leica customisation (and so in the standard UI).
+            try {
+                Class<?> entry = Class.forName(
+                        "com.android.camera.features.mode.legendary.LegendaryEnter", false, loader);
+                Method support = entry.getDeclaredMethod("support");
+                hook(support).intercept(chain -> {
+                    Object result = chain.proceed();
+                    if (Boolean.FALSE.equals(result) && propertyOn(ESSENTIAL_STD_KEY)) {
+                        if (supportLogged.compareAndSet(false, true)) {
+                            log(Log.INFO, TAG, "LegendaryEnter.support() was false, answering true");
+                        }
+                        return true;
+                    }
+                    return result;
+                });
+            } catch (Throwable t) {
+                log(Log.WARN, TAG, "cannot hook LegendaryEnter.support: " + t);
             }
             // For the experiment: report what the camera's final mode list holds.
             try {
