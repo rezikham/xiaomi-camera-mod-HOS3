@@ -413,8 +413,16 @@ public class ModuleMain extends XposedModule {
                     log(Log.INFO, TAG, "filter list asked for category " + category + ": "
                             + (result instanceof List<?> l ? l.size() : "none") + " items");
                 }
-                if (category instanceof Integer c && c == STANDARD_CATEGORY) {
-                    addFilms(result, FILMS, resolved);
+                if (category instanceof Integer c && (c == STANDARD_CATEGORY || c == PHOTO_CATEGORY)) {
+                    // The list for category 10 can differ from the one the camera built (000500
+                    // hands out a copy without the films), so check it here too; films already
+                    // in the list are left alone.
+                    List<Object> created = addFilms(result, FILMS, resolved);
+                    if (!created.isEmpty()) {
+                        log(Log.INFO, TAG, "category " + c + ": added " + created.size()
+                                + " films to the list the camera handed out ("
+                                + ((List<?>) result).size() + " items)");
+                    }
                 }
                 return result;
             });
