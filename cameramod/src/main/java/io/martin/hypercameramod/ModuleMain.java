@@ -98,6 +98,7 @@ public class ModuleMain extends XposedModule {
 
     private volatile boolean propertiesHooked;
     private volatile boolean tabsHooked;
+    private volatile boolean modeListHooked;
     private volatile boolean stylizationHooked;
     private volatile boolean legendHooked;
     private volatile boolean assetsHooked;
@@ -129,6 +130,7 @@ public class ModuleMain extends XposedModule {
         }
         installPropertyHook();
         installTabHook();
+        installModeListHook(loader);
         installStylizationHook();
         installLegendHook(loader);
         installStyleHook(loader);
@@ -264,6 +266,68 @@ public class ModuleMain extends XposedModule {
         log(Log.INFO, TAG, "filter edit tabs widened to " + Math.round(tab * 2 / density) + " dp");
     }
 
+    // ---- 1c. Leica Essential in the standard UI's mode list (experimental) -----------------------
+
+    // The standard UI builds its mode strip from an order of mode ids (v2.S.y), taken from the
+    // saved order or the device's default list. The Leica Essential mode (256) is not in that
+    // list for this phone, so only the Leica UI shows it. With camera.feature.essential_std set to
+    // 1, mode 256 is added to the order, in front of "More" (254).
+    private static final String ESSENTIAL_STD_KEY = "camera.feature.essential_std";
+    private static final int ESSENTIAL_MODE = 256;
+    private static final int MORE_MODE = 254;
+    private final AtomicBoolean modeListLogged = new AtomicBoolean();
+
+    private void installModeListHook(ClassLoader loader) {
+        if (modeListHooked) {
+            return;
+        }
+        try {
+            Class<?> list = Class.forName("v2.S", false, loader);
+            Method order = null;
+            for (Method m : list.getDeclaredMethods()) {
+                if (m.getName().equals("y") && m.getReturnType() == int[].class
+                        && m.getParameterCount() == 1) {
+                    order = m;
+                }
+            }
+            if (order == null) {
+                throw new NoSuchMethodException("mode order method in " + list);
+            }
+            hook(order).intercept(chain -> {
+                Object result = chain.proceed();
+                if (!(result instanceof int[] modes) || !propertyOn(ESSENTIAL_STD_KEY)) {
+                    return result;
+                }
+                for (int mode : modes) {
+                    if (mode == ESSENTIAL_MODE) {
+                        return result;
+                    }
+                }
+                int at = modes.length;
+                for (int i = 0; i < modes.length; i++) {
+                    if (modes[i] == MORE_MODE) {
+                        at = i;
+                        break;
+                    }
+                }
+                int[] extended = new int[modes.length + 1];
+                System.arraycopy(modes, 0, extended, 0, at);
+                extended[at] = ESSENTIAL_MODE;
+                System.arraycopy(modes, at, extended, at + 1, modes.length - at);
+                if (modeListLogged.compareAndSet(false, true)) {
+                    log(Log.INFO, TAG, "added the Leica Essential mode to the mode order at "
+                            + at + " of " + extended.length);
+                }
+                return extended;
+            });
+            modeListHooked = true;
+            log(Log.INFO, TAG, "hooked " + list.getName() + "." + order.getName()
+                    + " (mode order; " + ESSENTIAL_STD_KEY + ")");
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot hook the mode order: " + t);
+        }
+    }
+
     // ---- 2. Original colour style -------------------------------------------------------------
 
     private void installStylizationHook() {
@@ -294,10 +358,14 @@ public class ModuleMain extends XposedModule {
 
     // Read on every build of the list, so setprop takes effect the next time Camera starts.
     private boolean m10rEnabled() {
+        return propertyOn(M10R_ENABLE_KEY);
+    }
+
+    private static boolean propertyOn(String key) {
         try {
             Class<?> props = Class.forName("android.os.SystemProperties");
             return "1".equals(props.getMethod("get", String.class, String.class)
-                    .invoke(null, M10R_ENABLE_KEY, "0"));
+                    .invoke(null, key, "0"));
         } catch (Throwable t) {
             return false;
         }
