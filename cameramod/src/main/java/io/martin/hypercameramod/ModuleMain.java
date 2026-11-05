@@ -320,8 +320,29 @@ public class ModuleMain extends XposedModule {
                 }
                 return extended;
             });
+            // Whether a mode sits in the strip or under "More" is decided from a saved list of
+            // all supported modes (written when the camera first ran) that does not hold 256, so
+            // the check answers for the mode itself.
+            Method visible = null;
+            for (Method m : list.getDeclaredMethods()) {
+                if (m.getName().equals("E") && m.getReturnType() == boolean.class
+                        && m.getParameterCount() == 1 && m.getParameterTypes()[0] == int.class) {
+                    visible = m;
+                }
+            }
+            if (visible != null) {
+                hook(visible).intercept(chain -> {
+                    Object result = chain.proceed();
+                    if (Boolean.FALSE.equals(result) && chain.getArg(0) instanceof Integer mode
+                            && mode == ESSENTIAL_MODE && propertyOn(ESSENTIAL_STD_KEY)) {
+                        return true;
+                    }
+                    return result;
+                });
+            }
             modeListHooked = true;
             log(Log.INFO, TAG, "hooked " + list.getName() + "." + order.getName()
+                    + (visible != null ? ", " + visible.getName() : "")
                     + " (mode order; " + ESSENTIAL_STD_KEY + ")");
         } catch (Throwable t) {
             log(Log.WARN, TAG, "cannot hook the mode order: " + t);
@@ -458,8 +479,8 @@ public class ModuleMain extends XposedModule {
         }
         log(Log.WARN, TAG, "the Leica Essential style list is not one this module knows; "
                 + "the CMOS style is not added");
-        if (!problems.contains(MSG_LEGEND)) {
-            problems.add(MSG_LEGEND);
+        if (m10rEnabled() && !problems.contains(MSG_LEGEND)) {
+            problems.add(MSG_LEGEND);   // only worth a notice when the CMOS entry was asked for
         }
     }
 
