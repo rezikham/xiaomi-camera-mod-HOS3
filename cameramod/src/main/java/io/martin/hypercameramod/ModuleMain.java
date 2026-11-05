@@ -340,6 +340,33 @@ public class ModuleMain extends XposedModule {
                     return result;
                 });
             }
+            // For the experiment: report what the camera's final mode list holds.
+            try {
+                Method build = list.getDeclaredMethod("C");
+                Field strip = list.getDeclaredField("c");
+                Field more = list.getDeclaredField("d");
+                strip.setAccessible(true);
+                more.setAccessible(true);
+                Class<?> item = Class.forName("com.android.camera.data.data.d", false, loader);
+                Field key = item.getDeclaredField("r");
+                key.setAccessible(true);
+                hook(build).intercept(chain -> {
+                    Object result = chain.proceed();
+                    if (propertyOn(ESSENTIAL_STD_KEY)) {
+                        try {
+                            Object self = chain.getThisObject();
+                            log(Log.INFO, TAG, "mode list: all " + keys((List<?>) result, key)
+                                    + ", strip " + keys((List<?>) strip.get(self), key)
+                                    + ", more " + keys((List<?>) more.get(self), key));
+                        } catch (Throwable t) {
+                            log(Log.WARN, TAG, "cannot read the mode list: " + t);
+                        }
+                    }
+                    return result;
+                });
+            } catch (Throwable t) {
+                log(Log.WARN, TAG, "cannot hook the mode list builder: " + t);
+            }
             modeListHooked = true;
             log(Log.INFO, TAG, "hooked " + list.getName() + "." + order.getName()
                     + (visible != null ? ", " + visible.getName() : "")
@@ -380,6 +407,14 @@ public class ModuleMain extends XposedModule {
     // Read on every build of the list, so setprop takes effect the next time Camera starts.
     private boolean m10rEnabled() {
         return propertyOn(M10R_ENABLE_KEY);
+    }
+
+    private static List<String> keys(List<?> items, Field key) throws IllegalAccessException {
+        List<String> out = new java.util.ArrayList<>();
+        for (Object item : items) {
+            out.add(String.valueOf(key.get(item)));
+        }
+        return out;
     }
 
     private static boolean propertyOn(String key) {
