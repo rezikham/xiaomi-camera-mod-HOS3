@@ -85,6 +85,15 @@ public class ModuleMain extends XposedModule {
                     "E9.h", "c",
                     "com.android.camera.features.mode.capture.e", "L", "Y", "G",
                     "h2.a", "a", "x", "s2.t", "Ei.q", "b", "com.xiaomi.camera.effect.EffectController", "q"),
+            // Camera 6.7.000500.0: the filter list, item and registry are as above; the filter
+            // panel, the Looks table and the strip's workspace and item moved to other classes.
+            new Profile("6.7.000500", "Ii.i0", "d",
+                    "j3.b", "b", "l", "e", "d", "g", "h", "i",
+                    "Di.p", "Di.n",
+                    "com.android.camera.fragment.j0", "Bt",
+                    "E9.i", "c",
+                    "com.android.camera.features.mode.capture.d", "M", "Y", "G",
+                    "h2.a", "a", "x", "s2.t", "Ei.q", "b", "com.xiaomi.camera.effect.EffectController", "q"),
     };
 
     // ic_vector_lc_looks_filter_name_icon_standard in 6.7.000280.0 (no R classes at runtime).
@@ -369,6 +378,12 @@ public class ModuleMain extends XposedModule {
     private static Resolved resolve(Profile profile, ClassLoader loader)
             throws ReflectiveOperationException {
         listMethod(profile, loader);
+        // Every class and method the other hooks use must be there too, so that a profile for
+        // another camera version is not taken for this one.
+        Class.forName(profile.panelClass(), false, loader).getDeclaredMethod(profile.panelMethod());
+        Class.forName(profile.looksClass(), false, loader).getDeclaredMethod(profile.looksMethod());
+        Class.forName(profile.workspaceClass(), false, loader)
+                .getDeclaredMethod(profile.initMethod(), int.class);
         Class<?> item = Class.forName(profile.itemClass(), false, loader);
         Constructor<?> create = item.getDeclaredConstructor(int.class, int.class, int.class,
                 int.class, int.class, int.class, String.class);
