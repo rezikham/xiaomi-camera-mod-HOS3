@@ -266,17 +266,19 @@ public class ModuleMain extends XposedModule {
         log(Log.INFO, TAG, "filter edit tabs widened to " + Math.round(tab * 2 / density) + " dp");
     }
 
-    // ---- 1c. Leica Essential in the standard UI's mode list (experimental) -----------------------
+    // ---- 1c. Leica Essential in the standard UI's mode list --------------------------------------
 
-    // The standard UI builds its mode strip from an order of mode ids (v2.S.y), taken from the
-    // saved order or the device's default list. The Leica Essential mode (256) is not in that
-    // list for this phone, so only the Leica UI shows it. With camera.feature.essential_std set to
-    // 1, mode 256 is added to the order, in front of "More" (254).
+    // The camera registers the Essential mode (256) only when its support() answers true, which
+    // is a device feature that is off when the Leica customisation is off, so the standard UI has
+    // no such mode. With camera.feature.essential_std set to 1, support() answers true, mode 256
+    // is added to the standard UI's mode order (v2.S.y), in front of "More" (254), and the check
+    // that decides between the strip and "More" (v2.S.E) accepts it.
     private static final String ESSENTIAL_STD_KEY = "camera.feature.essential_std";
     private static final int ESSENTIAL_MODE = 256;
     private static final int MORE_MODE = 254;
     private final AtomicBoolean modeListLogged = new AtomicBoolean();
     private final AtomicBoolean supportLogged = new AtomicBoolean();
+    private final AtomicBoolean modeListReported = new AtomicBoolean();
 
     private void installModeListHook(ClassLoader loader) {
         if (modeListHooked) {
@@ -372,7 +374,7 @@ public class ModuleMain extends XposedModule {
                 key.setAccessible(true);
                 hook(build).intercept(chain -> {
                     Object result = chain.proceed();
-                    if (propertyOn(ESSENTIAL_STD_KEY)) {
+                    if (propertyOn(ESSENTIAL_STD_KEY) && modeListReported.compareAndSet(false, true)) {
                         try {
                             Object self = chain.getThisObject();
                             log(Log.INFO, TAG, "mode list: all " + keys((List<?>) result, key)

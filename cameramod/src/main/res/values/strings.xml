@@ -1,5 +1,5 @@
 <resources>
     <string name="app_name">HyperCameraMod</string>
-    <string name="module_description">Turns on the Palette and Parameters filter panel and the Original colour style in the Xiaomi Camera, with an optional Leica Essential CMOS (M10R) style.</string>
+    <string name="module_description">Turns on the Palette and Parameters filter panel and the Original colour style in the Xiaomi Camera, with an optional Leica Essential mode in the standard UI and an optional CMOS (M10R) style.</string>
     <string name="m10r_title">Modern vintage</string>
 </resources>
