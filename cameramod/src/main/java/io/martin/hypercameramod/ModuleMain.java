@@ -12,7 +12,11 @@ import android.content.res.Resources;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
 import android.widget.ImageView;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import java.lang.reflect.Field;
@@ -93,6 +97,7 @@ public class ModuleMain extends XposedModule {
     private final AtomicBoolean noticeScheduled = new AtomicBoolean();
 
     private volatile boolean propertiesHooked;
+    private volatile boolean tabsHooked;
     private volatile boolean stylizationHooked;
     private volatile boolean legendHooked;
     private volatile boolean assetsHooked;
@@ -123,6 +128,7 @@ public class ModuleMain extends XposedModule {
             log(Log.WARN, TAG, "cannot find the module APK: " + t);
         }
         installPropertyHook();
+        installTabHook();
         installStylizationHook();
         installLegendHook(loader);
         installStyleHook(loader);
@@ -175,6 +181,87 @@ public class ModuleMain extends XposedModule {
         } catch (NumberFormatException e) {
             return 0;
         }
+    }
+
+    // ---- 1b. Width of the Palette / Parameters tabs --------------------------------------------
+
+    // The tab bar of the filter edit panel is a fixed 120 dp wide (two 60 dp tabs), made for two
+    // Chinese words; longer words in other languages are cut off. When the panel is inflated, the
+    // bar is made as wide as its longer label needs, and the indicator that slides between the
+    // tabs gets the same width as one tab (the camera places the indicator from the bar's width).
+    private static final String TAB_BAR_ID = "filter_edit_tab_bar";
+    private static final String TAB_INDICATOR_ID = "filter_edit_tab_indicator";
+    private static final float TAB_MARGIN_DP = 10f;     // space left and right of the longer label
+    private static final float TAB_INDICATOR_EXTRA_DP = 2f;   // the indicator is 2 dp wider than a tab
+    private volatile int tabBarId = -1;
+    private volatile int tabIndicatorId;
+    private final AtomicBoolean tabFailureLogged = new AtomicBoolean();
+
+    private void installTabHook() {
+        if (tabsHooked) {
+            return;
+        }
+        try {
+            Method inflate = LayoutInflater.class.getDeclaredMethod("inflate", int.class,
+                    ViewGroup.class, boolean.class);
+            hook(inflate).intercept(chain -> {
+                Object result = chain.proceed();
+                if (result instanceof View view) {
+                    try {
+                        widenTabs(view);
+                    } catch (Throwable t) {
+                        if (tabFailureLogged.compareAndSet(false, true)) {
+                            log(Log.WARN, TAG, "cannot widen the filter edit tabs: " + t);
+                        }
+                    }
+                }
+                return result;
+            });
+            tabsHooked = true;
+            log(Log.INFO, TAG, "hooked LayoutInflater.inflate (filter edit tab width)");
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot hook LayoutInflater.inflate: " + t);
+        }
+    }
+
+    private void widenTabs(View root) {
+        Resources res = root.getResources();
+        if (tabBarId < 0) {
+            tabIndicatorId = res.getIdentifier(TAB_INDICATOR_ID, "id", CAMERA_PACKAGE);
+            tabBarId = res.getIdentifier(TAB_BAR_ID, "id", CAMERA_PACKAGE);
+        }
+        if (tabBarId == 0 || tabIndicatorId == 0) {
+            return;   // this camera has no such panel
+        }
+        if (!(root.findViewById(tabBarId) instanceof ViewGroup bar)) {
+            return;
+        }
+        View indicator = bar.findViewById(tabIndicatorId);
+        ViewGroup.LayoutParams barParams = bar.getLayoutParams();
+        if (indicator == null || barParams == null || indicator.getLayoutParams() == null) {
+            return;
+        }
+        float density = res.getDisplayMetrics().density;
+        int tab = barParams.width / 2;   // the camera's own tab width
+        int labels = 0;
+        for (int i = 0; i < bar.getChildCount(); i++) {
+            if (bar.getChildAt(i) instanceof TextView label) {
+                labels++;
+                int need = (int) Math.ceil(label.getPaint().measureText(label.getText().toString()))
+                        + label.getPaddingStart() + label.getPaddingEnd()
+                        + Math.round(2 * TAB_MARGIN_DP * density);
+                tab = Math.max(tab, need);
+            }
+        }
+        if (labels != 2 || tab * 2 == barParams.width) {
+            return;
+        }
+        barParams.width = tab * 2;
+        bar.setLayoutParams(barParams);
+        ViewGroup.LayoutParams indicatorParams = indicator.getLayoutParams();
+        indicatorParams.width = tab + Math.round(TAB_INDICATOR_EXTRA_DP * density);
+        indicator.setLayoutParams(indicatorParams);
+        log(Log.INFO, TAG, "filter edit tabs widened to " + Math.round(tab * 2 / density) + " dp");
     }
 
     // ---- 2. Original colour style -------------------------------------------------------------
