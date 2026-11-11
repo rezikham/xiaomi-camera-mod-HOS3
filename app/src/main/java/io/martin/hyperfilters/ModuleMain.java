@@ -173,6 +173,7 @@ public class ModuleMain extends XposedModule {
     public void onPackageReady(PackageReadyParam param) {
         install("onPackageReady", param.getPackageName(), param.getClassLoader());
         if (CAMERA_PACKAGE.equals(param.getPackageName())) {
+            debugEnvironment();
             scheduleNotice();
         }
     }
@@ -203,6 +204,7 @@ public class ModuleMain extends XposedModule {
                 continue;
             }
             hooked = true;
+            profileName = profile.name();
             log(Log.INFO, TAG, stage + ": camera layout " + profile.name() + ", hooked "
                     + profile.listClass() + "." + profile.listMethod());
             installPanelHook(profile, loader);
@@ -257,6 +259,9 @@ public class ModuleMain extends XposedModule {
                     if (asked instanceof Integer c && (c == LEGACY_CATEGORY
                             || c == LEGACY_PANEL_CATEGORY) && result instanceof List<?> list) {
                         addLegacyFilms(list, c, create, category, ordinal, strings);
+                        if (!list.isEmpty()) {
+                            debugKeys("filter list category " + c + " (ordinals)", list, ordinal);
+                        }
                     }
                 } catch (Throwable t) {
                     log(Log.ERROR, TAG, "could not add film filters", t);
@@ -264,6 +269,7 @@ public class ModuleMain extends XposedModule {
                 return result;
             });
             hooked = true;
+            profileName = "6.4";
             log(Log.INFO, TAG, stage + ": camera layout 6.4, hooked " + effect.getName() + "."
                     + lists.getName());
             installLegacyComponentHook(loader);
@@ -306,13 +312,32 @@ public class ModuleMain extends XposedModule {
                     int films = countLegacyFilms(built, key);
                     log(Log.INFO, TAG, "filter component for mode " + mode + ": " + built.size()
                             + " items, " + films + " films, cloud data " + hasCloud);
-                    if (films == 0 && hasCloud) {
-                        Map<Object, Object> local = new java.util.concurrent.ConcurrentHashMap<>(cloud);
-                        local.remove(mode);
-                        build.invoke(chain.getThisObject(), mode, local);
-                        built = (List<?>) items.invoke(chain.getThisObject());
-                        log(Log.INFO, TAG, "rebuilt from the list: " + built.size() + " items, "
-                                + countLegacyFilms(built, key) + " films");
+                    debugKeys("filter component for mode " + mode + " (as built)", built, key);
+                    if (films == 0 && hasCloud && !merging.get()) {
+                        // Keep what the camera built from the cloud data (it holds filters that
+                        // exist only there) and add the films, taken from a build that uses the
+                        // local list alone.
+                        merging.set(true);
+                        try {
+                            Object self = chain.getThisObject();
+                            List<Object> merged = new ArrayList<>(built);
+                            Map<Object, Object> local = new java.util.concurrent.ConcurrentHashMap<>(cloud);
+                            local.remove(mode);
+                            build.invoke(self, mode, local);
+                            int added = 0;
+                            for (Object item : (List<?>) items.invoke(self)) {
+                                if (isLegacyFilm(item, key)) {
+                                    merged.add(item);
+                                    added++;
+                                }
+                            }
+                            setItems(self, merged);
+                            log(Log.INFO, TAG, "added " + added + " films to the cloud filter list: "
+                                    + merged.size() + " items");
+                            debugKeys("filter component for mode " + mode + " (merged)", merged, key);
+                        } finally {
+                            merging.set(false);
+                        }
                     }
                 } catch (Throwable t) {
                     log(Log.ERROR, TAG, "could not check the filter component", t);
@@ -322,6 +347,85 @@ public class ModuleMain extends XposedModule {
             log(Log.INFO, TAG, "hooked f0.M (filter component)");
         } catch (Throwable t) {
             log(Log.WARN, TAG, "cannot hook the filter component: " + t);
+        }
+    }
+
+    private volatile String profileName;
+    private final ThreadLocal<Boolean> merging = ThreadLocal.withInitial(() -> false);
+
+    // The component keeps its items in a field of the camera's data class (mItems).
+    private static void setItems(Object component, List<?> items) throws Exception {
+        for (Class<?> c = component.getClass(); c != null; c = c.getSuperclass()) {
+            try {
+                Field f = c.getDeclaredField("mItems");
+                f.setAccessible(true);
+                f.set(component, items);
+                return;
+            } catch (NoSuchFieldException ignored) {
+            }
+        }
+        throw new NoSuchFieldException("mItems");
+    }
+
+    private static boolean isLegacyFilm(Object item, Field key) throws Exception {
+        Object k = key.get(item);
+        if (k instanceof String text && text.matches("\\d+")) {
+            int ordinal = (int) (Long.parseLong(text) & 0xFFFF);
+            for (Film film : FILMS) {
+                if (film.ordinal() == ordinal) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // Debug output (on by default, camera.feature.filters_debug set to 0 turns it off): what the
+    // lists and the component hold, so a log shows which filters are there and in what order.
+    private static boolean debugEnabled() {
+        try {
+            Class<?> props = Class.forName("android.os.SystemProperties");
+            return !"0".equals(props.getMethod("get", String.class, String.class)
+                    .invoke(null, "camera.feature.filters_debug", "1"));
+        } catch (Throwable t) {
+            return true;
+        }
+    }
+
+    private final Set<String> debugged = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    private void debugKeys(String label, List<?> items, Field key) {
+        if (!debugEnabled() || items == null) {
+            return;
+        }
+        try {
+            StringBuilder keys = new StringBuilder();
+            for (Object item : items) {
+                keys.append(keys.length() == 0 ? "" : " ").append(key.get(item));
+            }
+            if (debugged.add(label + keys)) {
+                log(Log.INFO, TAG, "debug: " + label + ": " + items.size() + " items, keys [" + keys + "]");
+            }
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "debug: cannot read " + label + ": " + t);
+        }
+    }
+
+    private void debugEnvironment() {
+        if (!debugEnabled()) {
+            return;
+        }
+        Application app = currentApplication();
+        if (app == null) {
+            return;
+        }
+        try {
+            String camera = app.getPackageManager().getPackageInfo(app.getPackageName(), 0).versionName;
+            log(Log.INFO, TAG, "debug: camera " + camera + ", android " + android.os.Build.VERSION.RELEASE
+                    + ", device " + android.os.Build.DEVICE + ", profile "
+                    + (profileName == null ? "none" : profileName));
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "debug: cannot read the camera version: " + t);
         }
     }
 
@@ -466,6 +570,10 @@ public class ModuleMain extends XposedModule {
                     int films = countFilms(built, resolved);
                     log(Log.INFO, TAG, "filter component for " + mode + ": " + built.size()
                             + " items, " + films + " films, cloud data " + hasCloud);
+                    if (!built.isEmpty()) {
+                        debugKeys("filter component for mode " + mode, built,
+                                field(built.get(0).getClass(), "n"));
+                    }
                     if (films == 0 && hasCloud) {
                         Map<Object, Object> local = new java.util.concurrent.ConcurrentHashMap<>(cloud);
                         local.remove(mode);

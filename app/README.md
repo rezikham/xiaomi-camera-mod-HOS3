@@ -92,6 +92,16 @@ Useful lines:
 - `does not match` or `cannot hook ...`: the camera's filter code differs from that profile.
 - `the camera's filter code is not one this module knows`: no profile fit, so the camera was left unchanged.
 
+## Debug output
+
+The module logs to logcat under the tag `HyperFilmFilters`. Besides the normal lines it writes a few `debug:` lines: the camera and Android versions, the device, and the layout (profile) it chose at start, and the filter keys of each filter list and of the filter component (once per distinct list). They show which filters the camera had and what the module added, so a log is enough to see why a filter is missing.
+
+```bash
+su -c "logcat -d | grep HyperFilmFilters"
+```
+
+`su -c "setprop camera.feature.filters_debug 0"` turns the `debug:` lines off (it resets on reboot).
+
 ## Build
 
 A Gradle project. It needs the Android SDK (compileSdk 37, build-tools 37.0.0); put `sdk.dir=...` in `local.properties`, then:
