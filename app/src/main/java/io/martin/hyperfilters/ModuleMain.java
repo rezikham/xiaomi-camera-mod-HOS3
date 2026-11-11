@@ -190,6 +190,7 @@ public class ModuleMain extends XposedModule {
             } catch (Throwable t) {
                 log(Log.WARN, TAG, stage + ": camera layout " + profile.name()
                         + " does not match: " + t);
+                trace(stage + ": layout " + profile.name() + " does not match: " + t);
                 continue;
             }
             try {
@@ -205,6 +206,7 @@ public class ModuleMain extends XposedModule {
             }
             hooked = true;
             profileName = profile.name();
+            trace(stage + ": layout " + profile.name() + " matched");
             log(Log.INFO, TAG, stage + ": camera layout " + profile.name() + ", hooked "
                     + profile.listClass() + "." + profile.listMethod());
             installPanelHook(profile, loader);
@@ -270,12 +272,14 @@ public class ModuleMain extends XposedModule {
             });
             hooked = true;
             profileName = "6.4";
+            trace(stage + ": layout 6.4 matched");
             log(Log.INFO, TAG, stage + ": camera layout 6.4, hooked " + effect.getName() + "."
                     + lists.getName());
             installLegacyComponentHook(loader);
             return true;
         } catch (Throwable t) {
             log(Log.WARN, TAG, stage + ": camera layout 6.4 does not match: " + t);
+            trace(stage + ": layout 6.4 does not match: " + t);
             return false;
         }
     }
@@ -411,6 +415,16 @@ public class ModuleMain extends XposedModule {
         }
     }
 
+    private static final String MODULE_VERSION = "1.9.2";
+
+    // Some frameworks keep the module's own log lines out of logcat (they go to the framework's
+    // module log). The key lines are also printed straight to logcat, under the same tag.
+    private static void trace(String message) {
+        if (debugEnabled()) {
+            Log.println(Log.INFO, TAG, "direct: " + message);
+        }
+    }
+
     private void debugEnvironment() {
         if (!debugEnabled()) {
             return;
@@ -421,9 +435,22 @@ public class ModuleMain extends XposedModule {
         }
         try {
             String camera = app.getPackageManager().getPackageInfo(app.getPackageName(), 0).versionName;
-            log(Log.INFO, TAG, "debug: camera " + camera + ", android " + android.os.Build.VERSION.RELEASE
-                    + ", device " + android.os.Build.DEVICE + ", profile "
-                    + (profileName == null ? "none" : profileName));
+            String line = "module " + MODULE_VERSION + ", camera " + camera + ", android "
+                    + android.os.Build.VERSION.RELEASE + ", device " + android.os.Build.DEVICE
+                    + ", profile " + (profileName == null ? "none" : profileName);
+            log(Log.INFO, TAG, "debug: " + line);
+            trace(line);
+            // One toast per module version, camera version and profile, so that it can be seen
+            // that the module is running even when no log is readable.
+            String key = "active_" + MODULE_VERSION + "_" + camera + "_" + profileName;
+            var prefs = app.getSharedPreferences(TAG, Application.MODE_PRIVATE);
+            if (!prefs.getBoolean(key, false)) {
+                prefs.edit().putBoolean(key, true).apply();
+                new Handler(Looper.getMainLooper()).postDelayed(() -> Toast.makeText(app,
+                        TAG + " " + MODULE_VERSION + ": "
+                                + (profileName == null ? "camera layout not recognised"
+                                : "camera layout " + profileName), Toast.LENGTH_LONG).show(), 4000);
+            }
         } catch (Throwable t) {
             log(Log.WARN, TAG, "debug: cannot read the camera version: " + t);
         }
