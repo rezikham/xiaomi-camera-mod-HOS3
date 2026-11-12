@@ -53,26 +53,40 @@ jobs:
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         echo "branch=$(git rev-parse --abbrev-ref HEAD)" >> $GITHUB_OUTPUT
 
+    - name: Rename APKs with package name and CI number
+      run: |
+        CI_NUM=${{ github.run_number }}
+        # cameramod: io.martin.hypercameramod
+        find cameramod/build/outputs/apk/release -name "*.apk" | while read f; do
+          mv "$f" "$(dirname "$f")/io.martin.hypercameramod-CI${CI_NUM}.apk"
+        done
+        # app: io.martin.hyperfilters
+        find app/build/outputs/apk/release -name "*.apk" | while read f; do
+          mv "$f" "$(dirname "$f")/io.martin.hyperfilters-CI${CI_NUM}.apk"
+        done
+
     - name: Upload cameramod APK
       uses: actions/upload-artifact@v4
       with:
-        name: cameramod-release
-        path: cameramod/build/outputs/apk/release/*.apk
+        name: hypercameramod-CI${{ github.run_number }}
+        path: cameramod/build/outputs/apk/release/io.martin.hypercameramod-CI${{ github.run_number }}.apk
 
     - name: Upload app APK
       uses: actions/upload-artifact@v4
       with:
-        name: hyperfilters-release
-        path: app/build/outputs/apk/release/*.apk
+        name: hyperfilters-CI${{ github.run_number }}
+        path: app/build/outputs/apk/release/io.martin.hyperfilters-CI${{ github.run_number }}.apk
 
     - name: Create "CI-Release" (development builds)
       if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/hyperos3-'))
       uses: softprops/action-gh-release@v1
       with:
         tag_name: CI-Release
-        release_name: "CI-Release (${{ steps.version.outputs.branch }})"
+        release_name: "CI-Release (${{ steps.version.outputs.branch }} #${{ github.run_number }})"
         body: |
           **Development build from branch:** `${{ steps.version.outputs.branch }}`
+          
+          **CI Run:** #${{ github.run_number }}
           
           **Commit:** ${{ github.sha }}
           
@@ -95,8 +109,8 @@ jobs:
         prerelease: true
         make_latest: false
         files: |
-          cameramod/build/outputs/apk/release/*.apk
-          app/build/outputs/apk/release/*.apk
+          cameramod/build/outputs/apk/release/io.martin.hypercameramod-CI${{ github.run_number }}.apk
+          app/build/outputs/apk/release/io.martin.hyperfilters-CI${{ github.run_number }}.apk
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -130,7 +144,7 @@ jobs:
         prerelease: false
         make_latest: true
         files: |
-          cameramod/build/outputs/apk/release/*.apk
-          app/build/outputs/apk/release/*.apk
+          cameramod/build/outputs/apk/release/io.martin.hypercameramod-CI${{ github.run_number }}.apk
+          app/build/outputs/apk/release/io.martin.hyperfilters-CI${{ github.run_number }}.apk
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
