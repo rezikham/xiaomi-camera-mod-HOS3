@@ -17,4 +17,10 @@
         android:title="@string/pref_m10r_title"
         android:summary="@string/pref_m10r_summary"
         android:defaultValue="false" />
+
+    <SwitchPreferenceCompat
+        android:key="@string/pref_extra_filters_key"
+        android:title="@string/pref_extra_filters_title"
+        android:summary="@string/pref_extra_filters_summary"
+        android:defaultValue="true" />
 </PreferenceScreen>

@@ -109,6 +109,7 @@ public class ModuleMain extends XposedModule {
     private volatile boolean assetsHooked;
     private volatile boolean styleHooked;
     private volatile boolean textHooked;
+    private volatile boolean filmFiltersHooked;
 
     @Override
     public void onPackageLoaded(PackageLoadedParam param) {
@@ -147,6 +148,7 @@ public class ModuleMain extends XposedModule {
         } catch (Throwable ignored) {}
         installLegendHook(loader, context);
         installStyleHook(loader);
+        installFilmFiltersHook(loader, context);
         if (!problems.isEmpty() && stage.equals("onPackageLoaded")) {
             // onPackageReady tries once more; report only what is still wrong after it
             problems.clear();
@@ -628,6 +630,20 @@ public class ModuleMain extends XposedModule {
         return m10rEnabled(null);
     }
 
+    private boolean extraFiltersEnabled(android.content.Context context) {
+        if (context != null) {
+            android.content.SharedPreferences prefs = context.getSharedPreferences("hypercameramod_prefs", android.content.Context.MODE_PRIVATE);
+            if (prefs.contains("extra_filters_enabled")) {
+                return prefs.getBoolean("extra_filters_enabled", true);
+            }
+        }
+        return true;
+    }
+
+    private boolean extraFiltersEnabled() {
+        return extraFiltersEnabled(null);
+    }
+
     private void installLegendHook(ClassLoader loader, android.content.Context context) {
         if (legendHooked) {
             return;
@@ -1033,6 +1049,28 @@ public class ModuleMain extends XposedModule {
                     .getMethod("currentApplication").invoke(null);
         } catch (Throwable t) {
             return null;
+        }
+    }
+
+    // ---- 8. Film Filters (R600, P100F, F-50, KC64, KP160) -----------------------------------------
+
+    private void installFilmFiltersHook(ClassLoader loader, android.content.Context context) {
+        if (filmFiltersHooked) {
+            return;
+        }
+        if (!extraFiltersEnabled(context)) {
+            log(Log.INFO, TAG, "Extra film filters disabled in settings, skipping film filters hook");
+            return;
+        }
+        // Delegate to the filters module's logic
+        try {
+            Class<?> filtersModule = Class.forName("io.martin.hypercameramod.filters.ModuleMain", false, loader);
+            // The filters module is a separate XposedModule that will be loaded via java_init.list
+            // We just need to ensure it's enabled. The filters module reads the same shared prefs.
+            filmFiltersHooked = true;
+            log(Log.INFO, TAG, "Film filters module will handle filter injection (extra_filters_enabled=true)");
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "Cannot access filters module: " + t);
         }
     }
 }

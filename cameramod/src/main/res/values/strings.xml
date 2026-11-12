@@ -15,4 +15,8 @@
     <string name="pref_m10r_title">CMOS (M10R) Style</string>
     <string name="pref_m10r_summary">Add the CMOS (M10R) style to the photography styles picker. Requires Leica UI enabled.</string>
     <string name="pref_m10r_key">m10r_enabled</string>
+
+    <string name="pref_extra_filters_title">Extra Film Filters</string>
+    <string name="pref_extra_filters_summary">Enable extra film simulation filters: R600, P100F, F-50, KC64, KP160.</string>
+    <string name="pref_extra_filters_key">extra_filters_enabled</string>
 </resources>
