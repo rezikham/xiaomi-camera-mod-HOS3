@@ -19,4 +19,10 @@
     <string name="pref_extra_filters_title">Extra Film Filters</string>
     <string name="pref_extra_filters_summary">Enable extra film simulation filters: R600, P100F, F-50, KC64, KP160.</string>
     <string name="pref_extra_filters_key">extra_filters_enabled</string>
+
+    <string name="menu_force_stop_camera">Force Stop Camera</string>
+    <string name="menu_hide_launcher">Hide App Icon from Launcher</string>
+    <string name="pref_hide_launcher_title">Hide App Icon from Launcher</string>
+    <string name="pref_hide_launcher_summary">Hide the HyperCameraMod icon from the app drawer. You can still access settings from Vector/LSPosed module list.</string>
+    <string name="pref_hide_launcher_key">hide_launcher_enabled</string>
 </resources>
