@@ -7,7 +7,7 @@
         android:label="@string/app_name"
         tools:ignore="MissingApplicationIcon">
 
-        <!-- Main settings activity - no LAUNCHER category, so Vector/LSPosed can still open it -->
+        <!-- Main settings activity - always accessible for Vector/LSPosed -->
         <activity
             android:name=".SettingsActivity"
             android:label="@string/settings_title"
@@ -16,22 +16,22 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.PREFERENCE" />
             </intent-filter>
         </activity>
 
-        <!-- Separate launcher activity - can be disabled to hide app icon without affecting SettingsActivity -->
-        <activity
-            android:name=".LauncherActivity"
+        <!-- Launcher alias - can be disabled to hide app icon without affecting SettingsActivity -->
+        <activity-alias
+            android:name=".LauncherAlias"
             android:label="@string/app_name"
             android:exported="true"
-            android:theme="@style/Theme.MaterialComponents.Light.NoActionBar"
-            android:excludeFromRecents="true"
-            android:noHistory="true">
+            android:targetActivity=".SettingsActivity"
+            android:icon="@mipmap/ic_launcher">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-        </activity>
+        </activity-alias>
 
     </application>
 

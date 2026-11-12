@@ -84,8 +84,9 @@ public class SettingsActivity extends AppCompatActivity {
     }
 
     private void toggleLauncherIcon(boolean hide) {
-        // Toggle the LauncherActivity component (not SettingsActivity)
-        ComponentName componentName = new ComponentName(this, LauncherActivity.class);
+        // Toggle the LauncherAlias (activity-alias) instead of SettingsActivity
+        // This keeps SettingsActivity accessible for Vector/LSPosed
+        ComponentName componentName = new ComponentName(this, "io.martin.hypercameramod.LauncherAlias");
         PackageManager pm = getPackageManager();
         int newState = hide ? PackageManager.COMPONENT_ENABLED_STATE_DISABLED
                 : PackageManager.COMPONENT_ENABLED_STATE_ENABLED;
