@@ -9,6 +9,7 @@ import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.hardware.camera2.CameraCharacteristics;
 import android.content.res.Resources;
+import android.content.SharedPreferences;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -345,7 +346,7 @@ public class ModuleMain extends XposedModule {
             }
             hook(order).intercept(chain -> {
                 Object result = chain.proceed();
-                if (!(result instanceof int[] modes) || !essentialStdEnabled()) {
+                if (!(result instanceof int[] modes) || !essentialStdEnabled((android.content.Context) chain.getThisObject())) {
                     return result;
                 }
                 for (int mode : modes) {
@@ -384,7 +385,7 @@ public class ModuleMain extends XposedModule {
                 hook(visible).intercept(chain -> {
                     Object result = chain.proceed();
                     if (Boolean.FALSE.equals(result) && chain.getArg(0) instanceof Integer mode
-                            && mode == ESSENTIAL_MODE && essentialStdEnabled()) {
+                            && mode == ESSENTIAL_MODE && essentialStdEnabled((android.content.Context) chain.getThisObject())) {
                         return true;
                     }
                     return result;
@@ -398,7 +399,7 @@ public class ModuleMain extends XposedModule {
                 Method support = entry.getDeclaredMethod("support");
                 hook(support).intercept(chain -> {
                     Object result = chain.proceed();
-                    if (Boolean.FALSE.equals(result) && essentialStdEnabled()) {
+                    if (Boolean.FALSE.equals(result) && essentialStdEnabled((android.content.Context) chain.getThisObject())) {
                         if (supportLogged.compareAndSet(false, true)) {
                             log(Log.INFO, TAG, "LegendaryEnter.support() was false, answering true");
                         }
@@ -555,8 +556,20 @@ public class ModuleMain extends XposedModule {
         return out;
     }
 
-    // On unless camera.feature.essential_std is 0.
+    // On unless camera.feature.essential_std is 0, and the user hasn't disabled it in settings.
     private static boolean essentialStdEnabled() {
+        return essentialStdEnabled(null);
+    }
+
+    private static boolean essentialStdEnabled(android.content.Context context) {
+        // First check settings if context is available
+        if (context != null) {
+            android.content.SharedPreferences prefs = context.getSharedPreferences("hypercameramod_prefs", android.content.Context.MODE_PRIVATE);
+            if (prefs.contains("essential_mode_enabled")) {
+                return prefs.getBoolean("essential_mode_enabled", true);
+            }
+        }
+        // Fallback to system property
         try {
             Class<?> props = Class.forName("android.os.SystemProperties");
             return !"0".equals(props.getMethod("get", String.class, String.class)
