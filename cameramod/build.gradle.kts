@@ -8,8 +8,8 @@ android {
     buildToolsVersion = "37.0.0"
 
     // Version from CI: -PversionName=1.0.9-19 -PversionCode=1119
-    def ciVersionName = project.findProperty("versionName") ?: "1.0.9"
-    def ciVersionCode = project.findProperty("versionCode")?.toInteger() ?: 11
+    val ciVersionName = project.findProperty("versionName")?.toString() ?: "1.0.9"
+    val ciVersionCode = project.findProperty("versionCode")?.toString()?.toIntOrNull() ?: 11
 
     defaultConfig {
         applicationId = "io.rezikham.hypercameramod"
