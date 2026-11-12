@@ -552,10 +552,6 @@ public class ModuleMain extends XposedModule {
     // ---- 3. Leica Essential CMOS (M10R) ---------------------------------------------------------
 
     // Read on every build of the list, so setprop takes effect the next time Camera starts.
-    private boolean m10rEnabled() {
-        return propertyOn(M10R_ENABLE_KEY);
-    }
-
     private static List<String> keys(List<?> items, Field key) throws IllegalAccessException {
         List<String> out = new java.util.ArrayList<>();
         for (Object item : items) {
@@ -611,6 +607,27 @@ public class ModuleMain extends XposedModule {
         return leicaUIEnabled(null);
     }
 
+    private boolean m10rEnabled(android.content.Context context) {
+        if (context != null) {
+            android.content.SharedPreferences prefs = context.getSharedPreferences("hypercameramod_prefs", android.content.Context.MODE_PRIVATE);
+            if (prefs.contains("m10r_enabled")) {
+                return prefs.getBoolean("m10r_enabled", false);
+            }
+        }
+        // Fallback to system property
+        try {
+            Class<?> props = Class.forName("android.os.SystemProperties");
+            return "1".equals(props.getMethod("get", String.class, String.class)
+                    .invoke(null, "camera.feature.m10r", "0"));
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    private boolean m10rEnabled() {
+        return m10rEnabled(null);
+    }
+
     private void installLegendHook(ClassLoader loader, android.content.Context context) {
         if (legendHooked) {
             return;
@@ -640,9 +657,10 @@ public class ModuleMain extends XposedModule {
                 Class<?> strings = Class.forName(profile.stringIds(), false, loader);
                 Class<?> images = Class.forName(profile.imageIds(), false, loader);
 
+                final android.content.Context ctx = context;
                 hook(build).intercept(chain -> {
                     Object result = chain.proceed();
-                    if (!m10rEnabled()) {
+                    if (!m10rEnabled(ctx)) {
                         return result;
                     }
                     try {
@@ -702,7 +720,7 @@ public class ModuleMain extends XposedModule {
         }
         log(Log.WARN, TAG, "the Leica Essential style list is not one this module knows; "
                 + "the CMOS style is not added");
-        if (m10rEnabled() && !problems.contains(MSG_LEGEND)) {
+        if (m10rEnabled(context) && !problems.contains(MSG_LEGEND)) {
             problems.add(MSG_LEGEND);   // only worth a notice when the CMOS entry was asked for
         }
     }

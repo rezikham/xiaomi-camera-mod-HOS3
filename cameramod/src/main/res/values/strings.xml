@@ -11,4 +11,8 @@
     <string name="pref_leica_ui_title">Leica UI (Looks)</string>
     <string name="pref_leica_ui_summary">Enable the Leica Looks panel in the filter strip. When off, uses the standard filter UI.</string>
     <string name="pref_leica_ui_key">leica_ui_enabled</string>
+
+    <string name="pref_m10r_title">CMOS (M10R) Style</string>
+    <string name="pref_m10r_summary">Add the CMOS (M10R) style to the photography styles picker. Requires Leica UI enabled.</string>
+    <string name="pref_m10r_key">m10r_enabled</string>
 </resources>
