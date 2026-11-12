@@ -140,7 +140,12 @@ public class ModuleMain extends XposedModule {
         installStylizationHook();
         installBeautyConfigHook(loader);
         installBlurRadiusHook(loader);
-        installLegendHook(loader);
+        // Get context for preference checks
+        android.content.Context context = null;
+        try {
+            context = currentApplication();
+        } catch (Throwable ignored) {}
+        installLegendHook(loader, context);
         installStyleHook(loader);
         if (!problems.isEmpty() && stage.equals("onPackageLoaded")) {
             // onPackageReady tries once more; report only what is still wrong after it
@@ -592,8 +597,26 @@ public class ModuleMain extends XposedModule {
         }
     }
 
-    private void installLegendHook(ClassLoader loader) {
+    private boolean leicaUIEnabled(android.content.Context context) {
+        if (context != null) {
+            android.content.SharedPreferences prefs = context.getSharedPreferences("hypercameramod_prefs", android.content.Context.MODE_PRIVATE);
+            if (prefs.contains("leica_ui_enabled")) {
+                return prefs.getBoolean("leica_ui_enabled", true);
+            }
+        }
+        return true;
+    }
+
+    private boolean leicaUIEnabled() {
+        return leicaUIEnabled(null);
+    }
+
+    private void installLegendHook(ClassLoader loader, android.content.Context context) {
         if (legendHooked) {
+            return;
+        }
+        if (!leicaUIEnabled(context)) {
+            log(Log.INFO, TAG, "Leica UI disabled in settings, skipping Legend hook");
             return;
         }
         for (LegendProfile profile : LEGEND_PROFILES) {
