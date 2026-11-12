@@ -1052,6 +1052,38 @@ public class ModuleMain extends XposedModule {
         }
     }
 
+    // Helper: optional class lookup
+    private static Class<?> optionalClass(String name, ClassLoader loader) {
+        try {
+            return Class.forName(name, false, loader);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    // Helper: resource ID lookup
+    private static int resourceId(Class<?> cls, String name, String type) {
+        if (cls == null) {
+            try {
+                Application app = currentApplication();
+                if (app != null) {
+                    Object result = app.getResources().getClass()
+                            .getMethod("getIdentifier", String.class, String.class, String.class)
+                            .invoke(app.getResources(), name, type, "com.android.camera");
+                    return result instanceof Integer ? (Integer) result : 0;
+                }
+            } catch (Throwable t) {
+                return 0;
+            }
+            return 0;
+        }
+        try {
+            return cls.getField(name).getInt(null);
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
     // ---- 8. Film Filters (R600, P100F, F-50, KC64, KP160) -----------------------------------------
 
     private void installFilmFiltersHook(ClassLoader loader, android.content.Context context) {
