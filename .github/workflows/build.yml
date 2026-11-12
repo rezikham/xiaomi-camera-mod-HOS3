@@ -32,7 +32,7 @@ jobs:
         api-level: 34
         build-tools-version: '34.0.0'
         ndk-version: r26c
-        licenses: 'android-sdk-license-.+|android-sdk-preview-license-.+'
+        packages: 'platforms;android-34,build-tools;34.0.0,ndk;26.3.11579264,cmdline-tools;latest,platform-tools'
 
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
