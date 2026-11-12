@@ -9,7 +9,6 @@ import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.Toolbar;
 import androidx.preference.PreferenceFragmentCompat;
-import androidx.preference.SwitchPreferenceCompat;
 
 public class SettingsActivity extends AppCompatActivity {
 
@@ -85,7 +84,8 @@ public class SettingsActivity extends AppCompatActivity {
     }
 
     private void toggleLauncherIcon(boolean hide) {
-        ComponentName componentName = new ComponentName(this, SettingsActivity.class);
+        // Toggle the LauncherActivity component (not SettingsActivity)
+        ComponentName componentName = new ComponentName(this, LauncherActivity.class);
         PackageManager pm = getPackageManager();
         int newState = hide ? PackageManager.COMPONENT_ENABLED_STATE_DISABLED
                 : PackageManager.COMPONENT_ENABLED_STATE_ENABLED;
@@ -102,30 +102,10 @@ public class SettingsActivity extends AppCompatActivity {
                 Toast.LENGTH_SHORT).show();
     }
 
-    // Called from preference change listener to sync menu state
-    void syncHideLauncherState(boolean hide) {
-        hideLauncherChecked = hide;
-        invalidateOptionsMenu(); // Will call onCreateOptionsMenu again
-        toggleLauncherIcon(hide);
-    }
-
     public static class SettingsFragment extends PreferenceFragmentCompat {
         @Override
         public void onCreatePreferences(Bundle savedInstanceState, String rootKey) {
             setPreferencesFromResource(R.xml.preferences, rootKey);
-
-            // Sync hide launcher preference with menu
-            SwitchPreferenceCompat hideLauncherPref = findPreference("hide_launcher_enabled");
-            if (hideLauncherPref != null) {
-                hideLauncherPref.setOnPreferenceChangeListener((preference, newValue) -> {
-                    boolean hide = (Boolean) newValue;
-                    SettingsActivity activity = (SettingsActivity) getActivity();
-                    if (activity != null) {
-                        activity.syncHideLauncherState(hide);
-                    }
-                    return true;
-                });
-            }
         }
     }
 }
