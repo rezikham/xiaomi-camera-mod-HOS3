@@ -45,7 +45,6 @@ jobs:
     - name: Get version info
       id: version
       run: |
-        # Extract version from gradle.properties or use commit hash
         VERSION=$(grep -E '^version=' cameramod/gradle.properties 2>/dev/null | cut -d'=' -f2 || echo "")
         if [ -z "$VERSION" ]; then
           VERSION="dev-$(git rev-parse --short HEAD)"
@@ -65,14 +64,14 @@ jobs:
         name: hyperfilters-release
         path: app/build/outputs/apk/release/*.apk
 
-    - name: Create/Update "latest" Release
+    - name: Create "ci" Release (development builds)
       if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/hyperos3-'))
       uses: softprops/action-gh-release@v1
       with:
-        tag_name: latest
-        release_name: "Latest Build (${{ steps.version.outputs.branch }})"
+        tag_name: ci-${{ steps.version.outputs.branch }}-${{ github.sha }}
+        release_name: "CI Build: ${{ steps.version.outputs.branch }} (${{ github.sha }})"
         body: |
-          **Latest development build from branch:** `${{ steps.version.outputs.branch }}`
+          **Development build from branch:** `${{ steps.version.outputs.branch }}`
           
           **Commit:** ${{ github.sha }}
           
@@ -93,14 +92,14 @@ jobs:
           - ✅ CMOS (M10R) entry (enable via `setprop camera.feature.m10r 1`)
         draft: false
         prerelease: true
-        make_latest: true
+        make_latest: false
         files: |
           cameramod/build/outputs/apk/release/*.apk
           app/build/outputs/apk/release/*.apk
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Create Versioned Release (on tags)
+    - name: Create Versioned Release (stable builds only)
       if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
       uses: softprops/action-gh-release@v1
       with:
