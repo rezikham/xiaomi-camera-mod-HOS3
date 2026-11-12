@@ -124,21 +124,29 @@ jobs:
           
           **Commit:** ${{ github.sha }}
           
-          **Modules:**
-          - `HyperCameraMod` (cameramod) - Enables Palette/Parameters, Original style, Leica Essential mode
-          - `HyperFilmFilters` (app) - Adds R600, P100F, F-50, KC64, KP160 film filters
+          **Module:** `HyperCameraMod` (single merged module - includes all HyperFilmFilters features)
           
           **Installation:**
           1. Install APK via Magisk/LSPosed/Vector
           2. Enable in manager with scope: `com.android.camera`
-          3. Force-stop Camera app and reopen
+          3. Open HyperCameraMod settings from app drawer or Vector/LSPosed module list
+          4. Configure toggles, then force-stop Camera app and reopen
           
-          **Features enabled:**
+          **Features:**
           - ✅ Palette & Parameters panel
           - ✅ Original colour style
-          - ✅ Leica Essential mode in standard UI
-          - ✅ Film filters (R600, P100F, F-50, KC64, KP160)
-          - ✅ CMOS (M10R) entry (enable via `setprop camera.feature.m10r 1`)
+          - ✅ Leica Essential mode in standard UI (toggle: Essential Mode in Standard UI)
+          - ✅ Leica Looks panel in filter strip (toggle: Leica UI)
+          - ✅ CMOS (M10R) style in photography styles (toggle: M10R)
+          - ✅ Film simulation filters: R600, P100F, F-50, KC64, KP160 (toggle: Extra Film Filters)
+          - ✅ Force-stop Camera button in settings toolbar
+          - ✅ Hide app icon from launcher (toggle in overflow menu)
+          
+          **Settings UI:**
+          - Access via app drawer icon "HyperCameraMod" or Vector/LSPosed module list
+          - Toolbar: Force Stop Camera button (top-right)
+          - Overflow menu (⋮): Hide App Icon from Launcher toggle
+          - Toggles: Essential Mode, Leica UI, M10R, Extra Film Filters
         draft: false
         prerelease: true
         make_latest: false
@@ -159,21 +167,29 @@ jobs:
           
           **Commit:** ${{ github.sha }}
           
-          **Modules:**
-          - `HyperCameraMod` (cameramod) - Enables Palette/Parameters, Original style, Leica Essential mode
-          - `HyperFilmFilters` (app) - Adds R600, P100F, F-50, KC64, KP160 film filters
+          **Module:** `HyperCameraMod` (single merged module - includes all HyperFilmFilters features)
           
           **Installation:**
           1. Install APK via Magisk/LSPosed/Vector
           2. Enable in manager with scope: `com.android.camera`
-          3. Force-stop Camera app and reopen
+          3. Open HyperCameraMod settings from app drawer or Vector/LSPosed module list
+          4. Configure toggles, then force-stop Camera app and reopen
           
           **Features:**
           - ✅ Palette & Parameters panel
           - ✅ Original colour style
-          - ✅ Leica Essential mode in standard UI
-          - ✅ Film filters (R600, P100F, F-50, KC64, KP160)
-          - ✅ CMOS (M10R) entry (enable via `setprop camera.feature.m10r 1`)
+          - ✅ Leica Essential mode in standard UI (toggle: Essential Mode in Standard UI)
+          - ✅ Leica Looks panel in filter strip (toggle: Leica UI)
+          - ✅ CMOS (M10R) style in photography styles (toggle: M10R)
+          - ✅ Film simulation filters: R600, P100F, F-50, KC64, KP160 (toggle: Extra Film Filters)
+          - ✅ Force-stop Camera button in settings toolbar
+          - ✅ Hide app icon from launcher (toggle in overflow menu)
+          
+          **Settings UI:**
+          - Access via app drawer icon "HyperCameraMod" or Vector/LSPosed module list
+          - Toolbar: Force Stop Camera button (top-right)
+          - Overflow menu (⋮): Hide App Icon from Launcher toggle
+          - Toggles: Essential Mode, Leica UI, M10R, Extra Film Filters
         draft: false
         prerelease: false
         make_latest: true
