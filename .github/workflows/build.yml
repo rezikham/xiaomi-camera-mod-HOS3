@@ -56,26 +56,26 @@ jobs:
     - name: Rename APKs with package name and CI run number
       run: |
         CI_NUM=${{ github.run_number }}
-        # cameramod: io.martin.hypercameramod
+        # cameramod: io.rezikham.hypercameramod
         find cameramod/build/outputs/apk/release -name "*.apk" | while read f; do
-          mv "$f" "$(dirname "$f")/io.martin.hypercameramod-${CI_NUM}.apk"
+          mv "$f" "$(dirname "$f")/io.rezikham.hypercameramod-${CI_NUM}.apk"
         done
-        # app: io.martin.hyperfilters
+        # app: io.rezikham.hyperfilters
         find app/build/outputs/apk/release -name "*.apk" | while read f; do
-          mv "$f" "$(dirname "$f")/io.martin.hyperfilters-${CI_NUM}.apk"
+          mv "$f" "$(dirname "$f")/io.rezikham.hyperfilters-${CI_NUM}.apk"
         done
 
     - name: Upload cameramod APK
       uses: actions/upload-artifact@v4
       with:
         name: hypercameramod-${{ github.run_number }}
-        path: cameramod/build/outputs/apk/release/io.martin.hypercameramod-${{ github.run_number }}.apk
+        path: cameramod/build/outputs/apk/release/io.rezikham.hypercameramod-${{ github.run_number }}.apk
 
     - name: Upload app APK
       uses: actions/upload-artifact@v4
       with:
         name: hyperfilters-${{ github.run_number }}
-        path: app/build/outputs/apk/release/io.martin.hyperfilters-${{ github.run_number }}.apk
+        path: app/build/outputs/apk/release/io.rezikham.hyperfilters-${{ github.run_number }}.apk
 
     - name: Create "CI-Release" (development builds)
       if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/hyperos3-'))
@@ -109,8 +109,8 @@ jobs:
         prerelease: true
         make_latest: false
         files: |
-          cameramod/build/outputs/apk/release/io.martin.hypercameramod-${{ github.run_number }}.apk
-          app/build/outputs/apk/release/io.martin.hyperfilters-${{ github.run_number }}.apk
+          cameramod/build/outputs/apk/release/io.rezikham.hypercameramod-${{ github.run_number }}.apk
+          app/build/outputs/apk/release/io.rezikham.hyperfilters-${{ github.run_number }}.apk
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -144,7 +144,7 @@ jobs:
         prerelease: false
         make_latest: true
         files: |
-          cameramod/build/outputs/apk/release/io.martin.hypercameramod-${{ github.run_number }}.apk
-          app/build/outputs/apk/release/io.martin.hyperfilters-${{ github.run_number }}.apk
+          cameramod/build/outputs/apk/release/io.rezikham.hypercameramod-${{ github.run_number }}.apk
+          app/build/outputs/apk/release/io.rezikham.hyperfilters-${{ github.run_number }}.apk
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

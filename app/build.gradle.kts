@@ -8,7 +8,7 @@ android {
     buildToolsVersion = "37.0.0"
 
     defaultConfig {
-        applicationId = "io.martin.hyperfilters"
+        applicationId = "io.rezikham.hyperfilters"
         minSdk = 26
         targetSdk = 37
         versionCode = 49
