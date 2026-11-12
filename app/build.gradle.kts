@@ -7,12 +7,16 @@ android {
     compileSdk = 37
     buildToolsVersion = "37.0.0"
 
+    // Version from CI: -PversionName=1.9.2-19 -PversionCode=4919
+    def ciVersionName = project.findProperty("versionName") ?: "1.9.2"
+    def ciVersionCode = project.findProperty("versionCode")?.toInteger() ?: 49
+
     defaultConfig {
         applicationId = "io.rezikham.hyperfilters"
         minSdk = 26
         targetSdk = 37
-        versionCode = 49
-        versionName = "1.9.2"
+        versionCode = ciVersionCode
+        versionName = ciVersionName
     }
 
     buildTypes {

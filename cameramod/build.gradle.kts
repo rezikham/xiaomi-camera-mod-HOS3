@@ -7,12 +7,16 @@ android {
     compileSdk = 37
     buildToolsVersion = "37.0.0"
 
+    // Version from CI: -PversionName=1.0.9-19 -PversionCode=1119
+    def ciVersionName = project.findProperty("versionName") ?: "1.0.9"
+    def ciVersionCode = project.findProperty("versionCode")?.toInteger() ?: 11
+
     defaultConfig {
         applicationId = "io.rezikham.hypercameramod"
         minSdk = 26
         targetSdk = 37
-        versionCode = 11
-        versionName = "1.0.9"
+        versionCode = ciVersionCode
+        versionName = ciVersionName
     }
 
     buildTypes {
