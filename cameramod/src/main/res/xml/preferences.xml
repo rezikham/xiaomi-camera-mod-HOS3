@@ -11,4 +11,10 @@
         android:title="@string/pref_leica_ui_title"
         android:summary="@string/pref_leica_ui_summary"
         android:defaultValue="true" />
+
+    <SwitchPreferenceCompat
+        android:key="@string/pref_m10r_key"
+        android:title="@string/pref_m10r_title"
+        android:summary="@string/pref_m10r_summary"
+        android:defaultValue="false" />
 </PreferenceScreen>
