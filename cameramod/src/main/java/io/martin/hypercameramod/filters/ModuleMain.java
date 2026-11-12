@@ -182,6 +182,11 @@ public class ModuleMain extends XposedModule {
         if (!CAMERA_PACKAGE.equals(pkg) || hooked || loader == null) {
             return;
         }
+        // Check if extra film filters are enabled in the main module's settings
+        if (!extraFiltersEnabled()) {
+            log(Log.INFO, TAG, "Extra film filters disabled in settings, skipping filter injection");
+            return;
+        }
         problems.clear();
         for (Profile profile : PROFILES) {
             Resolved resolved;
@@ -454,6 +459,28 @@ public class ModuleMain extends XposedModule {
         } catch (Throwable t) {
             log(Log.WARN, TAG, "debug: cannot read the camera version: " + t);
         }
+    }
+
+    // Check if extra film filters are enabled in the main module's settings
+    private boolean extraFiltersEnabled() {
+        try {
+            Application app = currentApplication();
+            if (app != null) {
+                // Use the main module's package name to access its shared preferences
+                android.content.Context mainModuleContext = app.createPackageContext("io.rezikham.hypercameramod",
+                        android.content.Context.CONTEXT_IGNORE_SECURITY);
+                if (mainModuleContext != null) {
+                    android.content.SharedPreferences prefs = mainModuleContext.getSharedPreferences("hypercameramod_prefs",
+                            android.content.Context.MODE_PRIVATE);
+                    if (prefs.contains("extra_filters_enabled")) {
+                        return prefs.getBoolean("extra_filters_enabled", true);
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot read extra_filters_enabled preference: " + t);
+        }
+        return true; // Default to enabled
     }
 
     // A component filter's key is its category in the high 16 bits and its ordinal in the low 16
