@@ -137,6 +137,8 @@ public class ModuleMain extends XposedModule {
         installModeListHook(loader);
         installNameStyleHook(loader);
         installStylizationHook();
+        installBeautyConfigHook(loader);
+        installBlurRadiusHook(loader);
         installLegendHook(loader);
         installStyleHook(loader);
         if (!problems.isEmpty() && stage.equals("onPackageLoaded")) {
@@ -468,6 +470,75 @@ public class ModuleMain extends XposedModule {
             log(Log.WARN, TAG, "cannot hook CameraCharacteristics.get: " + t);
         }
     }
+
+    // ---- 2b. Beauty config fallback for missing portrait scenes (HyperOS 3 / 14 Ultra) ----------
+    
+    private void installBeautyConfigHook(ClassLoader loader) {
+        if (beautyConfigHooked) {
+            return;
+        }
+        try {
+            Class<?> beautyClass = Class.forName("com.android.camera.module.miui.beauty.MCAM_HalBeautyJsonData", false, loader);
+            // Hook the method that throws "sceneKey don't exist" error
+            Method parseJson = beautyClass.getDeclaredMethod("parseJson", String.class);
+            parseJson.setAccessible(true);
+            
+            hook(parseJson).intercept(chain -> {
+                String sceneKey = (String) chain.getArg(0);
+                try {
+                    return chain.proceed();
+                } catch (Throwable t) {
+                    // Provide fallback configs for missing scenes on HyperOS 3
+                    if (t.getMessage() != null && t.getMessage().contains("don't exist")) {
+                        log(Log.INFO, TAG, "Providing fallback beauty config for missing scene: " + sceneKey);
+                        return getFallbackBeautyConfig(sceneKey);
+                    }
+                    throw t;
+                }
+            });
+            beautyConfigHooked = true;
+            log(Log.INFO, TAG, "hooked MCAM_HalBeautyJsonData.parseJson (beauty config fallback)");
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot hook MCAM_HalBeautyJsonData: " + t);
+        }
+    }
+    
+    private volatile boolean beautyConfigHooked;
+    
+    // Default beauty configs for scenes missing on HyperOS 3 (based on standard portrait configs)
+    private String getFallbackBeautyConfig(String sceneKey) {
+        // Return minimal valid JSON that won't crash - based on RearPortrait config
+        return "{\"Map\":{},\"INRegion\":{},\"GLRegion\":{}}";
+    }
+
+    // ---- 2c. Cap excessive blur radius for portrait preview (HyperOS 3 / 14 Ultra) ------------
+    
+    private void installBlurRadiusHook(ClassLoader loader) {
+        if (blurRadiusHooked) {
+            return;
+        }
+        try {
+            // Hook BlurBackgroundView.makeBackgroundImage to cap blurRadius
+            Class<?> blurClass = Class.forName("com.android.camera.ui.BlurBackgroundView", false, loader);
+            Method makeBg = blurClass.getDeclaredMethod("makeBackgroundImage", int.class, int.class, float.class);
+            makeBg.setAccessible(true);
+            
+            hook(makeBg).intercept(chain -> {
+                // Cap blurRadius at 150 (was 241 causing slow preview)
+                int blurRadius = (Integer) chain.getArg(0);
+                if (blurRadius > 150) {
+                    chain.setArg(0, 150);
+                }
+                return chain.proceed();
+            });
+            blurRadiusHooked = true;
+            log(Log.INFO, TAG, "hooked BlurBackgroundView.makeBackgroundImage (blur radius cap)");
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot hook BlurBackgroundView: " + t);
+        }
+    }
+    
+    private volatile boolean blurRadiusHooked;
 
     // ---- 3. Leica Essential CMOS (M10R) ---------------------------------------------------------
 
