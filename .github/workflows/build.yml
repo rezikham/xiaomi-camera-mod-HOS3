@@ -77,6 +77,18 @@ jobs:
         name: hyperfilters-${{ github.run_number }}
         path: app/build/outputs/apk/release/io.rezikham.hyperfilters-${{ github.run_number }}.apk
 
+    - name: Clean old assets from CI-Release
+      if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/hyperos3-'))
+      run: |
+        # Delete old assets from CI-Release tag
+        gh release delete CI-Release --yes --cleanup-tag 2>/dev/null || true
+        # Create empty release to reset
+        gh release create CI-Release --title "CI-Release (placeholder)" --notes "Cleaning up..." --draft 2>/dev/null || true
+        gh release delete CI-Release --yes --cleanup-tag 2>/dev/null || true
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_REPO: ${{ github.repository }}
+
     - name: Create "CI-Release" (development builds)
       if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/hyperos3-'))
       uses: softprops/action-gh-release@v1
