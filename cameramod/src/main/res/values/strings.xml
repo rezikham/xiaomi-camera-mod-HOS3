@@ -7,4 +7,8 @@
     <string name="pref_essential_mode_title">Leica Essential Mode in Standard UI</string>
     <string name="pref_essential_mode_summary">Show Leica Essential mode (M3/M9) in the standard UI mode strip. Note: M3/M9 processing requires 17 Ultra hardware and will not work on 14 Ultra.</string>
     <string name="pref_essential_mode_key">essential_mode_enabled</string>
+
+    <string name="pref_leica_ui_title">Leica UI (Looks)</string>
+    <string name="pref_leica_ui_summary">Enable the Leica Looks panel in the filter strip. When off, uses the standard filter UI.</string>
+    <string name="pref_leica_ui_key">leica_ui_enabled</string>
 </resources>

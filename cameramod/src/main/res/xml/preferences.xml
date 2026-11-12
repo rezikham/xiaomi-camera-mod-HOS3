@@ -5,4 +5,10 @@
         android:title="@string/pref_essential_mode_title"
         android:summary="@string/pref_essential_mode_summary"
         android:defaultValue="true" />
+
+    <SwitchPreferenceCompat
+        android:key="@string/pref_leica_ui_key"
+        android:title="@string/pref_leica_ui_title"
+        android:summary="@string/pref_leica_ui_summary"
+        android:defaultValue="true" />
 </PreferenceScreen>
