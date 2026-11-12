@@ -65,12 +65,12 @@ jobs:
         name: hyperfilters-release
         path: app/build/outputs/apk/release/*.apk
 
-    - name: Create "ci" Release (development builds)
+    - name: Create "CI-Release" (development builds)
       if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/hyperos3-'))
       uses: softprops/action-gh-release@v1
       with:
-        tag_name: ci-${{ steps.version.outputs.branch }}-${{ github.sha }}
-        release_name: "CI Build: ${{ steps.version.outputs.branch }} (${{ github.sha }})"
+        tag_name: CI-Release
+        release_name: "CI-Release (${{ steps.version.outputs.branch }})"
         body: |
           **Development build from branch:** `${{ steps.version.outputs.branch }}`
           
