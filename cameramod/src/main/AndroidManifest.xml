@@ -7,7 +7,7 @@
         android:label="@string/app_name"
         tools:ignore="MissingApplicationIcon">
 
-        <!-- Main settings activity - always accessible for Vector/LSPosed -->
+        <!-- Main settings activity - has PREFERENCE for Vector/LSPosed settings access -->
         <activity
             android:name=".SettingsActivity"
             android:label="@string/settings_title"
@@ -20,7 +20,7 @@
             </intent-filter>
         </activity>
 
-        <!-- Launcher alias - can be disabled to hide app icon without affecting SettingsActivity -->
+        <!-- Launcher alias - THIS is the LAUNCHER entry point (can be disabled to hide icon) -->
         <activity-alias
             android:name=".LauncherAlias"
             android:label="@string/app_name"

@@ -13,7 +13,7 @@ import androidx.preference.PreferenceFragmentCompat;
 public class SettingsActivity extends AppCompatActivity {
 
     private static final String CAMERA_PACKAGE = "com.android.camera";
-    private boolean hideLauncherChecked = false;
+    private static final String LAUNCHER_ALIAS = "io.martin.hypercameramod.LauncherAlias";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -28,10 +28,6 @@ public class SettingsActivity extends AppCompatActivity {
         }
         toolbar.setNavigationOnClickListener(v -> finish());
 
-        // Load current hide launcher state
-        android.content.SharedPreferences prefs = getSharedPreferences("hypercameramod_prefs", MODE_PRIVATE);
-        hideLauncherChecked = prefs.getBoolean("hide_launcher_enabled", false);
-
         if (savedInstanceState == null) {
             getSupportFragmentManager()
                 .beginTransaction()
@@ -43,11 +39,19 @@ public class SettingsActivity extends AppCompatActivity {
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
         getMenuInflater().inflate(R.menu.settings_menu, menu);
+        return true;
+    }
+
+    @Override
+    public boolean onPrepareOptionsMenu(Menu menu) {
         MenuItem hideItem = menu.findItem(R.id.menu_hide_launcher);
         if (hideItem != null) {
-            hideItem.setChecked(hideLauncherChecked);
+            // Check current state from PackageManager (source of truth)
+            ComponentName componentName = new ComponentName(this, LAUNCHER_ALIAS);
+            int state = getPackageManager().getComponentEnabledSetting(componentName);
+            hideItem.setChecked(state == PackageManager.COMPONENT_ENABLED_STATE_ENABLED);
         }
-        return true;
+        return super.onPrepareOptionsMenu(menu);
     }
 
     @Override
@@ -57,9 +61,7 @@ public class SettingsActivity extends AppCompatActivity {
             forceStopCamera();
             return true;
         } else if (id == R.id.menu_hide_launcher) {
-            hideLauncherChecked = !item.isChecked();
-            item.setChecked(hideLauncherChecked);
-            toggleLauncherIcon(hideLauncherChecked);
+            toggleLauncherIcon();
             return true;
         }
         return super.onOptionsItemSelected(item);
@@ -83,23 +85,31 @@ public class SettingsActivity extends AppCompatActivity {
         }
     }
 
-    private void toggleLauncherIcon(boolean hide) {
-        // Toggle the LauncherAlias (activity-alias) instead of SettingsActivity
+    private void toggleLauncherIcon() {
+        // Toggle the LauncherAlias (activity-alias) using PackageManager
         // This keeps SettingsActivity accessible for Vector/LSPosed
-        ComponentName componentName = new ComponentName(this, "io.martin.hypercameramod.LauncherAlias");
+        ComponentName componentName = new ComponentName(this, LAUNCHER_ALIAS);
         PackageManager pm = getPackageManager();
-        int newState = hide ? PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+
+        // Get current state and toggle
+        int currentState = pm.getComponentEnabledSetting(componentName);
+        int newState = (currentState == PackageManager.COMPONENT_ENABLED_STATE_ENABLED)
+                ? PackageManager.COMPONENT_ENABLED_STATE_DISABLED
                 : PackageManager.COMPONENT_ENABLED_STATE_ENABLED;
 
         pm.setComponentEnabledSetting(componentName, newState, PackageManager.DONT_KILL_APP);
 
-        // Save preference
+        // Save preference for reference
         android.content.SharedPreferences prefs = getSharedPreferences("hypercameramod_prefs", MODE_PRIVATE);
-        prefs.edit().putBoolean("hide_launcher_enabled", hide).apply();
+        prefs.edit().putBoolean("hide_launcher_enabled", newState == PackageManager.COMPONENT_ENABLED_STATE_DISABLED).apply();
+
+        // Update menu checkbox (will be reflected on next onPrepareOptionsMenu)
+        invalidateOptionsMenu();
 
         Toast.makeText(this,
-                hide ? "App icon hidden. Open from Vector/LSPosed module list."
-                : "App icon restored.",
+                newState == PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+                        ? "App icon hidden. Open from Vector/LSPosed module list."
+                        : "App icon restored.",
                 Toast.LENGTH_SHORT).show();
     }
 
