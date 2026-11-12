@@ -528,7 +528,7 @@ public class ModuleMain extends XposedModule {
                 // Cap blurRadius at 150 (was 241 causing slow preview)
                 int blurRadius = (Integer) chain.getArg(0);
                 if (blurRadius > 150) {
-                    chain.setArg(0, 150);
+                    chain.setArgument(0, 150);
                 }
                 return chain.proceed();
             });
