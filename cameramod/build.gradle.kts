@@ -49,4 +49,5 @@ dependencies {
     compileOnly(libs.libxposed.api)
     implementation("androidx.preference:preference:1.2.1")
     implementation("androidx.appcompat:appcompat:1.6.1")
+    implementation("com.google.android.material:material:1.11.0")
 }
