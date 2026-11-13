@@ -453,6 +453,7 @@ public class ModuleMain extends XposedModule {
                 dbg(Log.WARN, TAG, "cannot hook LegendaryEnter.support: " + t);
             }
             // For the experiment: report what the camera's final mode list holds.
+            // Also ensure Essential mode (256) is in the strip if the property is enabled.
             try {
                 Method build = list.getDeclaredMethod("C");
                 Field strip = list.getDeclaredField("c");
@@ -464,14 +465,43 @@ public class ModuleMain extends XposedModule {
                 key.setAccessible(true);
                 hook(build).intercept(chain -> {
                     Object result = chain.proceed();
-                    if (essentialStdEnabled() && modeListReported.compareAndSet(false, true)) {
+                    if (essentialStdEnabled()) {
                         try {
                             Object self = chain.getThisObject();
-                            dbg(Log.INFO, TAG, "mode list: all " + keys((List<?>) result, key)
-                                    + ", strip " + keys((List<?>) strip.get(self), key)
-                                    + ", more " + keys((List<?>) more.get(self), key));
+                            @SuppressWarnings("unchecked")
+                            List<Object> stripList = (List<Object>) strip.get(self);
+                            @SuppressWarnings("unchecked")
+                            List<Object> moreList = (List<Object>) more.get(self);
+                            // Ensure Essential mode (256) is in strip if property is on
+                            boolean hasEssential = false;
+                            for (Object entry : stripList) {
+                                if (ESSENTIAL_MODE == key.getInt(entry)) {
+                                    hasEssential = true;
+                                    break;
+                                }
+                            }
+                            if (!hasEssential) {
+                                // Find the MORE_MODE entry in moreList and move it to strip, or create new
+                                Object essentialEntry = null;
+                                for (Object entry : moreList) {
+                                    if (ESSENTIAL_MODE == key.getInt(entry)) {
+                                        essentialEntry = entry;
+                                        break;
+                                    }
+                                }
+                                if (essentialEntry != null) {
+                                    moreList.remove(essentialEntry);
+                                    stripList.add(essentialEntry);
+                                    dbg(Log.INFO, TAG, "moved Essential mode (256) from more to strip");
+                                }
+                            }
+                            if (modeListReported.compareAndSet(false, true)) {
+                                dbg(Log.INFO, TAG, "mode list: all " + keys((List<?>) result, key)
+                                        + ", strip " + keys(stripList, key)
+                                        + ", more " + keys(moreList, key));
+                            }
                         } catch (Throwable t) {
-                            dbg(Log.WARN, TAG, "cannot read the mode list: " + t);
+                            dbg(Log.WARN, TAG, "cannot adjust mode list: " + t);
                         }
                     }
                     return result;
