@@ -466,8 +466,9 @@ public class ModuleMain extends XposedModule {
         try {
             Application app = currentApplication();
             if (app != null) {
-                // Use the main module's package name to access its shared preferences
-                android.content.Context mainModuleContext = app.createPackageContext("io.rezikham.hypercameramod",
+                // Ask the manager for this module's package name (works regardless of applicationId)
+                android.content.Context mainModuleContext = app.createPackageContext(
+                        getModuleApplicationInfo().packageName,
                         android.content.Context.CONTEXT_IGNORE_SECURITY);
                 if (mainModuleContext != null) {
                     android.content.SharedPreferences prefs = mainModuleContext.getSharedPreferences("hypercameramod_prefs",
