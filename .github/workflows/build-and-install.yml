@@ -1,0 +1,209 @@
+name: Build and Install Xiaomi Camera Mod
+
+on:
+  workflow_dispatch:
+    inputs:
+      module:
+        description: 'Module to build and install'
+        required: true
+        type: choice
+        options:
+          - cameramod
+          - app
+          - both
+        default: 'cameramod'
+      install:
+        description: 'Install to device via ADB after build'
+        required: false
+        type: boolean
+        default: false
+      adb_device_serial:
+        description: 'ADB device serial (optional, for multiple devices)'
+        required: false
+        type: string
+      adb_tcp_ip:
+        description: 'ADB TCP/IP address (e.g., 192.168.1.100:5555) for WiFi debugging'
+        required: false
+        type: string
+
+jobs:
+  build:
+    name: Build ${{ inputs.module == 'both' && 'Both Modules' || inputs.module }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      cameramod_apk: ${{ steps.cameramod.outputs.apk_path }}
+      app_apk: ${{ steps.app.outputs.apk_path }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'gradle'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          api-level: 37
+          build-tools: '37.0.0'
+          cmdline-tools: 'latest'
+          ndk-version: 'r27c'
+
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Grant execute permission to gradlew
+        run: chmod +x gradlew
+
+      - name: Build cameramod module
+        if: inputs.module != 'app'
+        id: cameramod
+        run: |
+          ./gradlew :cameramod:assembleRelease --no-daemon
+          APK_PATH=$(find cameramod/build/outputs/apk/release -name "*.apk" | head -1)
+          echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
+          echo "Built: $APK_PATH"
+          ls -la "$APK_PATH"
+
+      - name: Build app module
+        if: inputs.module != 'cameramod'
+        id: app
+        run: |
+          ./gradlew :app:assembleRelease --no-daemon
+          APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
+          echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
+          echo "Built: $APK_PATH"
+          ls -la "$APK_PATH"
+
+      - name: Upload cameramod APK
+        if: inputs.module != 'app'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cameramod-release-apk
+          path: cameramod/build/outputs/apk/release/*.apk
+          retention-days: 7
+
+      - name: Upload app APK
+        if: inputs.module != 'cameramod'
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-apk
+          path: app/build/outputs/apk/release/*.apk
+          retention-days: 7
+
+  install:
+    name: Install to Device via ADB
+    needs: build
+    if: inputs.install == true
+    runs-on: self-hosted
+    timeout-minutes: 15
+    steps:
+      - name: Download cameramod APK
+        if: needs.build.outputs.cameramod_apk != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: cameramod-release-apk
+          path: ./artifacts/cameramod
+
+      - name: Download app APK
+        if: needs.build.outputs.app_apk != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: app-release-apk
+          path: ./artifacts/app
+
+      - name: Set up ADB
+        run: |
+          which adb
+          adb version
+
+      - name: Connect to device via TCP/IP
+        if: inputs.adb_tcp_ip != ''
+        run: |
+          echo "Connecting to ${{ inputs.adb_tcp_ip }}..."
+          adb connect "${{ inputs.adb_tcp_ip }}"
+          sleep 2
+
+      - name: List connected devices
+        run: |
+          adb devices -l
+
+      - name: Install cameramod APK
+        if: needs.build.outputs.cameramod_apk != ''
+        id: install_cameramod
+        run: |
+          APK=$(find ./artifacts/cameramod -name "*.apk" | head -1)
+          echo "Installing $APK..."
+          if [ -n "${{ inputs.adb_device_serial }}" ]; then
+            adb -s "${{ inputs.adb_device_serial }}" install -r "$APK"
+          else
+            adb install -r "$APK"
+          fi
+
+      - name: Install app APK
+        if: needs.build.outputs.app_apk != ''
+        id: install_app
+        run: |
+          APK=$(find ./artifacts/app -name "*.apk" | head -1)
+          echo "Installing $APK..."
+          if [ -n "${{ inputs.adb_device_serial }}" ]; then
+            adb -s "${{ inputs.adb_device_serial }}" install -r "$APK"
+          else
+            adb install -r "$APK"
+          fi
+
+      - name: Force stop Camera app
+        run: |
+          echo "Force stopping Camera app..."
+          adb shell am force-stop com.android.camera
+          sleep 2
+
+      - name: Verify installation
+        run: |
+          echo "Verifying installation..."
+          if [ -n "${{ inputs.adb_device_serial }}" ]; then
+            adb -s "${{ inputs.adb_device_serial }}" shell pm list packages | grep -E "hypercamera|hyperfilter"
+          else
+            adb shell pm list packages | grep -E "hypercamera|hyperfilter"
+          fi
+
+  summary:
+    name: Build Summary
+    needs: [build, install]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print build results
+        run: |
+          echo "=== Build Summary ==="
+          echo "Module: ${{ inputs.module }}"
+          echo "Install requested: ${{ inputs.install }}"
+          if [ "${{ needs.build.result }}" == "success" ]; then
+            echo "✅ Build: SUCCESS"
+            if [ "${{ inputs.module != 'app' }}" == "true" ]; then
+              echo "  cameramod APK: ${{ needs.build.outputs.cameramod_apk }}"
+            fi
+            if [ "${{ inputs.module != 'cameramod' }}" == "true" ]; then
+              echo "  app APK: ${{ needs.build.outputs.app_apk }}"
+            fi
+          else
+            echo "❌ Build: FAILED"
+          fi
+          if [ "${{ inputs.install }}" == "true" ]; then
+            if [ "${{ needs.install.result }}" == "success" ]; then
+              echo "✅ Install: SUCCESS"
+            else
+              echo "❌ Install: FAILED (or skipped)"
+            fi
+          fi
