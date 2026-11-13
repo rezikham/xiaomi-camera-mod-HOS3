@@ -46,11 +46,13 @@ jobs:
         BASE_VERSIONCODE_FILTERS=49
         CI_NUM=${{ github.run_number }}
         
-        # versionName: 1.0.9-19, versionCode: 1119 (base*100 + run_number)
-        VERSION_NAME_CAMERAMOD="${BASE_VERSION_CAMERAMOD}-${CI_NUM}"
+        # versionCode: 1119, 1135, ... (base*100 + run_number).
+        # Use the versionCode (not the raw CI run number) in versionName and APK filenames
+        # so the file name always matches what Android shows in App info.
         VERSION_CODE_CAMERAMOD=$((BASE_VERSIONCODE_CAMERAMOD * 100 + CI_NUM))
-        VERSION_NAME_FILTERS="${BASE_VERSION_FILTERS}-${CI_NUM}"
         VERSION_CODE_FILTERS=$((BASE_VERSIONCODE_FILTERS * 100 + CI_NUM))
+        VERSION_NAME_CAMERAMOD="${BASE_VERSION_CAMERAMOD}-${VERSION_CODE_CAMERAMOD}"
+        VERSION_NAME_FILTERS="${BASE_VERSION_FILTERS}-${VERSION_CODE_FILTERS}"
         
         echo "version_name_cameramod=$VERSION_NAME_CAMERAMOD" >> $GITHUB_OUTPUT
         echo "version_code_cameramod=$VERSION_CODE_CAMERAMOD" >> $GITHUB_OUTPUT
@@ -74,7 +76,7 @@ jobs:
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         echo "branch=$(git rev-parse --abbrev-ref HEAD)" >> $GITHUB_OUTPUT
 
-    - name: Rename APKs with version (includes CI run number)
+    - name: Rename APKs with version (includes versionCode)
       run: |
         VERSION_CAMERAMOD=${{ steps.calc_version.outputs.version_name_cameramod }}
         VERSION_FILTERS=${{ steps.calc_version.outputs.version_name_filters }}
@@ -122,6 +124,8 @@ jobs:
           
           **CI Run:** #${{ github.run_number }}
           
+          **Version:** `${{ steps.calc_version.outputs.version_name_cameramod }}` (versionCode `${{ steps.calc_version.outputs.version_code_cameramod }}`)
+          
           **Commit:** ${{ github.sha }}
           
           **Module:** `HyperCameraMod` (single merged module - includes all HyperFilmFilters features)
@@ -145,7 +149,7 @@ jobs:
           **Settings UI:**
           - Access via app drawer icon "HyperCameraMod" or Vector/LSPosed module list
           - Toolbar: Force Stop Camera button (top-right)
-          - Overflow menu (⋮): Hide App Icon from Launcher toggle
+          - Overflow menu (⋮): "Hide launcher icon" toggle
           - Toggles: Essential Mode, Leica UI, M10R, Extra Film Filters
         draft: false
         prerelease: true
@@ -188,7 +192,7 @@ jobs:
           **Settings UI:**
           - Access via app drawer icon "HyperCameraMod" or Vector/LSPosed module list
           - Toolbar: Force Stop Camera button (top-right)
-          - Overflow menu (⋮): Hide App Icon from Launcher toggle
+          - Overflow menu (⋮): "Hide launcher icon" toggle
           - Toggles: Essential Mode, Leica UI, M10R, Extra Film Filters
         draft: false
         prerelease: false
