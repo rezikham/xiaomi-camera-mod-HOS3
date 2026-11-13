@@ -111,6 +111,8 @@ public class ModuleMain extends XposedModule {
                     + "style was not added.";
     private final List<String> problems = new CopyOnWriteArrayList<>();
     private final AtomicBoolean noticeScheduled = new AtomicBoolean();
+    private final AtomicBoolean loadLogged = new AtomicBoolean();
+    private final AtomicBoolean versionLogged = new AtomicBoolean();
 
     private volatile boolean propertiesHooked;
     private volatile boolean tabsHooked;
@@ -145,6 +147,24 @@ public class ModuleMain extends XposedModule {
             moduleApk = moduleInfo.sourceDir;
         } catch (Throwable t) {
             dbg(Log.WARN, TAG, "cannot find the module APK: " + t);
+        }
+        if (loadLogged.compareAndSet(false, true)) {
+            dbg(Log.INFO, TAG, "loaded in " + pkg + " (libxposed API " + getApiVersion() + ")");
+        }
+        if (versionLogged.compareAndSet(false, true)) {
+            Application app = currentApplication();
+            if (app != null) {
+                try {
+                    String cameraVersion = app.getPackageManager()
+                            .getPackageInfo(CAMERA_PACKAGE, 0).versionName;
+                    dbg(Log.INFO, TAG, "Camera " + cameraVersion + "; remote preferences: "
+                            + (remotePrefs() != null ? "available" : "unavailable"));
+                } catch (Throwable t) {
+                    dbg(Log.WARN, TAG, "cannot read the Camera version: " + t);
+                }
+            } else {
+                versionLogged.set(false);   // try again on onPackageReady
+            }
         }
         installPropertyHook();
         installTabHook();
