@@ -7,12 +7,12 @@ android {
     compileSdk = 37
     buildToolsVersion = "37.0.0"
 
-    // Version from CI: -PversionName=1.0.9-19 -PversionCode=1119
-    val ciVersionName = project.findProperty("versionName")?.toString() ?: "1.0.9"
-    val ciVersionCode = project.findProperty("versionCode")?.toString()?.toIntOrNull() ?: 11
+    // Version from CI: -PversionName=1.0.0-19 -PversionCode=119
+    val ciVersionName = project.findProperty("versionName")?.toString() ?: "1.0.0"
+    val ciVersionCode = project.findProperty("versionCode")?.toString()?.toIntOrNull() ?: 100
 
     defaultConfig {
-        applicationId = "io.martin.hypercameramod"
+        applicationId = "io.rezikham.hypercameramod"
         minSdk = 26
         targetSdk = 37
         versionCode = ciVersionCode

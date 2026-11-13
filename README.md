@@ -6,8 +6,8 @@ Install **one** of them, not both: they add the same film filters, and two copie
 
 | Module | What it does | Package |
 | ------ | ------------ | ------- |
-| [HyperCameraMod](cameramod/README.md) | Palette and Parameters panel, Original colour style, Leica Essential mode (standard UI and CMOS/M10R), the film filters R600, P100F, F-50, KC64 and KP160, plus a settings app with toggles, a Force Stop Camera button and an option to hide the launcher icon. | `io.martin.hypercameramod` |
-| [HyperFilmFilters](app/README.md) | Brings the film filters R600, P100F, F-50 and KC64 (and KP160 in the Leica UI) back to the filter panel and the filter strip, in the standard UI and the Leica UI. | `io.martin.hyperfilters` |
+| [HyperCameraMod](cameramod/README.md) | Palette and Parameters panel, Original colour style, Leica Essential mode (standard UI and CMOS/M10R), the film filters R600, P100F, F-50, KC64 and KP160, plus a settings app with toggles, a Force Stop Camera button and an option to hide the launcher icon. | `io.rezikham.hypercameramod` |
+| [HyperFilmFilters](app/README.md) | Brings the film filters R600, P100F, F-50 and KC64 (and KP160 in the Leica UI) back to the filter panel and the filter strip, in the standard UI and the Leica UI. | `io.rezikham.hyperfilters` |
 
 Both are developed and tested on the Xiaomi 17 Ultra (Leica edition) with Xiaomi Camera 6.7 on HyperOS 4, and on the Xiaomi 14 Ultra with Xiaomi Camera 6.7 on HyperOS 3. They do not check the camera's version number: they look for what they need and, when it is not there, leave the camera unchanged and say so. Each module's README lists what it looks for.
 
