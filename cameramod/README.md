@@ -2,6 +2,13 @@
 
 An LSPosed/Vector module (libxposed API 101-102) that turns on features the Xiaomi Camera on HyperOS already contains but leaves off, and brings back the film filters. It includes the film-filter hooks from HyperFilmFilters and a small settings app for the toggles. Install only one of the two modules, or the film filters are added twice.
 
+## Requirements
+
+- A Xiaomi phone on HyperOS 3 or HyperOS 4 with Xiaomi Camera 6.7. Tested on the Xiaomi 14 Ultra (HyperOS 3) and the Xiaomi 17 Ultra (HyperOS 4).
+- Root with Magisk, KernelSU or APatch. Only the settings app's **Force Stop Camera** button needs root.
+- LSPosed or Vector with libxposed API 101/102. The settings-to-camera bridge uses API 102; on API 101 the toggles do not reach Camera, but the hooks and the system-property fallbacks still work.
+- Module scope: **Camera** only (`com.android.camera`).
+
 ## What it does
 
 | Feature | What changes in the camera |
@@ -67,11 +74,23 @@ If the camera misbehaves, disable the module and force-stop Camera to restore th
 
 ## Logs
 
-The module logs to logcat under the tag `HyperCameraMod`:
+The module logs to logcat under the tag `HyperCameraMod`. Clear the buffer, open Camera, reproduce the problem, then dump it:
 
 ```bash
-su -c "logcat -d | grep HyperCameraMod"
+su -c "logcat -c"
+su -c "logcat -d -s HyperCameraMod"
 ```
+
+The same lines are in LSPosed/Vector under **Logs** (filter `HyperCameraMod`). The useful ones look like:
+
+```
+HyperCameraMod: hooked s2.A.<method> (Leica Essential, layout 6.7)
+HyperCameraMod: Leica Essential layout 6.7-hyperos3 does not match: ...
+HyperCameraMod: the Leica Essential style list is not one this module knows
+HyperCameraMod: remote preferences are not available: ...
+```
+
+When reporting a problem, include the phone model, HyperOS version, Camera version (for example `6.7.000500.0`), and these log lines. If a layout does not match, the `does not match` line names the class or field that is missing, which is what a new profile needs.
 
 ## Build
 
