@@ -8,6 +8,7 @@ import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.hardware.camera2.CameraCharacteristics;
+import android.content.SharedPreferences;
 import android.content.res.Resources;
 import android.os.Handler;
 import android.os.Looper;
@@ -59,7 +60,10 @@ public class ModuleMain extends XposedModule {
                                  String stringIds, String imageIds) {
     }
 
+    // Profiles ordered by preference. Selection is version-aware: if camera version contains
+    // "500" (14 Ultra HyperOS 3: 6.7.000500.0), "6.7-hyperos3" is tried first.
     private static final LegendProfile[] LEGEND_PROFILES = {
+            new LegendProfile("6.7-hyperos3", "s2.B", "com.android.camera.data.data.d", "ci.e", "ci.b"),
             // Camera 6.7 (HyperOS 4): 6.7.000280.0 (tested), 6.7.000070.0 (has the item already).
             new LegendProfile("6.7", "s2.A", "com.android.camera.data.data.d", "ci.e", "ci.b"),
     };
@@ -71,6 +75,8 @@ public class ModuleMain extends XposedModule {
     }
 
     private static final StyleProfile[] STYLE_PROFILES = {
+            // Same order as LEGEND_PROFILES for consistency
+            new StyleProfile("6.7-hyperos3", "s2.m", "com.android.camera.data.data.d", "o", "r"),
             new StyleProfile("6.7", "s2.m", "com.android.camera.data.data.d", "o", "r"),
     };
     private static final String STYLE_ORIGINAL = "2";
@@ -105,6 +111,7 @@ public class ModuleMain extends XposedModule {
     private volatile boolean assetsHooked;
     private volatile boolean styleHooked;
     private volatile boolean textHooked;
+    private volatile boolean filmFiltersHooked;
 
     @Override
     public void onPackageLoaded(PackageLoadedParam param) {
@@ -129,13 +136,19 @@ public class ModuleMain extends XposedModule {
         } catch (Throwable t) {
             log(Log.WARN, TAG, "cannot find the module APK: " + t);
         }
+        // Get context for preference checks
+        android.content.Context context = null;
+        try {
+            context = currentApplication();
+        } catch (Throwable ignored) {}
         installPropertyHook();
         installTabHook();
         installModeListHook(loader);
         installNameStyleHook(loader);
         installStylizationHook();
-        installLegendHook(loader);
+        installLegendHook(loader, context);
         installStyleHook(loader);
+        installFilmFiltersHook(loader, context);
         if (!problems.isEmpty() && stage.equals("onPackageLoaded")) {
             // onPackageReady tries once more; report only what is still wrong after it
             problems.clear();
@@ -340,7 +353,7 @@ public class ModuleMain extends XposedModule {
             }
             hook(order).intercept(chain -> {
                 Object result = chain.proceed();
-                if (!(result instanceof int[] modes) || !essentialStdEnabled()) {
+                if (!(result instanceof int[] modes) || !essentialStdEnabled((android.content.Context) chain.getThisObject())) {
                     return result;
                 }
                 for (int mode : modes) {
@@ -379,7 +392,7 @@ public class ModuleMain extends XposedModule {
                 hook(visible).intercept(chain -> {
                     Object result = chain.proceed();
                     if (Boolean.FALSE.equals(result) && chain.getArg(0) instanceof Integer mode
-                            && mode == ESSENTIAL_MODE && essentialStdEnabled()) {
+                            && mode == ESSENTIAL_MODE && essentialStdEnabled((android.content.Context) chain.getThisObject())) {
                         return true;
                     }
                     return result;
@@ -393,7 +406,7 @@ public class ModuleMain extends XposedModule {
                 Method support = entry.getDeclaredMethod("support");
                 hook(support).intercept(chain -> {
                     Object result = chain.proceed();
-                    if (Boolean.FALSE.equals(result) && essentialStdEnabled()) {
+                    if (Boolean.FALSE.equals(result) && essentialStdEnabled((android.content.Context) chain.getThisObject())) {
                         if (supportLogged.compareAndSet(false, true)) {
                             log(Log.INFO, TAG, "LegendaryEnter.support() was false, answering true");
                         }
@@ -468,42 +481,101 @@ public class ModuleMain extends XposedModule {
 
     // ---- 3. Leica Essential CMOS (M10R) ---------------------------------------------------------
 
-    // Read on every build of the list, so setprop takes effect the next time Camera starts.
-    private boolean m10rEnabled() {
-        return propertyOn(M10R_ENABLE_KEY);
-    }
+    // Settings live in the manager's "remote preferences" store, written by SettingsActivity.
+    // The camera process cannot read the module app's private SharedPreferences directly.
+    private static final String PREFS_GROUP = "hypercameramod";
+    private static volatile android.content.SharedPreferences remotePrefs;
 
-    private static List<String> keys(List<?> items, Field key) throws IllegalAccessException {
-        List<String> out = new java.util.ArrayList<>();
-        for (Object item : items) {
-            out.add(String.valueOf(key.get(item)));
+    private android.content.SharedPreferences remotePrefs() {
+        android.content.SharedPreferences p = remotePrefs;
+        if (p != null) {
+            return p;
         }
-        return out;
+        try {
+            p = getRemotePreferences(PREFS_GROUP);
+            remotePrefs = p;
+            return p;
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "remote preferences are not available: " + t);
+            return null;
+        }
     }
 
-    // On unless camera.feature.essential_std is 0.
-    private static boolean essentialStdEnabled() {
+    // On unless camera.feature.essential_std is 0, and the user hasn't disabled it in settings.
+    private boolean essentialStdEnabled() {
+        return essentialStdEnabled(null);
+    }
+
+    private boolean essentialStdEnabled(android.content.Context context) {
+        android.content.SharedPreferences p = remotePrefs();
+        if (p != null && p.contains("essential_mode_enabled")) {
+            boolean v = p.getBoolean("essential_mode_enabled", true);
+            Log.d(TAG, "ESSENTIAL: remotePrefs contains key, value=" + v);
+            return v;
+        }
+        // Fallback to system property
         try {
             Class<?> props = Class.forName("android.os.SystemProperties");
-            return !"0".equals(props.getMethod("get", String.class, String.class)
-                    .invoke(null, ESSENTIAL_STD_KEY, "1"));
+            String v = (String) props.getMethod("get", String.class, String.class)
+                    .invoke(null, ESSENTIAL_STD_KEY, "1");
+            boolean b = !"0".equals(v);
+            Log.d(TAG, "ESSENTIAL: systemProperty=" + ESSENTIAL_STD_KEY + " value=" + v + " -> " + b);
+            return b;
         } catch (Throwable t) {
+            Log.d(TAG, "ESSENTIAL: systemProperty failed: " + t);
             return true;
         }
     }
 
-    private static boolean propertyOn(String key) {
+    private boolean leicaUIEnabled(android.content.Context context) {
+        android.content.SharedPreferences p = remotePrefs();
+        if (p != null && p.contains("leica_ui_enabled")) {
+            return p.getBoolean("leica_ui_enabled", true);
+        }
+        return true;
+    }
+
+    private boolean leicaUIEnabled() {
+        return leicaUIEnabled(null);
+    }
+
+    private boolean m10rEnabled(android.content.Context context) {
+        android.content.SharedPreferences p = remotePrefs();
+        if (p != null && p.contains("m10r_enabled")) {
+            return p.getBoolean("m10r_enabled", false);
+        }
+        // Fallback to system property
         try {
             Class<?> props = Class.forName("android.os.SystemProperties");
             return "1".equals(props.getMethod("get", String.class, String.class)
-                    .invoke(null, key, "0"));
+                    .invoke(null, "camera.feature.m10r", "0"));
         } catch (Throwable t) {
             return false;
         }
     }
 
-    private void installLegendHook(ClassLoader loader) {
+    private boolean m10rEnabled() {
+        return m10rEnabled(null);
+    }
+
+    private boolean extraFiltersEnabled(android.content.Context context) {
+        android.content.SharedPreferences p = remotePrefs();
+        if (p != null && p.contains("extra_filters_enabled")) {
+            return p.getBoolean("extra_filters_enabled", true);
+        }
+        return true;
+    }
+
+    private boolean extraFiltersEnabled() {
+        return extraFiltersEnabled(null);
+    }
+
+    private void installLegendHook(ClassLoader loader, android.content.Context context) {
         if (legendHooked) {
+            return;
+        }
+        if (!leicaUIEnabled(context)) {
+            log(Log.INFO, TAG, "Leica UI disabled in settings, skipping Legend hook");
             return;
         }
         for (LegendProfile profile : LEGEND_PROFILES) {
@@ -527,9 +599,10 @@ public class ModuleMain extends XposedModule {
                 Class<?> strings = Class.forName(profile.stringIds(), false, loader);
                 Class<?> images = Class.forName(profile.imageIds(), false, loader);
 
+                final android.content.Context ctx = context;
                 hook(build).intercept(chain -> {
                     Object result = chain.proceed();
-                    if (!m10rEnabled()) {
+                    if (!m10rEnabled(ctx)) {
                         return result;
                     }
                     try {
@@ -589,7 +662,7 @@ public class ModuleMain extends XposedModule {
         }
         log(Log.WARN, TAG, "the Leica Essential style list is not one this module knows; "
                 + "the CMOS style is not added");
-        if (m10rEnabled() && !problems.contains(MSG_LEGEND)) {
+        if (m10rEnabled(context) && !problems.contains(MSG_LEGEND)) {
             problems.add(MSG_LEGEND);   // only worth a notice when the CMOS entry was asked for
         }
     }
@@ -598,6 +671,7 @@ public class ModuleMain extends XposedModule {
     // argument (the mode data). Named differently in each build.
     private static Method findBuilder(Class<?> cls) throws NoSuchMethodException {
         Method found = null;
+        Method preferred = null;
         for (Method m : cls.getDeclaredMethods()) {
             Class<?> param = m.getParameterCount() == 1 ? m.getParameterTypes()[0] : null;
             // The argument is the mode data, but the build erases its type to Object
@@ -607,13 +681,24 @@ public class ModuleMain extends XposedModule {
                     && (param == Object.class
                     || param.getName().startsWith("com.android.camera.data.data."))) {
                 if (found != null) {
-                    throw new NoSuchMethodException("more than one list builder in " + cls.getName());
+                    // Log candidates for debugging
+                    Log.println(Log.DEBUG, TAG, "findBuilder: multiple candidates in " + cls.getName()
+                            + ": " + found.getName() + "(" + found.getParameterTypes()[0].getSimpleName() + ")"
+                            + ", " + m.getName() + "(" + param.getSimpleName() + ")");
+                    // Prefer the one with a more specific parameter type (not Object)
+                    if (param != Object.class && found.getParameterTypes()[0] == Object.class) {
+                        preferred = m;
+                    }
                 }
                 found = m;
             }
         }
         if (found == null) {
             throw new NoSuchMethodException("no list builder in " + cls.getName());
+        }
+        if (preferred != null) {
+            Log.println(Log.DEBUG, TAG, "findBuilder: choosing " + preferred.getName() + " over " + found.getName() + " in " + cls.getName());
+            return preferred;
         }
         return found;
     }
@@ -850,6 +935,28 @@ public class ModuleMain extends XposedModule {
         return new BitmapDrawable(resources, bitmap);
     }
 
+    // ---- 8. Film Filters (R600, P100F, F-50, KC64, KP160) -----------------------------------------
+
+    private void installFilmFiltersHook(ClassLoader loader, android.content.Context context) {
+        if (filmFiltersHooked) {
+            return;
+        }
+        if (!extraFiltersEnabled(context)) {
+            log(Log.INFO, TAG, "Extra film filters disabled in settings, skipping film filters hook");
+            return;
+        }
+        // Delegate to the filters module's logic
+        try {
+            Class<?> filtersModule = Class.forName("io.martin.hypercameramod.filters.ModuleMain", false, loader);
+            // The filters module is a separate XposedModule that will be loaded via java_init.list
+            // We just need to ensure it's enabled. The filters module reads the same shared prefs.
+            filmFiltersHooked = true;
+            log(Log.INFO, TAG, "Film filters module will handle filter injection (extra_filters_enabled=true)");
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "Cannot access filters module: " + t);
+        }
+    }
+
     // ---- telling the user ---------------------------------------------------------------------
     // A module has no screen inside the camera, so a problem is shown as a toast the first time
     // the camera starts after a camera update, then not again for that camera version.
@@ -903,5 +1010,13 @@ public class ModuleMain extends XposedModule {
         } catch (Throwable t) {
             return null;
         }
+    }
+
+    private static List<String> keys(List<?> items, Field key) throws IllegalAccessException {
+        List<String> out = new java.util.ArrayList<>();
+        for (Object item : items) {
+            out.add(String.valueOf(key.get(item)));
+        }
+        return out;
     }
 }

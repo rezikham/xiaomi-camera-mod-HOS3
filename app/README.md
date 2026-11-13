@@ -2,6 +2,8 @@
 
 An LSPosed/Vector module (libxposed API 101-102) that brings back the film filters from old Xiaomi Camera to the filter panel of the new Xiaomi Camera (v6), on HyperOS.
 
+HyperCameraMod now includes the same film filters; install only one of the two modules, or the filters are added twice.
+
 The Palette and Parameters panel, the Original colour style and the Leica Essential CMOS style are in a separate module, [HyperCameraMod](../cameramod/README.md).
 
 ## What it does

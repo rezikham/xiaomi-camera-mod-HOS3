@@ -2,8 +2,47 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!--
+        Android 10+ injects a synthetic "app info" launcher icon for any app that hides its
+        launcher activity while still requesting permissions (LauncherAppsService
+        .shouldShowSyntheticActivity). This module needs no permissions at all, so drop the
+        permission injected by androidx.core. That makes the icon disappear completely
+        instead of turning into an "App info" shortcut.
+    -->
+    <uses-permission
+        android:name="${applicationId}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+        tools:node="remove" />
+
     <application
         android:description="@string/module_description"
         android:label="@string/app_name"
-        tools:ignore="MissingApplicationIcon" />
+        tools:ignore="MissingApplicationIcon">
+
+        <!-- Main settings activity - has INFO for Vector/LSPosed settings access (matches reference) -->
+        <activity
+            android:name=".SettingsActivity"
+            android:label="@string/settings_title"
+            android:exported="true"
+            android:theme="@style/Theme.MaterialComponents.Light.NoActionBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.INFO" />
+            </intent-filter>
+        </activity>
+
+        <!-- Launcher alias - the ONLY LAUNCHER entry point (disabled to hide the icon) -->
+        <!-- Matches org.lsposed.corepatch: MAIN + LAUNCHER only; settings access uses InfoActivity filter above -->
+        <activity-alias
+            android:name=".LauncherAlias"
+            android:label="@string/app_name"
+            android:exported="true"
+            android:targetActivity=".SettingsActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+    </application>
+
 </manifest>

@@ -2,4 +2,27 @@
     <string name="app_name">HyperCameraMod</string>
     <string name="module_description">Turns on the Palette and Parameters filter panel and the Original colour style in the Xiaomi Camera, with the Leica Essential mode in the standard UI and an optional CMOS (M10R) style.</string>
     <string name="m10r_title">Modern vintage</string>
+
+    <string name="settings_title">HyperCameraMod Settings</string>
+    <string name="pref_essential_mode_title">Leica Essential Mode in Standard UI</string>
+    <string name="pref_essential_mode_summary">Show Leica Essential mode (M3/M9) in the standard UI mode strip. Note: M3/M9 processing requires 17 Ultra hardware and will not work on 14 Ultra.</string>
+    <string name="pref_essential_mode_key">essential_mode_enabled</string>
+
+    <string name="pref_leica_ui_title">Leica UI (Looks)</string>
+    <string name="pref_leica_ui_summary">Enable the Leica Looks panel in the filter strip. When off, uses the standard filter UI.</string>
+    <string name="pref_leica_ui_key">leica_ui_enabled</string>
+
+    <string name="pref_m10r_title">CMOS (M10R) Style</string>
+    <string name="pref_m10r_summary">Add the CMOS (M10R) style to the photography styles picker. Requires Leica UI enabled.</string>
+    <string name="pref_m10r_key">m10r_enabled</string>
+
+    <string name="pref_extra_filters_title">Extra Film Filters</string>
+    <string name="pref_extra_filters_summary">Enable extra film simulation filters: R600, P100F, F-50, KC64, KP160.</string>
+    <string name="pref_extra_filters_key">extra_filters_enabled</string>
+
+    <string name="menu_force_stop_camera">Force Stop Camera</string>
+    <string name="menu_hide_launcher">Hide launcher icon</string>
+    <string name="pref_hide_launcher_title">Hide App Icon from Launcher</string>
+    <string name="pref_hide_launcher_summary">Hide the HyperCameraMod icon from the app drawer. You can still access settings from Vector/LSPosed module list.</string>
+    <string name="pref_hide_launcher_key">hide_launcher_enabled</string>
 </resources>
