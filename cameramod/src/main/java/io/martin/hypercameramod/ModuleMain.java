@@ -75,8 +75,8 @@ public class ModuleMain extends XposedModule {
     private static final LegendProfile[] LEGEND_PROFILES = {
             // Camera 6.7 (HyperOS 4): 6.7.000280.0 (tested), 6.7.000070.0 (has the item already).
             new LegendProfile("6.7", "s2.A", "com.android.camera.data.data.d", "ci.e", "ci.b"),
-            // Camera 6.7 (HyperOS 3): 6.7.000500.0 (14 Ultra)
-            new LegendProfile("6.7-hyperos3", "s2.B", "com.android.camera.data.data.C0934d", "ci.e", "ci.b"),
+            // Camera 6.7 (HyperOS 3): 6.7.000500.0 (14 Ultra) — uses same item class as layout 6.7
+            new LegendProfile("6.7-hyperos3", "s2.B", "com.android.camera.data.data.d", "ci.e", "ci.b"),
     };
     // The photography style picker (Leica Authentic, Leica Vibrant, and Original once its bit is
     // set). The Leica UI draws each as a badge from a mapping that knows only two values, so
@@ -87,7 +87,7 @@ public class ModuleMain extends XposedModule {
 
     private static final StyleProfile[] STYLE_PROFILES = {
             new StyleProfile("6.7", "s2.m", "com.android.camera.data.data.d", "o", "r"),
-            new StyleProfile("6.7-hyperos3", "s2.m", "com.android.camera.data.data.C0934d", "o", "r"),
+            new StyleProfile("6.7-hyperos3", "s2.m", "com.android.camera.data.data.d", "o", "r"),
     };
     private static final String STYLE_ORIGINAL = "2";
     private static final String STYLE_AUTHENTIC = "1";
@@ -788,6 +788,7 @@ public class ModuleMain extends XposedModule {
     // argument (the mode data). Named differently in each build.
     private static Method findBuilder(Class<?> cls) throws NoSuchMethodException {
         Method found = null;
+        Method preferred = null;
         for (Method m : cls.getDeclaredMethods()) {
             Class<?> param = m.getParameterCount() == 1 ? m.getParameterTypes()[0] : null;
             // The argument is the mode data, but the build erases its type to Object
@@ -797,13 +798,24 @@ public class ModuleMain extends XposedModule {
                     && (param == Object.class
                     || param.getName().startsWith("com.android.camera.data.data."))) {
                 if (found != null) {
-                    throw new NoSuchMethodException("more than one list builder in " + cls.getName());
+                    // Log candidates for debugging
+                    Log.println(Log.DEBUG, TAG, "findBuilder: multiple candidates in " + cls.getName()
+                            + ": " + found.getName() + "(" + found.getParameterTypes()[0].getSimpleName() + ")"
+                            + ", " + m.getName() + "(" + param.getSimpleName() + ")");
+                    // Prefer the one with a more specific parameter type (not Object)
+                    if (param != Object.class && found.getParameterTypes()[0] == Object.class) {
+                        preferred = m;
+                    }
                 }
                 found = m;
             }
         }
         if (found == null) {
             throw new NoSuchMethodException("no list builder in " + cls.getName());
+        }
+        if (preferred != null) {
+            Log.println(Log.DEBUG, TAG, "findBuilder: choosing " + preferred.getName() + " over " + found.getName() + " in " + cls.getName());
+            return preferred;
         }
         return found;
     }
