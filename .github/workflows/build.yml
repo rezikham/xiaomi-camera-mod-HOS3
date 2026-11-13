@@ -3,6 +3,7 @@ name: Build Module
 on:
   push:
     branches: [ main, hyperos3-* ]
+    tags: [ 'v*' ]
   pull_request:
     branches: [ main ]
   workflow_dispatch:
