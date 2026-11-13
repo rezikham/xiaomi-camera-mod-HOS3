@@ -92,6 +92,10 @@ HyperCameraMod: remote preferences are not available: ...
 
 When reporting a problem, include the phone model, HyperOS version, Camera version (for example `6.7.000500.0`), and these log lines. If a layout does not match, the `does not match` line names the class or field that is missing, which is what a new profile needs.
 
+## Changelog
+
+The changes in each release are in [`CHANGELOG.md`](../CHANGELOG.md). The current stable release is 1.0.0.
+
 ## Build
 
 A Gradle module in this repository. It needs the Android SDK (compileSdk 37, build-tools 37.0.0); put `sdk.dir=...` in `local.properties`, then:
