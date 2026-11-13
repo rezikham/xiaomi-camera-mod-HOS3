@@ -470,6 +470,15 @@ public class ModuleMain extends XposedModule {
 
     // Read on every build of the list, so setprop takes effect the next time Camera starts.
     private boolean m10rEnabled() {
+        try {
+            android.content.SharedPreferences p = getRemotePreferences("hypercameramod");
+            if (p != null && p.contains("m10r_enabled")) {
+                return p.getBoolean("m10r_enabled", false);
+            }
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot read m10r_enabled preference: " + t);
+        }
+        // Fallback to system property
         return propertyOn(M10R_ENABLE_KEY);
     }
 
