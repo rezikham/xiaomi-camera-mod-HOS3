@@ -153,21 +153,33 @@ public class SettingsActivity extends AppCompatActivity {
     }
 
     private void forceStopCamera() {
-        try {
-            // Try to kill the camera app process without root
-            android.app.ActivityManager am = (android.app.ActivityManager) getSystemService(ACTIVITY_SERVICE);
-            if (am != null) {
-                am.killBackgroundProcesses(CAMERA_PACKAGE);
+        // Normal apps cannot force-stop another package: killBackgroundProcesses() needs
+        // KILL_BACKGROUND_PROCESSES and setApplicationEnabledSetting() is system-only. The
+        // module itself also declares no permissions (so Android does not add a synthetic
+        // "App info" icon when the launcher icon is hidden), so use root instead.
+        Toast.makeText(this, "Stopping Camera…", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            boolean stopped = false;
+            String reason = null;
+            try {
+                Process process = new ProcessBuilder("su", "-c", "am force-stop " + CAMERA_PACKAGE)
+                        .redirectErrorStream(true)
+                        .start();
+                stopped = process.waitFor() == 0;
+                if (!stopped) {
+                    reason = "su exited with code " + process.exitValue();
+                }
+            } catch (Throwable t) {
+                reason = t.getMessage();
             }
-            // Also try to force-stop via package manager (requires permission)
-            getPackageManager().setApplicationEnabledSetting(CAMERA_PACKAGE,
-                    PackageManager.COMPONENT_ENABLED_STATE_DISABLED, 0);
-            getPackageManager().setApplicationEnabledSetting(CAMERA_PACKAGE,
-                    PackageManager.COMPONENT_ENABLED_STATE_ENABLED, 0);
-            Toast.makeText(this, R.string.menu_force_stop_camera + " - done", Toast.LENGTH_SHORT).show();
-        } catch (Exception e) {
-            Toast.makeText(this, "Could not force stop Camera: " + e.getMessage(), Toast.LENGTH_LONG).show();
-        }
+            final boolean ok = stopped;
+            final String why = reason;
+            runOnUiThread(() -> Toast.makeText(this,
+                    ok ? "Camera stopped."
+                            : "Could not stop Camera. Grant root to HyperCameraMod (Magisk) or stop it from App info."
+                                    + (why == null ? "" : "\n" + why),
+                    Toast.LENGTH_LONG).show());
+        }).start();
     }
 
     private void toggleLauncherIcon() {
