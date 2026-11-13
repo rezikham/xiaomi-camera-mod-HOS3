@@ -22,7 +22,7 @@ HyperCameraMod has a settings app. Open it from the app drawer ("HyperCameraMod"
 | CMOS (M10R) Style | off | Adds the CMOS (M10R) style to the Leica Essential style list. |
 | Extra Film Filters | on | Adds the R600, P100F, F-50, KC64 and KP160 film filters. |
 
-The toolbar has a **Force Stop Camera** button. The overflow menu has **Hide launcher icon**, which removes the app icon without breaking access from LSPosed/Vector. After changing a toggle, force-stop Camera and open it again.
+The toolbar has a **Force Stop Camera** button (root is required; grant it in Magisk/KernelSU/APatch). The overflow menu has **Hide launcher icon**, which removes the app icon without breaking access from LSPosed/Vector. After changing a toggle, force-stop Camera and open it again.
 
 ## Use
 

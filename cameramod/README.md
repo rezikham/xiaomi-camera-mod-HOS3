@@ -43,7 +43,7 @@ When the Leica Essential list is not one the module knows, it leaves the camera 
 
 1. Install the module and enable it in LSPosed or Vector. Set its scope to **Camera** only.
 2. Open **HyperCameraMod** settings from the app drawer or from the module entry in LSPosed/Vector.
-3. Set the toggles, then use **Force Stop Camera** in the settings toolbar and open Camera again.
+3. Set the toggles, then use **Force Stop Camera** in the settings toolbar (root is required; grant it in Magisk/KernelSU/APatch) and open Camera again.
 
 The settings app has four toggles: Leica Essential mode in the standard UI (on by default), Leica UI / Looks (on), CMOS (M10R) (off) and Extra Film Filters (on). The overflow menu has **Hide launcher icon**; when the icon is hidden, settings stay reachable from LSPosed/Vector.
 
