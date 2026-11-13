@@ -7,7 +7,7 @@
         android:label="@string/app_name"
         tools:ignore="MissingApplicationIcon">
 
-        <!-- Main settings activity - has PREFERENCE for Vector/LSPosed settings access -->
+        <!-- Main settings activity - has INFO for Vector/LSPosed settings access (matches reference) -->
         <activity
             android:name=".SettingsActivity"
             android:label="@string/settings_title"
@@ -15,12 +15,12 @@
             android:theme="@style/Theme.MaterialComponents.Light.NoActionBar">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.PREFERENCE" />
+                <category android:name="android.intent.category.INFO" />
             </intent-filter>
         </activity>
 
         <!-- Launcher alias - THIS is the LAUNCHER entry point (can be disabled to hide icon) -->
+        <!-- Also has INFO category so Vector/LSPosed can use it when enabled, falls back to SettingsActivity when disabled -->
         <activity-alias
             android:name=".LauncherAlias"
             android:label="@string/app_name"
@@ -29,7 +29,7 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
-                <category android:name="android.intent.category.PREFERENCE" />
+                <category android:name="android.intent.category.INFO" />
             </intent-filter>
         </activity-alias>
 

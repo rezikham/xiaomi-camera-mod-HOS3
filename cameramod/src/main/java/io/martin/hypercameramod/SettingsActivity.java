@@ -39,6 +39,16 @@ public class SettingsActivity extends AppCompatActivity {
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
         getMenuInflater().inflate(R.menu.settings_menu, menu);
+        
+        // Initialize checkbox state from PackageManager immediately
+        MenuItem hideItem = menu.findItem(R.id.menu_hide_launcher);
+        if (hideItem != null) {
+            ComponentName componentName = new ComponentName(this, LAUNCHER_ALIAS);
+            int state = getPackageManager().getComponentEnabledSetting(componentName);
+            // Default to enabled if state is DEFAULT (0)
+            boolean isEnabled = state != PackageManager.COMPONENT_ENABLED_STATE_DISABLED;
+            hideItem.setChecked(isEnabled);
+        }
         return true;
     }
 
@@ -46,10 +56,13 @@ public class SettingsActivity extends AppCompatActivity {
     public boolean onPrepareOptionsMenu(Menu menu) {
         MenuItem hideItem = menu.findItem(R.id.menu_hide_launcher);
         if (hideItem != null) {
-            // Check current state from PackageManager (source of truth)
+            // Sync checkbox state from PackageManager (source of truth)
             ComponentName componentName = new ComponentName(this, LAUNCHER_ALIAS);
             int state = getPackageManager().getComponentEnabledSetting(componentName);
-            hideItem.setChecked(state == PackageManager.COMPONENT_ENABLED_STATE_ENABLED);
+            boolean isEnabled = state != PackageManager.COMPONENT_ENABLED_STATE_DISABLED;
+            if (hideItem.isChecked() != isEnabled) {
+                hideItem.setChecked(isEnabled);
+            }
         }
         return super.onPrepareOptionsMenu(menu);
     }
