@@ -388,7 +388,9 @@ public class ModuleMain extends XposedModule {
             }
             hook(order).intercept(chain -> {
                 Object result = chain.proceed();
+                Log.d(TAG, "ORDERHOOK: result=" + result + ", isIntArray=" + (result != null && result.getClass().getName().contains("int[]")) + ", essentialStdEnabled=" + essentialStdEnabled((android.content.Context) chain.getThisObject()));
                 if (!(result instanceof int[] modes) || !essentialStdEnabled((android.content.Context) chain.getThisObject())) {
+                    Log.d(TAG, "ORDERHOOK: SKIPPING because result=" + result + " essentialStdEnabled=false");
                     return result;
                 }
                 for (int mode : modes) {
@@ -475,7 +477,8 @@ public class ModuleMain extends XposedModule {
                             // Ensure Essential mode (256) is in strip if property is on
                             boolean hasEssential = false;
                             for (Object entry : stripList) {
-                                if (ESSENTIAL_MODE == key.getInt(entry)) {
+                                Object keyVal = key.get(entry);
+                                if (keyVal != null && ESSENTIAL_MODE == Integer.parseInt(keyVal.toString())) {
                                     hasEssential = true;
                                     break;
                                 }
@@ -484,7 +487,8 @@ public class ModuleMain extends XposedModule {
                                 // Find the MORE_MODE entry in moreList and move it to strip, or create new
                                 Object essentialEntry = null;
                                 for (Object entry : moreList) {
-                                    if (ESSENTIAL_MODE == key.getInt(entry)) {
+                                    Object keyVal = key.get(entry);
+                                    if (keyVal != null && ESSENTIAL_MODE == Integer.parseInt(keyVal.toString())) {
                                         essentialEntry = entry;
                                         break;
                                     }
@@ -655,14 +659,20 @@ public class ModuleMain extends XposedModule {
     private boolean essentialStdEnabled(android.content.Context context) {
         android.content.SharedPreferences p = remotePrefs();
         if (p != null && p.contains("essential_mode_enabled")) {
-            return p.getBoolean("essential_mode_enabled", true);
+            boolean v = p.getBoolean("essential_mode_enabled", true);
+            Log.d(TAG, "ESSENTIAL: remotePrefs contains key, value=" + v);
+            return v;
         }
         // Fallback to system property
         try {
             Class<?> props = Class.forName("android.os.SystemProperties");
-            return !"0".equals(props.getMethod("get", String.class, String.class)
-                    .invoke(null, ESSENTIAL_STD_KEY, "1"));
+            String v = (String) props.getMethod("get", String.class, String.class)
+                    .invoke(null, ESSENTIAL_STD_KEY, "1");
+            boolean b = !"0".equals(v);
+            Log.d(TAG, "ESSENTIAL: systemProperty=" + ESSENTIAL_STD_KEY + " value=" + v + " -> " + b);
+            return b;
         } catch (Throwable t) {
+            Log.d(TAG, "ESSENTIAL: systemProperty failed: " + t);
             return true;
         }
     }
