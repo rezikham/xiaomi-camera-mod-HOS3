@@ -562,18 +562,35 @@ public class ModuleMain extends XposedModule {
         return out;
     }
 
+    // Settings live in the manager's "remote preferences" store, written by SettingsActivity.
+    // The camera process cannot read the module app's private SharedPreferences directly.
+    private static final String PREFS_GROUP = "hypercameramod";
+    private static volatile android.content.SharedPreferences remotePrefs;
+
+    private android.content.SharedPreferences remotePrefs() {
+        android.content.SharedPreferences p = remotePrefs;
+        if (p != null) {
+            return p;
+        }
+        try {
+            p = getRemotePreferences(PREFS_GROUP);
+            remotePrefs = p;
+            return p;
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "remote preferences are not available: " + t);
+            return null;
+        }
+    }
+
     // On unless camera.feature.essential_std is 0, and the user hasn't disabled it in settings.
-    private static boolean essentialStdEnabled() {
+    private boolean essentialStdEnabled() {
         return essentialStdEnabled(null);
     }
 
-    private static boolean essentialStdEnabled(android.content.Context context) {
-        // First check settings if context is available
-        if (context != null) {
-            android.content.SharedPreferences prefs = context.getSharedPreferences("hypercameramod_prefs", android.content.Context.MODE_PRIVATE);
-            if (prefs.contains("essential_mode_enabled")) {
-                return prefs.getBoolean("essential_mode_enabled", true);
-            }
+    private boolean essentialStdEnabled(android.content.Context context) {
+        android.content.SharedPreferences p = remotePrefs();
+        if (p != null && p.contains("essential_mode_enabled")) {
+            return p.getBoolean("essential_mode_enabled", true);
         }
         // Fallback to system property
         try {
@@ -596,11 +613,9 @@ public class ModuleMain extends XposedModule {
     }
 
     private boolean leicaUIEnabled(android.content.Context context) {
-        if (context != null) {
-            android.content.SharedPreferences prefs = context.getSharedPreferences("hypercameramod_prefs", android.content.Context.MODE_PRIVATE);
-            if (prefs.contains("leica_ui_enabled")) {
-                return prefs.getBoolean("leica_ui_enabled", true);
-            }
+        android.content.SharedPreferences p = remotePrefs();
+        if (p != null && p.contains("leica_ui_enabled")) {
+            return p.getBoolean("leica_ui_enabled", true);
         }
         return true;
     }
@@ -610,11 +625,9 @@ public class ModuleMain extends XposedModule {
     }
 
     private boolean m10rEnabled(android.content.Context context) {
-        if (context != null) {
-            android.content.SharedPreferences prefs = context.getSharedPreferences("hypercameramod_prefs", android.content.Context.MODE_PRIVATE);
-            if (prefs.contains("m10r_enabled")) {
-                return prefs.getBoolean("m10r_enabled", false);
-            }
+        android.content.SharedPreferences p = remotePrefs();
+        if (p != null && p.contains("m10r_enabled")) {
+            return p.getBoolean("m10r_enabled", false);
         }
         // Fallback to system property
         try {
@@ -631,11 +644,9 @@ public class ModuleMain extends XposedModule {
     }
 
     private boolean extraFiltersEnabled(android.content.Context context) {
-        if (context != null) {
-            android.content.SharedPreferences prefs = context.getSharedPreferences("hypercameramod_prefs", android.content.Context.MODE_PRIVATE);
-            if (prefs.contains("extra_filters_enabled")) {
-                return prefs.getBoolean("extra_filters_enabled", true);
-            }
+        android.content.SharedPreferences p = remotePrefs();
+        if (p != null && p.contains("extra_filters_enabled")) {
+            return p.getBoolean("extra_filters_enabled", true);
         }
         return true;
     }

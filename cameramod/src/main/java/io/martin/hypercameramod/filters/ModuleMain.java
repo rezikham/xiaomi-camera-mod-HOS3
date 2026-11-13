@@ -464,19 +464,9 @@ public class ModuleMain extends XposedModule {
     // Check if extra film filters are enabled in the main module's settings
     private boolean extraFiltersEnabled() {
         try {
-            Application app = currentApplication();
-            if (app != null) {
-                // Ask the manager for this module's package name (works regardless of applicationId)
-                android.content.Context mainModuleContext = app.createPackageContext(
-                        getModuleApplicationInfo().packageName,
-                        android.content.Context.CONTEXT_IGNORE_SECURITY);
-                if (mainModuleContext != null) {
-                    android.content.SharedPreferences prefs = mainModuleContext.getSharedPreferences("hypercameramod_prefs",
-                            android.content.Context.MODE_PRIVATE);
-                    if (prefs.contains("extra_filters_enabled")) {
-                        return prefs.getBoolean("extra_filters_enabled", true);
-                    }
-                }
+            android.content.SharedPreferences prefs = getRemotePreferences("hypercameramod");
+            if (prefs != null && prefs.contains("extra_filters_enabled")) {
+                return prefs.getBoolean("extra_filters_enabled", true);
             }
         } catch (Throwable t) {
             log(Log.WARN, TAG, "cannot read extra_filters_enabled preference: " + t);

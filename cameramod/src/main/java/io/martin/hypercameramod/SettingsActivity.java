@@ -1,6 +1,7 @@
 package io.martin.hypercameramod;
 
 import android.content.ComponentName;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.view.Menu;
@@ -9,11 +10,34 @@ import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.Toolbar;
 import androidx.preference.PreferenceFragmentCompat;
+import androidx.preference.PreferenceManager;
+import io.github.libxposed.service.XposedService;
+import io.github.libxposed.service.XposedServiceHelper;
 
 public class SettingsActivity extends AppCompatActivity {
 
     private static final String CAMERA_PACKAGE = "com.android.camera";
     private static final String LAUNCHER_ALIAS = "io.martin.hypercameramod.LauncherAlias";
+
+    // The camera process reads these through libxposed remote preferences.
+    private static final String PREFS_GROUP = "hypercameramod";
+    private static final String[] SETTING_KEYS = {
+            "essential_mode_enabled", "leica_ui_enabled", "m10r_enabled", "extra_filters_enabled"
+    };
+    private static final boolean[] SETTING_DEFAULTS = {true, true, false, true};
+
+    private SharedPreferences modulePrefs;
+    private boolean prefListenerRegistered;
+
+    private final SharedPreferences.OnSharedPreferenceChangeListener prefListener =
+            (prefs, key) -> {
+                for (int i = 0; i < SETTING_KEYS.length; i++) {
+                    if (SETTING_KEYS[i].equals(key)) {
+                        pushPreference(key, prefs.getBoolean(key, SETTING_DEFAULTS[i]));
+                        return;
+                    }
+                }
+            };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -28,11 +52,63 @@ public class SettingsActivity extends AppCompatActivity {
         }
         toolbar.setNavigationOnClickListener(v -> finish());
 
+        connectModuleSettings();
+
         if (savedInstanceState == null) {
             getSupportFragmentManager()
                 .beginTransaction()
                 .replace(R.id.settings_container, new SettingsFragment())
                 .commit();
+        }
+    }
+
+    // The hooks run in the camera process and cannot read this app's private preferences, so
+    // mirror the settings into the manager's remote preferences, which both sides can read.
+    private void connectModuleSettings() {
+        try {
+            XposedServiceHelper.registerListener(new XposedServiceHelper.OnServiceListener() {
+                @Override
+                public void onServiceBind(XposedService service) {
+                    try {
+                        modulePrefs = service.getRemotePreferences(PREFS_GROUP);
+                        pushAllPreferences();
+                        if (!prefListenerRegistered) {
+                            PreferenceManager.getDefaultSharedPreferences(SettingsActivity.this)
+                                    .registerOnSharedPreferenceChangeListener(prefListener);
+                            prefListenerRegistered = true;
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                }
+
+                @Override
+                public void onServiceDied(XposedService service) {
+                    modulePrefs = null;
+                }
+            });
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private void pushAllPreferences() {
+        SharedPreferences local = PreferenceManager.getDefaultSharedPreferences(this);
+        SharedPreferences prefs = modulePrefs;
+        if (prefs == null) {
+            return;
+        }
+        SharedPreferences.Editor editor = prefs.edit();
+        for (int i = 0; i < SETTING_KEYS.length; i++) {
+            if (local.contains(SETTING_KEYS[i])) {
+                editor.putBoolean(SETTING_KEYS[i], local.getBoolean(SETTING_KEYS[i], SETTING_DEFAULTS[i]));
+            }
+        }
+        editor.apply();
+    }
+
+    private void pushPreference(String key, boolean value) {
+        SharedPreferences prefs = modulePrefs;
+        if (prefs != null) {
+            prefs.edit().putBoolean(key, value).apply();
         }
     }
 
