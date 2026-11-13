@@ -42,29 +42,20 @@ jobs:
       run: |
         BASE_VERSION_CAMERAMOD="1.0.9"
         BASE_VERSIONCODE_CAMERAMOD=11
-        BASE_VERSION_FILTERS="1.9.2"
-        BASE_VERSIONCODE_FILTERS=49
         CI_NUM=${{ github.run_number }}
-        
+
         # versionCode: 1119, 1135, ... (base*100 + run_number).
         # Use the versionCode (not the raw CI run number) in versionName and APK filenames
         # so the file name always matches what Android shows in App info.
         VERSION_CODE_CAMERAMOD=$((BASE_VERSIONCODE_CAMERAMOD * 100 + CI_NUM))
-        VERSION_CODE_FILTERS=$((BASE_VERSIONCODE_FILTERS * 100 + CI_NUM))
         VERSION_NAME_CAMERAMOD="${BASE_VERSION_CAMERAMOD}-${VERSION_CODE_CAMERAMOD}"
-        VERSION_NAME_FILTERS="${BASE_VERSION_FILTERS}-${VERSION_CODE_FILTERS}"
-        
+
         echo "version_name_cameramod=$VERSION_NAME_CAMERAMOD" >> $GITHUB_OUTPUT
         echo "version_code_cameramod=$VERSION_CODE_CAMERAMOD" >> $GITHUB_OUTPUT
-        echo "version_name_filters=$VERSION_NAME_FILTERS" >> $GITHUB_OUTPUT
-        echo "version_code_filters=$VERSION_CODE_FILTERS" >> $GITHUB_OUTPUT
         echo "ci_num=$CI_NUM" >> $GITHUB_OUTPUT
 
     - name: Build cameramod module
       run: ./gradlew :cameramod:assembleRelease --no-daemon -PversionName=${{ steps.calc_version.outputs.version_name_cameramod }} -PversionCode=${{ steps.calc_version.outputs.version_code_cameramod }}
-
-    - name: Build app module (HyperFilmFilters)
-      run: ./gradlew :app:assembleRelease --no-daemon -PversionName=${{ steps.calc_version.outputs.version_name_filters }} -PversionCode=${{ steps.calc_version.outputs.version_code_filters }}
 
     - name: Get version info
       id: version
@@ -76,17 +67,12 @@ jobs:
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         echo "branch=$(git rev-parse --abbrev-ref HEAD)" >> $GITHUB_OUTPUT
 
-    - name: Rename APKs with version (includes versionCode)
+    - name: Rename APK with version (includes versionCode)
       run: |
         VERSION_CAMERAMOD=${{ steps.calc_version.outputs.version_name_cameramod }}
-        VERSION_FILTERS=${{ steps.calc_version.outputs.version_name_filters }}
         # cameramod: io.rezikham.hypercameramod
         find cameramod/build/outputs/apk/release -name "*.apk" | while read f; do
           mv "$f" "$(dirname "$f")/io.rezikham.hypercameramod-${VERSION_CAMERAMOD}.apk"
-        done
-        # app: io.rezikham.hyperfilters
-        find app/build/outputs/apk/release -name "*.apk" | while read f; do
-          mv "$f" "$(dirname "$f")/io.rezikham.hyperfilters-${VERSION_FILTERS}.apk"
         done
 
     - name: Upload cameramod APK
@@ -94,12 +80,6 @@ jobs:
       with:
         name: hypercameramod-${{ steps.calc_version.outputs.version_name_cameramod }}
         path: cameramod/build/outputs/apk/release/io.rezikham.hypercameramod-${{ steps.calc_version.outputs.version_name_cameramod }}.apk
-
-    - name: Upload app APK
-      uses: actions/upload-artifact@v4
-      with:
-        name: hyperfilters-${{ steps.calc_version.outputs.version_name_filters }}
-        path: app/build/outputs/apk/release/io.rezikham.hyperfilters-${{ steps.calc_version.outputs.version_name_filters }}.apk
 
     - name: Clean old assets from CI-Release
       if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/hyperos3-'))
@@ -121,21 +101,27 @@ jobs:
         release_name: "CI-Release (${{ steps.version.outputs.branch }} #${{ github.run_number }})"
         body: |
           **Development build from branch:** `${{ steps.version.outputs.branch }}`
-          
+
           **CI Run:** #${{ github.run_number }}
-          
+
           **Version:** `${{ steps.calc_version.outputs.version_name_cameramod }}` (versionCode `${{ steps.calc_version.outputs.version_code_cameramod }}`)
-          
+
           **Commit:** ${{ github.sha }}
-          
-          **Module:** `HyperCameraMod` (single merged module - includes all HyperFilmFilters features)
-          
+
+          **Module:** `HyperCameraMod` — the single module, with the HyperFilmFilters features built in. Do not install HyperFilmFilters alongside it.
+
+          **Requirements:**
+          - Xiaomi phone on HyperOS 3 or HyperOS 4 (tested: Xiaomi 14 Ultra, Xiaomi 17 Ultra)
+          - Xiaomi Camera 6.7
+          - Root: Magisk, KernelSU or APatch. Root is only needed for the **Force Stop Camera** button.
+          - LSPosed or Vector with libxposed API 101/102. The settings-to-camera toggles need API 102.
+          - Module scope: `com.android.camera` only
+
           **Installation:**
-          1. Install APK via Magisk/LSPosed/Vector
-          2. Enable in manager with scope: `com.android.camera`
-          3. Open HyperCameraMod settings from app drawer or Vector/LSPosed module list
-          4. Configure toggles, then force-stop Camera app and reopen
-          
+          1. Install the APK and enable the module in LSPosed/Vector, scope `com.android.camera`
+          2. Open HyperCameraMod settings from the app drawer or the module list
+          3. Set the toggles, then tap **Force Stop Camera** (grant root) and open Camera again
+
           **Features:**
           - ✅ Palette & Parameters panel
           - ✅ Original colour style
@@ -145,18 +131,29 @@ jobs:
           - ✅ Film simulation filters: R600, P100F, F-50, KC64, KP160 (toggle: Extra Film Filters)
           - ✅ Force-stop Camera button in settings toolbar
           - ✅ Hide app icon from launcher (toggle in overflow menu)
-          
+
           **Settings UI:**
           - Access via app drawer icon "HyperCameraMod" or Vector/LSPosed module list
           - Toolbar: Force Stop Camera button (top-right)
           - Overflow menu (⋮): "Hide launcher icon" toggle
           - Toggles: Essential Mode, Leica UI, M10R, Extra Film Filters
+
+          **Logs / reporting a problem:**
+          1. If a feature is missing, check its toggle, tap **Force Stop Camera**, and open Camera again.
+          2. In LSPosed/Vector open **Logs** and filter for `HyperCameraMod`; reproduce the problem and copy the lines.
+          3. Or from a root shell:
+             ```bash
+             su -c "logcat -c"
+             # open Camera, reproduce the problem, then:
+             su -c "logcat -d -s HyperCameraMod"
+             ```
+             Over ADB: `adb logcat -c` then `adb logcat -d -s HyperCameraMod`.
+          4. Include your phone model, HyperOS version, Camera version (e.g. `6.7.000500.0`), and the log lines. A `does not match` line names the missing class/field and is what a new camera profile needs.
         draft: false
         prerelease: true
         make_latest: false
         files: |
           cameramod/build/outputs/apk/release/io.rezikham.hypercameramod-${{ steps.calc_version.outputs.version_name_cameramod }}.apk
-          app/build/outputs/apk/release/io.rezikham.hyperfilters-${{ steps.calc_version.outputs.version_name_filters }}.apk
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -168,17 +165,23 @@ jobs:
         release_name: "Release ${{ github.ref_name }}"
         body: |
           **Release:** ${{ github.ref_name }}
-          
+
           **Commit:** ${{ github.sha }}
-          
-          **Module:** `HyperCameraMod` (single merged module - includes all HyperFilmFilters features)
-          
+
+          **Module:** `HyperCameraMod` — the single module, with the HyperFilmFilters features built in. Do not install HyperFilmFilters alongside it.
+
+          **Requirements:**
+          - Xiaomi phone on HyperOS 3 or HyperOS 4 (tested: Xiaomi 14 Ultra, Xiaomi 17 Ultra)
+          - Xiaomi Camera 6.7
+          - Root: Magisk, KernelSU or APatch. Root is only needed for the **Force Stop Camera** button.
+          - LSPosed or Vector with libxposed API 101/102. The settings-to-camera toggles need API 102.
+          - Module scope: `com.android.camera` only
+
           **Installation:**
-          1. Install APK via Magisk/LSPosed/Vector
-          2. Enable in manager with scope: `com.android.camera`
-          3. Open HyperCameraMod settings from app drawer or Vector/LSPosed module list
-          4. Configure toggles, then force-stop Camera app and reopen
-          
+          1. Install the APK and enable the module in LSPosed/Vector, scope `com.android.camera`
+          2. Open HyperCameraMod settings from the app drawer or the module list
+          3. Set the toggles, then tap **Force Stop Camera** (grant root) and open Camera again
+
           **Features:**
           - ✅ Palette & Parameters panel
           - ✅ Original colour style
@@ -188,17 +191,28 @@ jobs:
           - ✅ Film simulation filters: R600, P100F, F-50, KC64, KP160 (toggle: Extra Film Filters)
           - ✅ Force-stop Camera button in settings toolbar
           - ✅ Hide app icon from launcher (toggle in overflow menu)
-          
+
           **Settings UI:**
           - Access via app drawer icon "HyperCameraMod" or Vector/LSPosed module list
           - Toolbar: Force Stop Camera button (top-right)
           - Overflow menu (⋮): "Hide launcher icon" toggle
           - Toggles: Essential Mode, Leica UI, M10R, Extra Film Filters
+
+          **Logs / reporting a problem:**
+          1. If a feature is missing, check its toggle, tap **Force Stop Camera**, and open Camera again.
+          2. In LSPosed/Vector open **Logs** and filter for `HyperCameraMod`; reproduce the problem and copy the lines.
+          3. Or from a root shell:
+             ```bash
+             su -c "logcat -c"
+             # open Camera, reproduce the problem, then:
+             su -c "logcat -d -s HyperCameraMod"
+             ```
+             Over ADB: `adb logcat -c` then `adb logcat -d -s HyperCameraMod`.
+          4. Include your phone model, HyperOS version, Camera version (e.g. `6.7.000500.0`), and the log lines. A `does not match` line names the missing class/field and is what a new camera profile needs.
         draft: false
         prerelease: false
         make_latest: true
         files: |
           cameramod/build/outputs/apk/release/io.rezikham.hypercameramod-${{ steps.calc_version.outputs.version_name_cameramod }}.apk
-          app/build/outputs/apk/release/io.rezikham.hyperfilters-${{ steps.calc_version.outputs.version_name_filters }}.apk
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
