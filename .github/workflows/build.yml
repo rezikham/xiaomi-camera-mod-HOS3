@@ -40,15 +40,21 @@ jobs:
     - name: Calculate version from CI run number
       id: calc_version
       run: |
-        BASE_VERSION_CAMERAMOD="1.0.9"
-        BASE_VERSIONCODE_CAMERAMOD=11
+        BASE_VERSION_CAMERAMOD="1.0.0"
+        BASE_VERSIONCODE_CAMERAMOD=1
         CI_NUM=${{ github.run_number }}
 
-        # versionCode: 1119, 1135, ... (base*100 + run_number).
+        # versionCode: 100, 101, ... (base*100 + run_number).
         # Use the versionCode (not the raw CI run number) in versionName and APK filenames
         # so the file name always matches what Android shows in App info.
-        VERSION_CODE_CAMERAMOD=$((BASE_VERSIONCODE_CAMERAMOD * 100 + CI_NUM))
-        VERSION_NAME_CAMERAMOD="${BASE_VERSION_CAMERAMOD}-${VERSION_CODE_CAMERAMOD}"
+        if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+          # Stable release: the tag is the version, with no CI suffix.
+          VERSION_NAME_CAMERAMOD="${GITHUB_REF_NAME#v}"
+          VERSION_CODE_CAMERAMOD=$((BASE_VERSIONCODE_CAMERAMOD * 100))
+        else
+          VERSION_CODE_CAMERAMOD=$((BASE_VERSIONCODE_CAMERAMOD * 100 + CI_NUM))
+          VERSION_NAME_CAMERAMOD="${BASE_VERSION_CAMERAMOD}-${VERSION_CODE_CAMERAMOD}"
+        fi
 
         echo "version_name_cameramod=$VERSION_NAME_CAMERAMOD" >> $GITHUB_OUTPUT
         echo "version_code_cameramod=$VERSION_CODE_CAMERAMOD" >> $GITHUB_OUTPUT
@@ -157,58 +163,49 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+    - name: Compose release notes from CHANGELOG.md
+      if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+      run: |
+        VERSION="${GITHUB_REF_NAME#v}"
+        {
+          echo "**Version:** \`$VERSION\` (versionCode \`${{ steps.calc_version.outputs.version_code_cameramod }}\`)"
+          echo
+          echo "**Commit:** ${{ github.sha }}"
+          echo
+          awk -v ver="$VERSION" '
+            index($0, "## [" ver "]") == 1 { found = 1; next }
+            found && index($0, "## [") == 1 { exit }
+            found { print }
+          ' CHANGELOG.md
+          echo
+          echo "**Module:** \`HyperCameraMod\` — the single module, with the HyperFilmFilters features built in. Do not install HyperFilmFilters alongside it."
+          echo
+          echo "**Requirements:**"
+          echo "- Xiaomi phone on HyperOS 3 or HyperOS 4 (tested: Xiaomi 14 Ultra, Xiaomi 17 Ultra)"
+          echo "- Xiaomi Camera 6.7"
+          echo "- Root: Magisk, KernelSU or APatch. Root is only needed for the **Force Stop Camera** button."
+          echo "- LSPosed or Vector with libxposed API 101/102. The settings-to-camera toggles need API 102."
+          echo "- Module scope: \`com.android.camera\` only, package \`io.rezikham.hypercameramod\`"
+          echo
+          echo "**Installation:**"
+          echo "1. Install the APK and enable the module in LSPosed/Vector, scope \`com.android.camera\`"
+          echo "2. Open HyperCameraMod settings from the app drawer or the module list"
+          echo "3. Set the toggles, then tap **Force Stop Camera** (grant root) and open Camera again"
+          echo
+          echo "**Logs / reporting a problem:**"
+          echo "1. If a feature is missing, check its toggle, tap **Force Stop Camera**, and open Camera again."
+          echo "2. In LSPosed/Vector open **Logs** and filter for \`HyperCameraMod\`, or from a root shell: \`su -c \"logcat -c\"\`, open Camera, then \`su -c \"logcat -d -s HyperCameraMod\"\`."
+          echo "3. Include your phone model, HyperOS version, Camera version (e.g. \`6.7.000500.0\`), and the log lines."
+        } > release-notes.md
+        cat release-notes.md
+
     - name: Create Versioned Release (stable builds only)
       if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
       uses: softprops/action-gh-release@v1
       with:
         tag_name: ${{ github.ref_name }}
         release_name: "Release ${{ github.ref_name }}"
-        body: |
-          **Release:** ${{ github.ref_name }}
-
-          **Commit:** ${{ github.sha }}
-
-          **Module:** `HyperCameraMod` — the single module, with the HyperFilmFilters features built in. Do not install HyperFilmFilters alongside it.
-
-          **Requirements:**
-          - Xiaomi phone on HyperOS 3 or HyperOS 4 (tested: Xiaomi 14 Ultra, Xiaomi 17 Ultra)
-          - Xiaomi Camera 6.7
-          - Root: Magisk, KernelSU or APatch. Root is only needed for the **Force Stop Camera** button.
-          - LSPosed or Vector with libxposed API 101/102. The settings-to-camera toggles need API 102.
-          - Module scope: `com.android.camera` only
-
-          **Installation:**
-          1. Install the APK and enable the module in LSPosed/Vector, scope `com.android.camera`
-          2. Open HyperCameraMod settings from the app drawer or the module list
-          3. Set the toggles, then tap **Force Stop Camera** (grant root) and open Camera again
-
-          **Features:**
-          - ✅ Palette & Parameters panel
-          - ✅ Original colour style
-          - ✅ Leica Essential mode in standard UI (toggle: Essential Mode in Standard UI)
-          - ✅ Leica Looks panel in filter strip (toggle: Leica UI)
-          - ✅ CMOS (M10R) style in photography styles (toggle: M10R)
-          - ✅ Film simulation filters: R600, P100F, F-50, KC64, KP160 (toggle: Extra Film Filters)
-          - ✅ Force-stop Camera button in settings toolbar
-          - ✅ Hide app icon from launcher (toggle in overflow menu)
-
-          **Settings UI:**
-          - Access via app drawer icon "HyperCameraMod" or Vector/LSPosed module list
-          - Toolbar: Force Stop Camera button (top-right)
-          - Overflow menu (⋮): "Hide launcher icon" toggle
-          - Toggles: Essential Mode, Leica UI, M10R, Extra Film Filters
-
-          **Logs / reporting a problem:**
-          1. If a feature is missing, check its toggle, tap **Force Stop Camera**, and open Camera again.
-          2. In LSPosed/Vector open **Logs** and filter for `HyperCameraMod`; reproduce the problem and copy the lines.
-          3. Or from a root shell:
-             ```bash
-             su -c "logcat -c"
-             # open Camera, reproduce the problem, then:
-             su -c "logcat -d -s HyperCameraMod"
-             ```
-             Over ADB: `adb logcat -c` then `adb logcat -d -s HyperCameraMod`.
-          4. Include your phone model, HyperOS version, Camera version (e.g. `6.7.000500.0`), and the log lines. A `does not match` line names the missing class/field and is what a new camera profile needs.
+        body_path: release-notes.md
         draft: false
         prerelease: false
         make_latest: true
