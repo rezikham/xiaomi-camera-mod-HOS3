@@ -46,6 +46,18 @@ public class ModuleMain extends XposedModule {
     private static final String TAG = "HyperCameraMod";
     private static final String CAMERA_PACKAGE = "com.android.camera";
 
+    // The framework's log is only visible in LSPosed/Vector. Mirror every line to logcat too,
+    // so a user can pull it with `su -c "logcat -d -s HyperCameraMod"` without the manager UI.
+    private void dbg(int priority, String tag, String message) {
+        log(priority, tag, message);
+        Log.println(priority, tag, message);
+    }
+
+    private void dbg(int priority, String tag, String message, Throwable t) {
+        log(priority, tag, message, t);
+        Log.println(priority, tag, message + ": " + t);
+    }
+
     // 1. Palette and Parameters
     private static final String STYLE_VERSION_KEY = "camera.feature.styleVersion";
     private static final int STYLE_VERSION = 2;
@@ -132,7 +144,7 @@ public class ModuleMain extends XposedModule {
             moduleInfo = getModuleApplicationInfo();
             moduleApk = moduleInfo.sourceDir;
         } catch (Throwable t) {
-            log(Log.WARN, TAG, "cannot find the module APK: " + t);
+            dbg(Log.WARN, TAG, "cannot find the module APK: " + t);
         }
         installPropertyHook();
         installTabHook();
@@ -185,10 +197,10 @@ public class ModuleMain extends XposedModule {
                 return result;
             });
             propertiesHooked = true;
-            log(Log.INFO, TAG, "hooked SystemProperties (" + STYLE_VERSION_KEY + " >= "
+            dbg(Log.INFO, TAG, "hooked SystemProperties (" + STYLE_VERSION_KEY + " >= "
                     + STYLE_VERSION + ")");
         } catch (Throwable t) {
-            log(Log.WARN, TAG, "cannot hook SystemProperties: " + t);
+            dbg(Log.WARN, TAG, "cannot hook SystemProperties: " + t);
         }
     }
 
@@ -228,16 +240,16 @@ public class ModuleMain extends XposedModule {
                         widenTabs(view);
                     } catch (Throwable t) {
                         if (tabFailureLogged.compareAndSet(false, true)) {
-                            log(Log.WARN, TAG, "cannot widen the filter edit tabs: " + t);
+                            dbg(Log.WARN, TAG, "cannot widen the filter edit tabs: " + t);
                         }
                     }
                 }
                 return result;
             });
             tabsHooked = true;
-            log(Log.INFO, TAG, "hooked LayoutInflater.inflate (filter edit tab width)");
+            dbg(Log.INFO, TAG, "hooked LayoutInflater.inflate (filter edit tab width)");
         } catch (Throwable t) {
-            log(Log.WARN, TAG, "cannot hook LayoutInflater.inflate: " + t);
+            dbg(Log.WARN, TAG, "cannot hook LayoutInflater.inflate: " + t);
         }
     }
 
@@ -278,7 +290,7 @@ public class ModuleMain extends XposedModule {
         ViewGroup.LayoutParams indicatorParams = indicator.getLayoutParams();
         indicatorParams.width = tab + Math.round(TAB_INDICATOR_EXTRA_DP * density);
         indicator.setLayoutParams(indicatorParams);
-        log(Log.INFO, TAG, "filter edit tabs widened to " + Math.round(tab * 2 / density) + " dp");
+        dbg(Log.INFO, TAG, "filter edit tabs widened to " + Math.round(tab * 2 / density) + " dp");
     }
 
     // ---- 1b2. Presets in the Leica UI's filter strip ---------------------------------------------
@@ -315,9 +327,9 @@ public class ModuleMain extends XposedModule {
                 return null;
             });
             nameStyleHooked = true;
-            log(Log.INFO, TAG, "hooked " + style.getName() + ".h (preset names in the Leica UI)");
+            dbg(Log.INFO, TAG, "hooked " + style.getName() + ".h (preset names in the Leica UI)");
         } catch (Throwable t) {
-            log(Log.WARN, TAG, "cannot hook the Leica UI name style: " + t);
+            dbg(Log.WARN, TAG, "cannot hook the Leica UI name style: " + t);
         }
     }
 
@@ -373,7 +385,7 @@ public class ModuleMain extends XposedModule {
                 extended[at] = ESSENTIAL_MODE;
                 System.arraycopy(modes, at, extended, at + 1, modes.length - at);
                 if (modeListLogged.compareAndSet(false, true)) {
-                    log(Log.INFO, TAG, "added the Leica Essential mode to the mode order at "
+                    dbg(Log.INFO, TAG, "added the Leica Essential mode to the mode order at "
                             + at + " of " + extended.length);
                 }
                 return extended;
@@ -408,14 +420,14 @@ public class ModuleMain extends XposedModule {
                     Object result = chain.proceed();
                     if (Boolean.FALSE.equals(result) && essentialStdEnabled((android.content.Context) chain.getThisObject())) {
                         if (supportLogged.compareAndSet(false, true)) {
-                            log(Log.INFO, TAG, "LegendaryEnter.support() was false, answering true");
+                            dbg(Log.INFO, TAG, "LegendaryEnter.support() was false, answering true");
                         }
                         return true;
                     }
                     return result;
                 });
             } catch (Throwable t) {
-                log(Log.WARN, TAG, "cannot hook LegendaryEnter.support: " + t);
+                dbg(Log.WARN, TAG, "cannot hook LegendaryEnter.support: " + t);
             }
             // For the experiment: report what the camera's final mode list holds.
             try {
@@ -432,24 +444,24 @@ public class ModuleMain extends XposedModule {
                     if (essentialStdEnabled() && modeListReported.compareAndSet(false, true)) {
                         try {
                             Object self = chain.getThisObject();
-                            log(Log.INFO, TAG, "mode list: all " + keys((List<?>) result, key)
+                            dbg(Log.INFO, TAG, "mode list: all " + keys((List<?>) result, key)
                                     + ", strip " + keys((List<?>) strip.get(self), key)
                                     + ", more " + keys((List<?>) more.get(self), key));
                         } catch (Throwable t) {
-                            log(Log.WARN, TAG, "cannot read the mode list: " + t);
+                            dbg(Log.WARN, TAG, "cannot read the mode list: " + t);
                         }
                     }
                     return result;
                 });
             } catch (Throwable t) {
-                log(Log.WARN, TAG, "cannot hook the mode list builder: " + t);
+                dbg(Log.WARN, TAG, "cannot hook the mode list builder: " + t);
             }
             modeListHooked = true;
-            log(Log.INFO, TAG, "hooked " + list.getName() + "." + order.getName()
+            dbg(Log.INFO, TAG, "hooked " + list.getName() + "." + order.getName()
                     + (visible != null ? ", " + visible.getName() : "")
                     + " (mode order; " + ESSENTIAL_STD_KEY + ")");
         } catch (Throwable t) {
-            log(Log.WARN, TAG, "cannot hook the mode order: " + t);
+            dbg(Log.WARN, TAG, "cannot hook the mode order: " + t);
         }
     }
 
@@ -473,9 +485,9 @@ public class ModuleMain extends XposedModule {
                 return result;
             });
             stylizationHooked = true;
-            log(Log.INFO, TAG, "hooked CameraCharacteristics.get (" + STYLIZATION_KEY + " bit 3)");
+            dbg(Log.INFO, TAG, "hooked CameraCharacteristics.get (" + STYLIZATION_KEY + " bit 3)");
         } catch (Throwable t) {
-            log(Log.WARN, TAG, "cannot hook CameraCharacteristics.get: " + t);
+            dbg(Log.WARN, TAG, "cannot hook CameraCharacteristics.get: " + t);
         }
     }
 
@@ -498,16 +510,16 @@ public class ModuleMain extends XposedModule {
                 } catch (Throwable t) {
                     // Provide fallback configs for missing scenes on HyperOS 3
                     if (t.getMessage() != null && t.getMessage().contains("don't exist")) {
-                        log(Log.INFO, TAG, "Providing fallback beauty config for missing scene: " + sceneKey);
+                        dbg(Log.INFO, TAG, "Providing fallback beauty config for missing scene: " + sceneKey);
                         return getFallbackBeautyConfig(sceneKey);
                     }
                     throw t;
                 }
             });
             beautyConfigHooked = true;
-            log(Log.INFO, TAG, "hooked MCAM_HalBeautyJsonData.parseJson (beauty config fallback)");
+            dbg(Log.INFO, TAG, "hooked MCAM_HalBeautyJsonData.parseJson (beauty config fallback)");
         } catch (Throwable t) {
-            log(Log.WARN, TAG, "cannot hook MCAM_HalBeautyJsonData: " + t);
+            dbg(Log.WARN, TAG, "cannot hook MCAM_HalBeautyJsonData: " + t);
         }
     }
     
@@ -543,9 +555,9 @@ public class ModuleMain extends XposedModule {
                 return chain.proceed();
             });
             blurRadiusHooked = true;
-            log(Log.INFO, TAG, "hooked BlurBackgroundView.makeBackgroundImage (blur radius cap)");
+            dbg(Log.INFO, TAG, "hooked BlurBackgroundView.makeBackgroundImage (blur radius cap)");
         } catch (Throwable t) {
-            log(Log.WARN, TAG, "cannot hook BlurBackgroundView: " + t);
+            dbg(Log.WARN, TAG, "cannot hook BlurBackgroundView: " + t);
         }
     }
     
@@ -577,7 +589,7 @@ public class ModuleMain extends XposedModule {
             remotePrefs = p;
             return p;
         } catch (Throwable t) {
-            log(Log.WARN, TAG, "remote preferences are not available: " + t);
+            dbg(Log.WARN, TAG, "remote preferences are not available: " + t);
             return null;
         }
     }
@@ -660,7 +672,7 @@ public class ModuleMain extends XposedModule {
             return;
         }
         if (!leicaUIEnabled(context)) {
-            log(Log.INFO, TAG, "Leica UI disabled in settings, skipping Legend hook");
+            dbg(Log.INFO, TAG, "Leica UI disabled in settings, skipping Legend hook");
             return;
         }
         for (LegendProfile profile : LEGEND_PROFILES) {
@@ -727,25 +739,25 @@ public class ModuleMain extends XposedModule {
                             icon.setInt(entry, ASSET_ICON_BASE | 1);
                             textIcon.setInt(entry, ASSET_ICON_BASE | 2);
                             items.add(Math.min(1, items.size()), entry);   // after M3, before M9
-                            log(Log.INFO, TAG, "added the M10R (CMOS) style to the Leica Essential list");
+                            dbg(Log.INFO, TAG, "added the M10R (CMOS) style to the Leica Essential list");
                         }
                     } catch (Throwable t) {
-                        log(Log.ERROR, TAG, "could not add the M10R style", t);
+                        dbg(Log.ERROR, TAG, "could not add the M10R style", t);
                     }
                     return result;
                 });
                 legendHooked = true;
                 installAssetHooks();
                 installTextHook();
-                log(Log.INFO, TAG, "hooked " + profile.listClass() + "." + build.getName()
+                dbg(Log.INFO, TAG, "hooked " + profile.listClass() + "." + build.getName()
                         + " (Leica Essential, layout " + profile.name() + ")");
                 return;
             } catch (Throwable t) {
-                log(Log.WARN, TAG, "Leica Essential layout " + profile.name()
+                dbg(Log.WARN, TAG, "Leica Essential layout " + profile.name()
                         + " does not match: " + t);
             }
         }
-        log(Log.WARN, TAG, "the Leica Essential style list is not one this module knows; "
+        dbg(Log.WARN, TAG, "the Leica Essential style list is not one this module knows; "
                 + "the CMOS style is not added");
         if (m10rEnabled(context) && !problems.contains(MSG_LEGEND)) {
             problems.add(MSG_LEGEND);   // only worth a notice when the CMOS entry was asked for
@@ -817,7 +829,7 @@ public class ModuleMain extends XposedModule {
             });
             textHooked = true;
         } catch (Throwable t) {
-            log(Log.WARN, TAG, "cannot hook Resources.getText: " + t);
+            dbg(Log.WARN, TAG, "cannot hook Resources.getText: " + t);
         }
     }
 
@@ -868,11 +880,11 @@ public class ModuleMain extends XposedModule {
                                 for (Field f : images) {
                                     f.setInt(original, ASSET_ICON_BASE | ASSET_ORIGINAL_BADGE);
                                 }
-                                log(Log.INFO, TAG, "gave the Original colour style its own Leica UI badge");
+                                dbg(Log.INFO, TAG, "gave the Original colour style its own Leica UI badge");
                             }
                         }
                     } catch (Throwable t) {
-                        log(Log.ERROR, TAG, "could not fix the Original colour style badge", t);
+                        dbg(Log.ERROR, TAG, "could not fix the Original colour style badge", t);
                     }
                     return result;
                 });
@@ -887,7 +899,7 @@ public class ModuleMain extends XposedModule {
                             return ASSET_ICON_BASE | ASSET_ORIGINAL_BADGE;
                         }
                     } catch (Throwable t) {
-                        log(Log.ERROR, TAG, "could not fix the chosen style badge", t);
+                        dbg(Log.ERROR, TAG, "could not fix the chosen style badge", t);
                     }
                     return result;
                 });
@@ -900,17 +912,17 @@ public class ModuleMain extends XposedModule {
                             return ASSET_ICON_BASE | ASSET_ORIGINAL_BADGE;
                         }
                     } catch (Throwable t) {
-                        log(Log.ERROR, TAG, "could not fix the style badge", t);
+                        dbg(Log.ERROR, TAG, "could not fix the style badge", t);
                     }
                     return result;
                 });
                 styleHooked = true;
                 installAssetHooks();
-                log(Log.INFO, TAG, "hooked " + profile.listClass() + ".getItems (colour styles, "
+                dbg(Log.INFO, TAG, "hooked " + profile.listClass() + ".getItems (colour styles, "
                         + "layout " + profile.name() + ")");
                 return;
             } catch (Throwable t) {
-                log(Log.WARN, TAG, "colour style layout " + profile.name()
+                dbg(Log.WARN, TAG, "colour style layout " + profile.name()
                         + " does not match: " + t);
             }
         }
@@ -973,7 +985,7 @@ public class ModuleMain extends XposedModule {
             });
             assetsHooked = true;
         } catch (Throwable t) {
-            log(Log.WARN, TAG, "cannot hook the image loading for the M10R images: " + t);
+            dbg(Log.WARN, TAG, "cannot hook the image loading for the M10R images: " + t);
         }
     }
 
@@ -1032,7 +1044,7 @@ public class ModuleMain extends XposedModule {
                     }
                     showNotice(app);
                 } catch (Throwable t) {
-                    log(Log.WARN, TAG, "could not show the notice: " + t);
+                    dbg(Log.WARN, TAG, "could not show the notice: " + t);
                 }
             }
         }, 3000);
@@ -1102,7 +1114,7 @@ public class ModuleMain extends XposedModule {
             return;
         }
         if (!extraFiltersEnabled(context)) {
-            log(Log.INFO, TAG, "Extra film filters disabled in settings, skipping film filters hook");
+            dbg(Log.INFO, TAG, "Extra film filters disabled in settings, skipping film filters hook");
             return;
         }
         // Delegate to the filters module's logic
@@ -1111,9 +1123,9 @@ public class ModuleMain extends XposedModule {
             // The filters module is a separate XposedModule that will be loaded via java_init.list
             // We just need to ensure it's enabled. The filters module reads the same shared prefs.
             filmFiltersHooked = true;
-            log(Log.INFO, TAG, "Film filters module will handle filter injection (extra_filters_enabled=true)");
+            dbg(Log.INFO, TAG, "Film filters module will handle filter injection (extra_filters_enabled=true)");
         } catch (Throwable t) {
-            log(Log.WARN, TAG, "Cannot access filters module: " + t);
+            dbg(Log.WARN, TAG, "Cannot access filters module: " + t);
         }
     }
 }
