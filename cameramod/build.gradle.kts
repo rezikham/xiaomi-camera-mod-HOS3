@@ -12,7 +12,7 @@ android {
     val ciVersionCode = project.findProperty("versionCode")?.toString()?.toIntOrNull() ?: 11
 
     defaultConfig {
-        applicationId = "io.rezikham.hypercameramod"
+        applicationId = "io.martin.hypercameramod"
         minSdk = 26
         targetSdk = 37
         versionCode = ciVersionCode

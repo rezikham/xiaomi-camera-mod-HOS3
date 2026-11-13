@@ -9,7 +9,6 @@ import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.hardware.camera2.CameraCharacteristics;
 import android.content.res.Resources;
-import android.content.SharedPreferences;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -46,18 +45,6 @@ public class ModuleMain extends XposedModule {
     private static final String TAG = "HyperCameraMod";
     private static final String CAMERA_PACKAGE = "com.android.camera";
 
-    // The framework's log is only visible in LSPosed/Vector. Mirror every line to logcat too,
-    // so a user can pull it with `su -c "logcat -d -s HyperCameraMod"` without the manager UI.
-    private void dbg(int priority, String tag, String message) {
-        log(priority, tag, message);
-        Log.println(priority, tag, message);
-    }
-
-    private void dbg(int priority, String tag, String message, Throwable t) {
-        log(priority, tag, message, t);
-        Log.println(priority, tag, message + ": " + t);
-    }
-
     // 1. Palette and Parameters
     private static final String STYLE_VERSION_KEY = "camera.feature.styleVersion";
     private static final int STYLE_VERSION = 2;
@@ -72,8 +59,6 @@ public class ModuleMain extends XposedModule {
                                  String stringIds, String imageIds) {
     }
 
-    // Profiles ordered by preference. Selection is version-aware: if camera version contains
-    // "500" (14 Ultra HyperOS 3: 6.7.000500.0), "6.7-hyperos3" is tried first.
     private static final LegendProfile[] LEGEND_PROFILES = {
             // Camera 6.7 (HyperOS 3): 6.7.000500.0 (14 Ultra) — uses same item class as layout 6.7
             new LegendProfile("6.7-hyperos3", "s2.B", "com.android.camera.data.data.d", "ci.e", "ci.b"),
@@ -114,8 +99,6 @@ public class ModuleMain extends XposedModule {
                     + "style was not added.";
     private final List<String> problems = new CopyOnWriteArrayList<>();
     private final AtomicBoolean noticeScheduled = new AtomicBoolean();
-    private final AtomicBoolean loadLogged = new AtomicBoolean();
-    private final AtomicBoolean versionLogged = new AtomicBoolean();
 
     private volatile boolean propertiesHooked;
     private volatile boolean tabsHooked;
@@ -126,7 +109,6 @@ public class ModuleMain extends XposedModule {
     private volatile boolean assetsHooked;
     private volatile boolean styleHooked;
     private volatile boolean textHooked;
-    private volatile boolean filmFiltersHooked;
 
     @Override
     public void onPackageLoaded(PackageLoadedParam param) {
@@ -149,41 +131,15 @@ public class ModuleMain extends XposedModule {
             moduleInfo = getModuleApplicationInfo();
             moduleApk = moduleInfo.sourceDir;
         } catch (Throwable t) {
-            dbg(Log.WARN, TAG, "cannot find the module APK: " + t);
-        }
-        if (loadLogged.compareAndSet(false, true)) {
-            dbg(Log.INFO, TAG, "loaded in " + pkg + " (libxposed API " + getApiVersion() + ")");
-        }
-        if (versionLogged.compareAndSet(false, true)) {
-            Application app = currentApplication();
-            if (app != null) {
-                try {
-                    String cameraVersion = app.getPackageManager()
-                            .getPackageInfo(CAMERA_PACKAGE, 0).versionName;
-                    dbg(Log.INFO, TAG, "Camera " + cameraVersion + "; remote preferences: "
-                            + (remotePrefs() != null ? "available" : "unavailable"));
-                } catch (Throwable t) {
-                    dbg(Log.WARN, TAG, "cannot read the Camera version: " + t);
-                }
-            } else {
-                versionLogged.set(false);   // try again on onPackageReady
-            }
+            log(Log.WARN, TAG, "cannot find the module APK: " + t);
         }
         installPropertyHook();
         installTabHook();
         installModeListHook(loader);
         installNameStyleHook(loader);
         installStylizationHook();
-        installBeautyConfigHook(loader);
-        installBlurRadiusHook(loader);
-        // Get context for preference checks
-        android.content.Context context = null;
-        try {
-            context = currentApplication();
-        } catch (Throwable ignored) {}
-        installLegendHook(loader, context);
+        installLegendHook(loader);
         installStyleHook(loader);
-        installFilmFiltersHook(loader, context);
         if (!problems.isEmpty() && stage.equals("onPackageLoaded")) {
             // onPackageReady tries once more; report only what is still wrong after it
             problems.clear();
@@ -220,10 +176,10 @@ public class ModuleMain extends XposedModule {
                 return result;
             });
             propertiesHooked = true;
-            dbg(Log.INFO, TAG, "hooked SystemProperties (" + STYLE_VERSION_KEY + " >= "
+            log(Log.INFO, TAG, "hooked SystemProperties (" + STYLE_VERSION_KEY + " >= "
                     + STYLE_VERSION + ")");
         } catch (Throwable t) {
-            dbg(Log.WARN, TAG, "cannot hook SystemProperties: " + t);
+            log(Log.WARN, TAG, "cannot hook SystemProperties: " + t);
         }
     }
 
@@ -263,16 +219,16 @@ public class ModuleMain extends XposedModule {
                         widenTabs(view);
                     } catch (Throwable t) {
                         if (tabFailureLogged.compareAndSet(false, true)) {
-                            dbg(Log.WARN, TAG, "cannot widen the filter edit tabs: " + t);
+                            log(Log.WARN, TAG, "cannot widen the filter edit tabs: " + t);
                         }
                     }
                 }
                 return result;
             });
             tabsHooked = true;
-            dbg(Log.INFO, TAG, "hooked LayoutInflater.inflate (filter edit tab width)");
+            log(Log.INFO, TAG, "hooked LayoutInflater.inflate (filter edit tab width)");
         } catch (Throwable t) {
-            dbg(Log.WARN, TAG, "cannot hook LayoutInflater.inflate: " + t);
+            log(Log.WARN, TAG, "cannot hook LayoutInflater.inflate: " + t);
         }
     }
 
@@ -313,7 +269,7 @@ public class ModuleMain extends XposedModule {
         ViewGroup.LayoutParams indicatorParams = indicator.getLayoutParams();
         indicatorParams.width = tab + Math.round(TAB_INDICATOR_EXTRA_DP * density);
         indicator.setLayoutParams(indicatorParams);
-        dbg(Log.INFO, TAG, "filter edit tabs widened to " + Math.round(tab * 2 / density) + " dp");
+        log(Log.INFO, TAG, "filter edit tabs widened to " + Math.round(tab * 2 / density) + " dp");
     }
 
     // ---- 1b2. Presets in the Leica UI's filter strip ---------------------------------------------
@@ -350,9 +306,9 @@ public class ModuleMain extends XposedModule {
                 return null;
             });
             nameStyleHooked = true;
-            dbg(Log.INFO, TAG, "hooked " + style.getName() + ".h (preset names in the Leica UI)");
+            log(Log.INFO, TAG, "hooked " + style.getName() + ".h (preset names in the Leica UI)");
         } catch (Throwable t) {
-            dbg(Log.WARN, TAG, "cannot hook the Leica UI name style: " + t);
+            log(Log.WARN, TAG, "cannot hook the Leica UI name style: " + t);
         }
     }
 
@@ -388,9 +344,7 @@ public class ModuleMain extends XposedModule {
             }
             hook(order).intercept(chain -> {
                 Object result = chain.proceed();
-                Log.d(TAG, "ORDERHOOK: result=" + result + ", isIntArray=" + (result != null && result.getClass().getName().contains("int[]")) + ", essentialStdEnabled=" + essentialStdEnabled((android.content.Context) chain.getThisObject()));
-                if (!(result instanceof int[] modes) || !essentialStdEnabled((android.content.Context) chain.getThisObject())) {
-                    Log.d(TAG, "ORDERHOOK: SKIPPING because result=" + result + " essentialStdEnabled=false");
+                if (!(result instanceof int[] modes) || !essentialStdEnabled()) {
                     return result;
                 }
                 for (int mode : modes) {
@@ -410,7 +364,7 @@ public class ModuleMain extends XposedModule {
                 extended[at] = ESSENTIAL_MODE;
                 System.arraycopy(modes, at, extended, at + 1, modes.length - at);
                 if (modeListLogged.compareAndSet(false, true)) {
-                    dbg(Log.INFO, TAG, "added the Leica Essential mode to the mode order at "
+                    log(Log.INFO, TAG, "added the Leica Essential mode to the mode order at "
                             + at + " of " + extended.length);
                 }
                 return extended;
@@ -429,7 +383,7 @@ public class ModuleMain extends XposedModule {
                 hook(visible).intercept(chain -> {
                     Object result = chain.proceed();
                     if (Boolean.FALSE.equals(result) && chain.getArg(0) instanceof Integer mode
-                            && mode == ESSENTIAL_MODE && essentialStdEnabled((android.content.Context) chain.getThisObject())) {
+                            && mode == ESSENTIAL_MODE && essentialStdEnabled()) {
                         return true;
                     }
                     return result;
@@ -443,19 +397,18 @@ public class ModuleMain extends XposedModule {
                 Method support = entry.getDeclaredMethod("support");
                 hook(support).intercept(chain -> {
                     Object result = chain.proceed();
-                    if (Boolean.FALSE.equals(result) && essentialStdEnabled((android.content.Context) chain.getThisObject())) {
+                    if (Boolean.FALSE.equals(result) && essentialStdEnabled()) {
                         if (supportLogged.compareAndSet(false, true)) {
-                            dbg(Log.INFO, TAG, "LegendaryEnter.support() was false, answering true");
+                            log(Log.INFO, TAG, "LegendaryEnter.support() was false, answering true");
                         }
                         return true;
                     }
                     return result;
                 });
             } catch (Throwable t) {
-                dbg(Log.WARN, TAG, "cannot hook LegendaryEnter.support: " + t);
+                log(Log.WARN, TAG, "cannot hook LegendaryEnter.support: " + t);
             }
             // For the experiment: report what the camera's final mode list holds.
-            // Also ensure Essential mode (256) is in the strip if the property is enabled.
             try {
                 Method build = list.getDeclaredMethod("C");
                 Field strip = list.getDeclaredField("c");
@@ -467,58 +420,27 @@ public class ModuleMain extends XposedModule {
                 key.setAccessible(true);
                 hook(build).intercept(chain -> {
                     Object result = chain.proceed();
-                    if (essentialStdEnabled()) {
+                    if (essentialStdEnabled() && modeListReported.compareAndSet(false, true)) {
                         try {
                             Object self = chain.getThisObject();
-                            @SuppressWarnings("unchecked")
-                            List<Object> stripList = (List<Object>) strip.get(self);
-                            @SuppressWarnings("unchecked")
-                            List<Object> moreList = (List<Object>) more.get(self);
-                            // Ensure Essential mode (256) is in strip if property is on
-                            boolean hasEssential = false;
-                            for (Object entry : stripList) {
-                                Object keyVal = key.get(entry);
-                                if (keyVal != null && ESSENTIAL_MODE == Integer.parseInt(keyVal.toString())) {
-                                    hasEssential = true;
-                                    break;
-                                }
-                            }
-                            if (!hasEssential) {
-                                // Find the MORE_MODE entry in moreList and move it to strip, or create new
-                                Object essentialEntry = null;
-                                for (Object entry : moreList) {
-                                    Object keyVal = key.get(entry);
-                                    if (keyVal != null && ESSENTIAL_MODE == Integer.parseInt(keyVal.toString())) {
-                                        essentialEntry = entry;
-                                        break;
-                                    }
-                                }
-                                if (essentialEntry != null) {
-                                    moreList.remove(essentialEntry);
-                                    stripList.add(essentialEntry);
-                                    dbg(Log.INFO, TAG, "moved Essential mode (256) from more to strip");
-                                }
-                            }
-                            if (modeListReported.compareAndSet(false, true)) {
-                                dbg(Log.INFO, TAG, "mode list: all " + keys((List<?>) result, key)
-                                        + ", strip " + keys(stripList, key)
-                                        + ", more " + keys(moreList, key));
-                            }
+                            log(Log.INFO, TAG, "mode list: all " + keys((List<?>) result, key)
+                                    + ", strip " + keys((List<?>) strip.get(self), key)
+                                    + ", more " + keys((List<?>) more.get(self), key));
                         } catch (Throwable t) {
-                            dbg(Log.WARN, TAG, "cannot adjust mode list: " + t);
+                            log(Log.WARN, TAG, "cannot read the mode list: " + t);
                         }
                     }
                     return result;
                 });
             } catch (Throwable t) {
-                dbg(Log.WARN, TAG, "cannot hook the mode list builder: " + t);
+                log(Log.WARN, TAG, "cannot hook the mode list builder: " + t);
             }
             modeListHooked = true;
-            dbg(Log.INFO, TAG, "hooked " + list.getName() + "." + order.getName()
+            log(Log.INFO, TAG, "hooked " + list.getName() + "." + order.getName()
                     + (visible != null ? ", " + visible.getName() : "")
                     + " (mode order; " + ESSENTIAL_STD_KEY + ")");
         } catch (Throwable t) {
-            dbg(Log.WARN, TAG, "cannot hook the mode order: " + t);
+            log(Log.WARN, TAG, "cannot hook the mode order: " + t);
         }
     }
 
@@ -542,87 +464,19 @@ public class ModuleMain extends XposedModule {
                 return result;
             });
             stylizationHooked = true;
-            dbg(Log.INFO, TAG, "hooked CameraCharacteristics.get (" + STYLIZATION_KEY + " bit 3)");
+            log(Log.INFO, TAG, "hooked CameraCharacteristics.get (" + STYLIZATION_KEY + " bit 3)");
         } catch (Throwable t) {
-            dbg(Log.WARN, TAG, "cannot hook CameraCharacteristics.get: " + t);
+            log(Log.WARN, TAG, "cannot hook CameraCharacteristics.get: " + t);
         }
     }
-
-    // ---- 2b. Beauty config fallback for missing portrait scenes (HyperOS 3 / 14 Ultra) ----------
-    
-    private void installBeautyConfigHook(ClassLoader loader) {
-        if (beautyConfigHooked) {
-            return;
-        }
-        try {
-            Class<?> beautyClass = Class.forName("com.android.camera.module.miui.beauty.MCAM_HalBeautyJsonData", false, loader);
-            // Hook the method that throws "sceneKey don't exist" error
-            Method parseJson = beautyClass.getDeclaredMethod("parseJson", String.class);
-            parseJson.setAccessible(true);
-            
-            hook(parseJson).intercept(chain -> {
-                String sceneKey = (String) chain.getArg(0);
-                try {
-                    return chain.proceed();
-                } catch (Throwable t) {
-                    // Provide fallback configs for missing scenes on HyperOS 3
-                    if (t.getMessage() != null && t.getMessage().contains("don't exist")) {
-                        dbg(Log.INFO, TAG, "Providing fallback beauty config for missing scene: " + sceneKey);
-                        return getFallbackBeautyConfig(sceneKey);
-                    }
-                    throw t;
-                }
-            });
-            beautyConfigHooked = true;
-            dbg(Log.INFO, TAG, "hooked MCAM_HalBeautyJsonData.parseJson (beauty config fallback)");
-        } catch (Throwable t) {
-            dbg(Log.WARN, TAG, "cannot hook MCAM_HalBeautyJsonData: " + t);
-        }
-    }
-    
-    private volatile boolean beautyConfigHooked;
-    
-    // Default beauty configs for scenes missing on HyperOS 3 (based on standard portrait configs)
-    private String getFallbackBeautyConfig(String sceneKey) {
-        // Return minimal valid JSON that won't crash - based on RearPortrait config
-        return "{\"Map\":{},\"INRegion\":{},\"GLRegion\":{}}";
-    }
-
-    // ---- 2c. Cap excessive blur radius for portrait preview (HyperOS 3 / 14 Ultra) ------------
-    
-    private void installBlurRadiusHook(ClassLoader loader) {
-        if (blurRadiusHooked) {
-            return;
-        }
-        try {
-            // Hook BlurBackgroundView.makeBackgroundImage to cap blurRadius
-            Class<?> blurClass = Class.forName("com.android.camera.ui.BlurBackgroundView", false, loader);
-            Method makeBg = blurClass.getDeclaredMethod("makeBackgroundImage", int.class, int.class, float.class);
-            makeBg.setAccessible(true);
-            
-            hook(makeBg).intercept(chain -> {
-                // Cap blurRadius at 150 (was 241 causing slow preview)
-                int blurRadius = (Integer) chain.getArg(0);
-                if (blurRadius > 150) {
-                    List<Object> args = chain.getArgs();
-                    Object[] modified = args.toArray(new Object[0]);
-                    modified[0] = 150;
-                    return chain.proceed(modified);
-                }
-                return chain.proceed();
-            });
-            blurRadiusHooked = true;
-            dbg(Log.INFO, TAG, "hooked BlurBackgroundView.makeBackgroundImage (blur radius cap)");
-        } catch (Throwable t) {
-            dbg(Log.WARN, TAG, "cannot hook BlurBackgroundView: " + t);
-        }
-    }
-    
-    private volatile boolean blurRadiusHooked;
 
     // ---- 3. Leica Essential CMOS (M10R) ---------------------------------------------------------
 
     // Read on every build of the list, so setprop takes effect the next time Camera starts.
+    private boolean m10rEnabled() {
+        return propertyOn(M10R_ENABLE_KEY);
+    }
+
     private static List<String> keys(List<?> items, Field key) throws IllegalAccessException {
         List<String> out = new java.util.ArrayList<>();
         for (Object item : items) {
@@ -631,48 +485,13 @@ public class ModuleMain extends XposedModule {
         return out;
     }
 
-    // Settings live in the manager's "remote preferences" store, written by SettingsActivity.
-    // The camera process cannot read the module app's private SharedPreferences directly.
-    private static final String PREFS_GROUP = "hypercameramod";
-    private static volatile android.content.SharedPreferences remotePrefs;
-
-    private android.content.SharedPreferences remotePrefs() {
-        android.content.SharedPreferences p = remotePrefs;
-        if (p != null) {
-            return p;
-        }
-        try {
-            p = getRemotePreferences(PREFS_GROUP);
-            remotePrefs = p;
-            return p;
-        } catch (Throwable t) {
-            dbg(Log.WARN, TAG, "remote preferences are not available: " + t);
-            return null;
-        }
-    }
-
-    // On unless camera.feature.essential_std is 0, and the user hasn't disabled it in settings.
-    private boolean essentialStdEnabled() {
-        return essentialStdEnabled(null);
-    }
-
-    private boolean essentialStdEnabled(android.content.Context context) {
-        android.content.SharedPreferences p = remotePrefs();
-        if (p != null && p.contains("essential_mode_enabled")) {
-            boolean v = p.getBoolean("essential_mode_enabled", true);
-            Log.d(TAG, "ESSENTIAL: remotePrefs contains key, value=" + v);
-            return v;
-        }
-        // Fallback to system property
+    // On unless camera.feature.essential_std is 0.
+    private static boolean essentialStdEnabled() {
         try {
             Class<?> props = Class.forName("android.os.SystemProperties");
-            String v = (String) props.getMethod("get", String.class, String.class)
-                    .invoke(null, ESSENTIAL_STD_KEY, "1");
-            boolean b = !"0".equals(v);
-            Log.d(TAG, "ESSENTIAL: systemProperty=" + ESSENTIAL_STD_KEY + " value=" + v + " -> " + b);
-            return b;
+            return !"0".equals(props.getMethod("get", String.class, String.class)
+                    .invoke(null, ESSENTIAL_STD_KEY, "1"));
         } catch (Throwable t) {
-            Log.d(TAG, "ESSENTIAL: systemProperty failed: " + t);
             return true;
         }
     }
@@ -687,55 +506,8 @@ public class ModuleMain extends XposedModule {
         }
     }
 
-    private boolean leicaUIEnabled(android.content.Context context) {
-        android.content.SharedPreferences p = remotePrefs();
-        if (p != null && p.contains("leica_ui_enabled")) {
-            return p.getBoolean("leica_ui_enabled", true);
-        }
-        return true;
-    }
-
-    private boolean leicaUIEnabled() {
-        return leicaUIEnabled(null);
-    }
-
-    private boolean m10rEnabled(android.content.Context context) {
-        android.content.SharedPreferences p = remotePrefs();
-        if (p != null && p.contains("m10r_enabled")) {
-            return p.getBoolean("m10r_enabled", false);
-        }
-        // Fallback to system property
-        try {
-            Class<?> props = Class.forName("android.os.SystemProperties");
-            return "1".equals(props.getMethod("get", String.class, String.class)
-                    .invoke(null, "camera.feature.m10r", "0"));
-        } catch (Throwable t) {
-            return false;
-        }
-    }
-
-    private boolean m10rEnabled() {
-        return m10rEnabled(null);
-    }
-
-    private boolean extraFiltersEnabled(android.content.Context context) {
-        android.content.SharedPreferences p = remotePrefs();
-        if (p != null && p.contains("extra_filters_enabled")) {
-            return p.getBoolean("extra_filters_enabled", true);
-        }
-        return true;
-    }
-
-    private boolean extraFiltersEnabled() {
-        return extraFiltersEnabled(null);
-    }
-
-    private void installLegendHook(ClassLoader loader, android.content.Context context) {
+    private void installLegendHook(ClassLoader loader) {
         if (legendHooked) {
-            return;
-        }
-        if (!leicaUIEnabled(context)) {
-            dbg(Log.INFO, TAG, "Leica UI disabled in settings, skipping Legend hook");
             return;
         }
         for (LegendProfile profile : LEGEND_PROFILES) {
@@ -759,10 +531,9 @@ public class ModuleMain extends XposedModule {
                 Class<?> strings = Class.forName(profile.stringIds(), false, loader);
                 Class<?> images = Class.forName(profile.imageIds(), false, loader);
 
-                final android.content.Context ctx = context;
                 hook(build).intercept(chain -> {
                     Object result = chain.proceed();
-                    if (!m10rEnabled(ctx)) {
+                    if (!m10rEnabled()) {
                         return result;
                     }
                     try {
@@ -802,27 +573,27 @@ public class ModuleMain extends XposedModule {
                             icon.setInt(entry, ASSET_ICON_BASE | 1);
                             textIcon.setInt(entry, ASSET_ICON_BASE | 2);
                             items.add(Math.min(1, items.size()), entry);   // after M3, before M9
-                            dbg(Log.INFO, TAG, "added the M10R (CMOS) style to the Leica Essential list");
+                            log(Log.INFO, TAG, "added the M10R (CMOS) style to the Leica Essential list");
                         }
                     } catch (Throwable t) {
-                        dbg(Log.ERROR, TAG, "could not add the M10R style", t);
+                        log(Log.ERROR, TAG, "could not add the M10R style", t);
                     }
                     return result;
                 });
                 legendHooked = true;
                 installAssetHooks();
                 installTextHook();
-                dbg(Log.INFO, TAG, "hooked " + profile.listClass() + "." + build.getName()
+                log(Log.INFO, TAG, "hooked " + profile.listClass() + "." + build.getName()
                         + " (Leica Essential, layout " + profile.name() + ")");
                 return;
             } catch (Throwable t) {
-                dbg(Log.WARN, TAG, "Leica Essential layout " + profile.name()
+                log(Log.WARN, TAG, "Leica Essential layout " + profile.name()
                         + " does not match: " + t);
             }
         }
-        dbg(Log.WARN, TAG, "the Leica Essential style list is not one this module knows; "
+        log(Log.WARN, TAG, "the Leica Essential style list is not one this module knows; "
                 + "the CMOS style is not added");
-        if (m10rEnabled(context) && !problems.contains(MSG_LEGEND)) {
+        if (m10rEnabled() && !problems.contains(MSG_LEGEND)) {
             problems.add(MSG_LEGEND);   // only worth a notice when the CMOS entry was asked for
         }
     }
@@ -904,7 +675,7 @@ public class ModuleMain extends XposedModule {
             });
             textHooked = true;
         } catch (Throwable t) {
-            dbg(Log.WARN, TAG, "cannot hook Resources.getText: " + t);
+            log(Log.WARN, TAG, "cannot hook Resources.getText: " + t);
         }
     }
 
@@ -955,11 +726,11 @@ public class ModuleMain extends XposedModule {
                                 for (Field f : images) {
                                     f.setInt(original, ASSET_ICON_BASE | ASSET_ORIGINAL_BADGE);
                                 }
-                                dbg(Log.INFO, TAG, "gave the Original colour style its own Leica UI badge");
+                                log(Log.INFO, TAG, "gave the Original colour style its own Leica UI badge");
                             }
                         }
                     } catch (Throwable t) {
-                        dbg(Log.ERROR, TAG, "could not fix the Original colour style badge", t);
+                        log(Log.ERROR, TAG, "could not fix the Original colour style badge", t);
                     }
                     return result;
                 });
@@ -974,7 +745,7 @@ public class ModuleMain extends XposedModule {
                             return ASSET_ICON_BASE | ASSET_ORIGINAL_BADGE;
                         }
                     } catch (Throwable t) {
-                        dbg(Log.ERROR, TAG, "could not fix the chosen style badge", t);
+                        log(Log.ERROR, TAG, "could not fix the chosen style badge", t);
                     }
                     return result;
                 });
@@ -987,17 +758,17 @@ public class ModuleMain extends XposedModule {
                             return ASSET_ICON_BASE | ASSET_ORIGINAL_BADGE;
                         }
                     } catch (Throwable t) {
-                        dbg(Log.ERROR, TAG, "could not fix the style badge", t);
+                        log(Log.ERROR, TAG, "could not fix the style badge", t);
                     }
                     return result;
                 });
                 styleHooked = true;
                 installAssetHooks();
-                dbg(Log.INFO, TAG, "hooked " + profile.listClass() + ".getItems (colour styles, "
+                log(Log.INFO, TAG, "hooked " + profile.listClass() + ".getItems (colour styles, "
                         + "layout " + profile.name() + ")");
                 return;
             } catch (Throwable t) {
-                dbg(Log.WARN, TAG, "colour style layout " + profile.name()
+                log(Log.WARN, TAG, "colour style layout " + profile.name()
                         + " does not match: " + t);
             }
         }
@@ -1060,7 +831,7 @@ public class ModuleMain extends XposedModule {
             });
             assetsHooked = true;
         } catch (Throwable t) {
-            dbg(Log.WARN, TAG, "cannot hook the image loading for the M10R images: " + t);
+            log(Log.WARN, TAG, "cannot hook the image loading for the M10R images: " + t);
         }
     }
 
@@ -1119,7 +890,7 @@ public class ModuleMain extends XposedModule {
                     }
                     showNotice(app);
                 } catch (Throwable t) {
-                    dbg(Log.WARN, TAG, "could not show the notice: " + t);
+                    log(Log.WARN, TAG, "could not show the notice: " + t);
                 }
             }
         }, 3000);
@@ -1147,60 +918,6 @@ public class ModuleMain extends XposedModule {
                     .getMethod("currentApplication").invoke(null);
         } catch (Throwable t) {
             return null;
-        }
-    }
-
-    // Helper: optional class lookup
-    private static Class<?> optionalClass(String name, ClassLoader loader) {
-        try {
-            return Class.forName(name, false, loader);
-        } catch (Throwable t) {
-            return null;
-        }
-    }
-
-    // Helper: resource ID lookup
-    private static int resourceId(Class<?> cls, String name, String type) {
-        if (cls == null) {
-            try {
-                Application app = currentApplication();
-                if (app != null) {
-                    Object result = app.getResources().getClass()
-                            .getMethod("getIdentifier", String.class, String.class, String.class)
-                            .invoke(app.getResources(), name, type, "com.android.camera");
-                    return result instanceof Integer ? (Integer) result : 0;
-                }
-            } catch (Throwable t) {
-                return 0;
-            }
-            return 0;
-        }
-        try {
-            return cls.getField(name).getInt(null);
-        } catch (Throwable t) {
-            return 0;
-        }
-    }
-
-    // ---- 8. Film Filters (R600, P100F, F-50, KC64, KP160) -----------------------------------------
-
-    private void installFilmFiltersHook(ClassLoader loader, android.content.Context context) {
-        if (filmFiltersHooked) {
-            return;
-        }
-        if (!extraFiltersEnabled(context)) {
-            dbg(Log.INFO, TAG, "Extra film filters disabled in settings, skipping film filters hook");
-            return;
-        }
-        // Delegate to the filters module's logic
-        try {
-            Class<?> filtersModule = Class.forName("io.martin.hypercameramod.filters.ModuleMain", false, loader);
-            // The filters module is a separate XposedModule that will be loaded via java_init.list
-            // We just need to ensure it's enabled. The filters module reads the same shared prefs.
-            filmFiltersHooked = true;
-            dbg(Log.INFO, TAG, "Film filters module will handle filter injection (extra_filters_enabled=true)");
-        } catch (Throwable t) {
-            dbg(Log.WARN, TAG, "Cannot access filters module: " + t);
         }
     }
 }
