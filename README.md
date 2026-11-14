@@ -40,6 +40,8 @@ The module can only expose what the phone's camera hardware layer (`camera.qcom.
 | Leica Essential (M3/M9) | ❌ HAL limitation | ✅ | ✅ |
 | CMOS (M10R) | ❌ HAL limitation | Experimental — the HAL has no M10R processing | Not verified |
 
+**Camera 6.4 only supports the film filters.** On a Camera 6.4 build (for example the Xiaomi 14 Pro Ti, `6.4.000430.0`) the module can only add the film filters. That camera version does not contain the style lists and mode order the other features hook, so the Original colour/portrait, Leica Essential (M3/M9) and CMOS (M10R) toggles have no effect there. Use film filters only; the other toggles can stay off.
+
 **14 Ultra HAL limitation.** On the 14 Ultra, M3, M9, M10R and Original portrait cannot work, because the camera hardware layer does not implement the processing they need:
 
 - **Original portrait** starts an algorithm-up SAT preview session. The Xiaomi preview-bokeh engine (`libmialgo_mc_bokeh_cdsp_skel.so`) never returns a frame, the camera waits 5780 ms on a semaphore (`ChiX WaitForSemaphore() ... timed out`), the preview drops to about 0.1 fps, and the vendor camera provider eventually aborts (`ExtensionModule::TriggerRecovery`). The module therefore removes Original from the Portrait style picker on the 14 Ultra by default and moves a saved value back to Master. The **Original Portrait Style** toggle is off there; turning it on restores Original in the picker (together with the freeze), which is why it is opt-in rather than blocked.
