@@ -557,6 +557,8 @@ phone’s Legend bokeh list.
 | `legendMode` 1/2 are OEM legend, 3 is extra | inferred | core `(legendMode-1) < 2` at `0x11a57d0` |
 | M10R is native in Camera 6.8 | observed | `p613r2.B` + `C1223.b3()` + `C1217` |
 | `madrid` is the `C1217` profile | inferred | profile mode array contains 256; all 6.8/madrid behavior matches |
+| Style-transfer models are four M9/M10R `.minn` files | observed | directory listing plus `libmialgo_styletrans.so` path branches |
+| M3 has no dedicated style-transfer model | observed | `/odm/etc/camera/styletrans/compressed/` contains only M9/M10R |
 | Full numeric style→ParamMode mapping | unknown | see below |
 
 ## Unknowns
@@ -577,9 +579,10 @@ phone’s Legend bokeh list.
    the shipped headers.
 4. **`legendmode.json` contents.** The file is an `encrypted_data:` blob, not
    plain JSON. Its role in selecting styles or pipelines is not established.
-5. **Style-transfer data.** `/odm/etc/camera/styletrans/` was not enumerated;
-   the `legendST` plugin loads `libmialgo_styletrans.so` and uses that
-   directory, but the exact files for M3/M9/M10R are unknown.
+5. **M3 has no dedicated style-transfer model.** The shipped directory contains
+   only M9 and M10R models. [inferred] M3 either uses the M9 model, or relies on
+   `mileicafilter`/`legendCT` without a neural style stage; the exact M3 path
+   was not traced.
 6. **No runtime trace.** The dump had no root and no camera session capture,
    so the numeric session-parameter values were not observed live. A rooted
    `dumpsys`/logcat capture while switching M3 → M9 → M10R would settle 1 and
