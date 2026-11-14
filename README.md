@@ -43,6 +43,8 @@ The 17 Ultra results below come from the upstream project (HyperOS 4, Camera 6.7
 | 6.4 | Film filters only. The build has no style lists or mode order to hook, so the Original colour/portrait, Leica Essential (M3/M9) and CMOS (M10R) toggles have no effect. |
 | 6.8 | Film filters only, experimental. The layout was derived statically from the APK and still needs device verification; if a film is missing, pull a log (see [Logs](#logs)). |
 
+**Palette and Parameters on 6.4.** The module turns that panel on by raising `camera.feature.styleVersion` to 2. Camera 6.4 does not read that property, so the hook has no effect on a 6.4 build; the panel is only there if the 6.4 camera shows it by itself. On 6.4 the module's support is limited to the film filters.
+
 ## Feature availability
 
 The module can only expose what the phone's camera hardware layer (`camera.qcom.so`, CHI) implements. It cannot add missing processing.
@@ -109,7 +111,7 @@ su -c "logcat -d -s HyperCameraMod"
 The same lines are in LSPosed/Vector under **Logs** (filter `HyperCameraMod`). Typical lines:
 
 ```
-HyperCameraMod: hooked xi.h0.d (layout 6.8.002230)
+HyperCameraMod: camera layout 6.8.002230, hooked xi.h0.d
 HyperCameraMod: camera layout 6.8.002230 does not match: ...
 HyperCameraMod: the camera's filter code is not one this module knows
 HyperCameraMod: remote preferences are not available: ...
