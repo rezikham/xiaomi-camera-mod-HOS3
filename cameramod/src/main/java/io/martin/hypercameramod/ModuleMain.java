@@ -134,7 +134,6 @@ public class ModuleMain extends XposedModule {
         installModeListHook(loader);
         installNameStyleHook(loader);
         installStylizationHook();
-        installBeautyConfigHook(loader);
         installBlurRadiusHook(loader);
         installLegendHook(loader);
         installStyleHook(loader);
@@ -468,52 +467,7 @@ public class ModuleMain extends XposedModule {
         }
     }
 
-    // ---- 2b. Beauty config fallback for missing portrait scenes (HyperOS 3 / 14 Ultra) ----------
-    // On HyperOS 3, some portrait scenes (RearPortraitOriginal, FrontMakeupsCapture,
-    // FrontPortraitMakeups) have no beauty JSON config, causing crashes when selected.
-    // This hook catches the "sceneKey don't exist" error and returns a minimal valid
-    // empty config so the camera doesn't crash. It does NOT change processing for
-    // scenes that already have configs.
-
-    private void installBeautyConfigHook(ClassLoader loader) {
-        if (beautyConfigHooked) {
-            return;
-        }
-        try {
-            Class<?> beautyClass = Class.forName("com.android.camera.module.miui.beauty.MCAM_HalBeautyJsonData", false, loader);
-            // Hook the method that throws "sceneKey don't exist" error
-            Method parseJson = beautyClass.getDeclaredMethod("parseJson", String.class);
-            parseJson.setAccessible(true);
-
-            hook(parseJson).intercept(chain -> {
-                String sceneKey = (String) chain.getArg(0);
-                try {
-                    return chain.proceed();
-                } catch (Throwable t) {
-                    // Provide fallback configs ONLY for missing scenes on HyperOS 3
-                    if (t.getMessage() != null && t.getMessage().contains("don't exist")) {
-                        log(Log.INFO, TAG, "Providing fallback beauty config for missing scene: " + sceneKey);
-                        return getFallbackBeautyConfig(sceneKey);
-                    }
-                    throw t;
-                }
-            });
-            beautyConfigHooked = true;
-            log(Log.INFO, TAG, "hooked MCAM_HalBeautyJsonData.parseJson (beauty config fallback)");
-        } catch (Throwable t) {
-            log(Log.WARN, TAG, "cannot hook MCAM_HalBeautyJsonData: " + t);
-        }
-    }
-
-    private volatile boolean beautyConfigHooked;
-
-    // Default beauty configs for scenes missing on HyperOS 3 (based on standard portrait configs)
-    // Returns minimal empty JSON - only used when the scene has NO config at all.
-    private String getFallbackBeautyConfig(String sceneKey) {
-        return "{\"Map\":{},\"INRegion\":{},\"GLRegion\":{}}";
-    }
-
-    // ---- 2c. Cap excessive blur radius for portrait preview (HyperOS 3 / 14 Ultra) -------------
+    // ---- 2b. Cap excessive blur radius for portrait preview (HyperOS 3 / 14 Ultra) -------------
     // BlurBackgroundView is a UI View (com.xiaomi.camera.ui.blur) used for the live preview's
     // background blur rendering. It does NOT affect the final captured image processing.
     // Values seen in code: 30, 66; log showed 183 (from resource dimension). Cap at 100.
