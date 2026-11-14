@@ -120,7 +120,7 @@ bokeh and aperture controls available. The 17 Ultra report said
 | `libAncHumanPreviewBokeh.so` | 8,671,560 | Preview bokeh |
 | `libmiphone_capture_bokeh.so` | 4,916,840 | Capture bokeh |
 | `libmialgo_monopan.so` | 18,858,832 | Monopan |
-| `libmialgo_styletrans.so` | 304,712 | Neural style transfer |
+| `libmialgo_styletrans.so` | 304,712 | Neural style transfer (M9/M10R `.minn` models) |
 | `liblegendmsg.so` | 70,880 | Legend message/helper |
 | `libmetadataHelper.so` | (in `odm/lib64`) | Metadata get/set helpers |
 | other `libmialgo_*` | — | AISP, AIUR, HDR, LDC, SAT, etc. |
@@ -192,6 +192,7 @@ com.xiaomi.plugin.midualcamallinone.so
 | `odm/etc/camera/xiaomi/legendsnapshot.json` | 25,374 | Legend still-capture pipeline |
 | `odm/etc/camera/xiaomi/legendmonopansnapshot.json` | 22,489 | Legend Monopan pipeline |
 | `odm/etc/camera/xiaomi/config/custom/algofeature/legendmode.json` | 2,640 | `encrypted_data: <base64>` only |
+| `odm/etc/camera/styletrans/compressed/` | 4 files, 153 MB | `styletrans_{high,low}_{m9,m10r}.minn` |
 | `odm/etc/camera/videofilter/` | 93 files | film LUT `.cube` + preview `.png` |
 
 `legendmode.json` is not plain JSON despite the extension: it is the single
@@ -205,6 +206,8 @@ table without the vendor decryption key.
 | Evidence | `aurora` (14 Ultra) | `nezha` (17 Ultra) | `madrid` (18 Pro Max) |
 | -------- | ------------------- | ------------------ | --------------------- |
 | `libmialgoengine.so` size | 834,440 | 1,939,520 | 2,796,816 |
+| `libmialgo_styletrans.so` size | absent | 13,668,744 | 304,712 |
+| Style models | absent | 3 generic models | 4 models: high/low × M9/M10R |
 | `LegendModeM3` / `M9` / `M10R` strings | absent | absent | present |
 | `com.xiaomi.plugin.legendCT.so` | absent | absent | present |
 | `com.xiaomi.plugin.legendST.so` | absent | present | present |
@@ -219,6 +222,23 @@ This is the core of the model difference: the 18 Pro Max has the complete
 Legend/M10R software stack, not just an app-side entry. The 14 Ultra has a
 different preview-bokeh engine and no Legend plugins, which is why Original
 portrait and Leica Essential fail there.
+
+### Legend names in the SoC and CHI layers
+
+[observed] The Legend key is not confined to `camera.qcom.core.so`; the
+SoC-specific HAL and the CHI override also carry it:
+
+| Library | String | File offset |
+| ------- | ------ | ----------- |
+| `camera.qcom.sm8975.so` (9,180,936 bytes) | `LegendM10R` | `0x1327278` |
+| `camera.qcom.sm8975.so` | `LegendMonopan` | `0x1079455` |
+| `com.qti.chi.override.so` (6,423,544 bytes) | `com.xiaomi.legendMode` | `0x625766` |
+| `com.qti.chi.override.so` | `xiaomi.camera.legendMode` | `0x381628` |
+
+This shows the selector is passed through the Qualcomm camera stack as well as
+the Xiaomi CHI/core layers. It does not by itself prove which layer originates
+the value; [02-legend-m10r.md](02-legend-m10r.md) shows the app-side session
+parameter and the MiMetadata/plugin path.
 
 ## How to re-dump the stack
 

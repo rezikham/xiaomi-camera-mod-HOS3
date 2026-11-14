@@ -3,8 +3,8 @@
 This document maps the firmware findings to the module’s current code and
 lists the changes that are actually needed. The short version: on
 `madrid` + Camera 6.8, the only module work that remains is verification. The
-HAL and the app already implement M10R, the Legend styles, the original bit,
-and the film-filter data.
+HAL and the app already implement M10R, the Legend styles, the four M9/M10R
+style-transfer models, the original bit, and the film-filter data.
 
 ## Current module state
 
@@ -84,6 +84,23 @@ Looks / workspace candidates.
 | Legend bokeh 35/75, apertures | `legendMode.capsInfo` | parsed natively | none | No module work. |
 | Film filters R600/P100F/F-50/KC64/KP160 | LUT / cloud | filter enum includes them | 6.8 profile present | Verify on device. |
 | `legendmode` EXIF 34992 | written by HAL for real Legend captures | Gallery reads it | none | No module work. |
+
+## What M10R actually requires
+
+[observed] M10R is not only a picker entry. A working M10R capture on `madrid`
+uses all of the following:
+
+* the `legendST` plugin and `libmialgo_styletrans.so`;
+* `styletrans_high_m10r.minn` and `styletrans_low_m10r.minn` under
+  `/odm/etc/camera/styletrans/compressed/`;
+* `leica_filter_param_m10r_preview.bin` and
+  `leica_filter_param_m10r_snapshot.bin`;
+* the `mileicafilter` M10R branches and the Legend snapshot pipeline.
+
+[inferred] Adding an `"M10R"` item to a device that lacks those models would
+make the picker show a style that cannot be rendered, or would fall back to M9
+silently. Any future port should gate the UI item on the models and plugin
+being present, not only on the app class name.
 
 ## Recommended changes
 
@@ -178,6 +195,8 @@ older builds. The settings text could say so, or the toggle could be hidden on
   the HAL during a real Legend capture; faking it would make Gallery show a
   LEICA button for an unprocessed image.
 * Do not add a second M10R item to the 6.8 list on `madrid`.
+* Do not expose M10R on a device that lacks the M10R `.minn` models and
+  `legendST`; the picker entry alone does not process anything.
 * Do not patch `legendmode.json`; it is an encrypted blob, not a style table.
 
 ## Test plan

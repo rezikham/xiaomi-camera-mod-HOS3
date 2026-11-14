@@ -254,8 +254,76 @@ persist.vendor.camera.styletransfer.debug
 
 It exports `mialgo2::LegendSTPlugin::initialize/isEnabled/processRequest/
 flushRequest/destroy` and loads `libmialgo_styletrans.so`. This is the neural
-style-transfer stage. The directory `/odm/etc/camera/styletrans/` is the
-style data root (not enumerated in this pass).
+style-transfer stage.
+
+#### Style-transfer models (M9 vs M10R)
+
+[observed] `/odm/etc/camera/styletrans/compressed/` contains exactly four
+MiNN models. This is the model data behind `legendST`:
+
+| File | Size (bytes) | SHA-256 |
+| ---- | ------------ | ------- |
+| `styletrans_high_m10r.minn` | 39,972,948 | `db8a9c16160a019d8b426a42c418dbe99f92af338ce7cb91635ac8a00a31f9c1` |
+| `styletrans_high_m9.minn` | 39,731,284 | `99c38289ce922ae7f12dbe921d40477ad46100cc71924e7becc74e4f2185acc3` |
+| `styletrans_low_m10r.minn` | 39,981,140 | `9c2212599a258c17bc8b22a94923166099aa16225f733f170c30437aee9e4f65` |
+| `styletrans_low_m9.minn` | 39,723,092 | `0870166020f14940afad6735e858c1fa713a9f4d0954d73b35d5837ce5b753e7` |
+
+All four start with the bytes `4e 4e 69 4d` (`NNiM`). [inferred] This is the
+MiNN model-container magic used by Xiaomi’s on-device NN runtime; the exact
+container layout is not documented here. The extracted firmware contains only
+`compressed/`; the uncompressed `/odm/etc/camera/styletrans/` directory named by
+the plugin is not present.
+
+[observed] `libmialgo_styletrans.so` (304,712 bytes) contains the four basenames
+and the path fragment that the plugin prepends:
+
+| Offset | String |
+| ------ | ------ |
+| `0x8525` | `/styletrans_high_m10r.minn` |
+| `0x87d7` | `/styletrans_high_m9.minn` |
+| `0x890c` | `/styletrans_low_m10r.minn` |
+| `0x8ae8` | `/styletrans_low_m9.minn` |
+| `0x98a0` | `M10r` |
+| `0x9ecf` | `M9` (inside the `clEnqueueMarker`/`M9` string group) |
+| `0x9bf9` | `/odm/etc/camera/mialgo_styletrans_cl.bin` |
+
+The model path is assembled in the function at `0x2d780`–`0x2e1b8`
+(`styletrans_utils.cpp`, source path at `0x8a8c`). The branches show:
+
+* `[object + 0x160] == 0` selects a `*_m9.minn` name; a non-zero value selects
+  `*_m10r.minn`. The four copying blocks are at `0x2d9c8` (high M9), `0x2d938`
+  (low M10R), `0x2da0c` (high M10R), and `0x2e14c` (low M9).
+* The high/low choice is made before the M9/M10R choice. When
+  `[object + 0x188 + 0x10] >= 0x105` and `[object + 0x188 + 0x14] <= 0x1253`,
+  the low model is used; otherwise the high model is used (`0x2d910`–`0x2d930`
+  and `0x2d924`–`0x2d92c`).
+
+[observed] The runtime log path agrees with the model naming. In
+`MialgoAi_DIPS_Run` the format string at `0x844d` prints `mode=%s`; the pointer
+is selected at `0x19610`–`0x1964c` from `[info + 0x48]`:
+
+```asm
+19634: cmp  w8, #0
+19638: mov  w8, #4
+1963c: csel x2, x9, x8, eq
+19648: lsl  w9, w2, #1
+1964c: csel x1, x11, x10, eq     ; x11="M9" (0x9ecf), x10="M10r" (0x98a0)
+```
+
+So a zero field selects `"M9"` and a non-zero field selects `"M10r"` in the
+same way as the model filename. [inferred] `+0x160` and `+0x48` carry the same
+style selector at different struct levels. [unknown] The exact meaning of
+`+0x188+0x10`/`+0x188+0x14` (the values compared with `261` and `4691`) and
+whether “high/low” means snapshot/preview or a resolution tier were not
+established by static analysis.
+
+[observed] The 17 Ultra (`nezha`) ships a different, older style-transfer set:
+`styletrans_colorfix.minn` (6,953,155 bytes), `styletrans_high.minn`
+(6,700,350), and `styletrans_low.minn` (6,698,160), with no `m9`/`m10r` names.
+Its `libmialgo_styletrans.so` is 13,668,744 bytes, versus 304,712 on `madrid`.
+[inferred] `madrid` moved the model data into external `.minn` files and added
+dedicated M9 and M10R models; the roughly six-times-larger models are
+consistent with a new AI style model rather than a parameter tweak.
 
 ### Where they run
 
@@ -349,6 +417,30 @@ LeicaSnapshot_virtualInstance*ToGainmap
 
 This is where the Legend pipeline disables concurrency and prunes ports. It is
 part of the reason Legend capture works on this model.
+
+## Legend capture metadata (`liblegendmsg.so`)
+
+[observed] `liblegendmsg.so` (70,880 bytes) is a small protobuf library, not a
+processing plugin. It exports only `LegendMsg` types and depends on
+`libprotobuf`-style symbols (`google::protobuf::*`).
+
+The message schema is visible in its descriptor strings:
+
+```text
+LegendMsg.M9Msg
+LegendMsg.M9Msg.aisp_algoversion
+LegendMsg.M9Msg.AwbGain
+LegendMsg.M9Msg.filter_meta
+LegendMsg.M9Msg.imgname
+LegendMsg.M9Msg.phone_code
+LegendMsg.M9Msg.rawcompress_version
+LegendMsg.M9Msg.Rect
+```
+
+`M9Msg_AwbGain` and `M9Msg_Rect` are nested messages. There is **no**
+`M10RMsg` in this library. [inferred] M10R captures either reuse `M9Msg` or
+carry the M10R distinction only in `filter_meta`; the schema itself does not
+name M10R.
 
 ## Native M10R in Camera 6.8
 

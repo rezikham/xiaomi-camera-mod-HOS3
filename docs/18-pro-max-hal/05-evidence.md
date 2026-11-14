@@ -237,6 +237,118 @@ strings -a 970/hal_analysis_madrid/binaries/libmialgoengine_custom.so \
   | grep -E 'customizeForLegend|LegendMode PruneValue|Concurrency is set|LegendZoom'
 ```
 
+## `liblegendmsg.so`
+
+```bash
+P=970/hal_analysis_madrid/binaries/liblegendmsg.so
+strings -a "$P" | grep -E '^LegendMsg\.' | sort -u
+nm -DC "$P" | grep 'LegendMsg' | head
+```
+
+Expected field names: `M9Msg`, `M9Msg.AwbGain`, `M9Msg.Rect`,
+`M9Msg.filter_meta`, `M9Msg.imgname`, `M9Msg.phone_code`,
+`M9Msg.rawcompress_version`, `M9Msg.aisp_algoversion`. No `M10RMsg` exists.
+
+## Style-transfer models and `libmialgo_styletrans.so`
+
+```bash
+P=970/hal_analysis_madrid/binaries/libmialgo_styletrans.so
+stat -c '%s' "$P"                       # 304712
+for s in '/styletrans_high_m10r.minn' '/styletrans_high_m9.minn' \
+         '/styletrans_low_m10r.minn' '/styletrans_low_m9.minn' \
+         'M10r' 'M9' '/odm/etc/camera/mialgo_styletrans_cl.bin'; do
+  printf '%s: ' "$s"; grep -abo -- "$s" "$P" | head -1
+done
+```
+
+Expected offsets:
+
+| String | Offset |
+| ------ | ------ |
+| `/styletrans_high_m10r.minn` | `0x8525` (34,085) |
+| `/styletrans_high_m9.minn` | `0x87d7` (34,775) |
+| `/styletrans_low_m10r.minn` | `0x890c` (35,084) |
+| `/styletrans_low_m9.minn` | `0x8ae8` (35,560) |
+| `M10r` | `0x98a0` (39,072) |
+| `M9` | `0x9ecf` (40,655) |
+| `/odm/etc/camera/mialgo_styletrans_cl.bin` | `0x9bf9` (39,929) |
+
+Model inventory and hashes:
+
+```bash
+D=970/extracted_madrid/odm/etc/camera/styletrans/compressed
+find "$D" -maxdepth 1 -type f -printf '%f %s\n' | sort
+sha256sum "$D"/*.minn
+xxd -l 8 "$D/styletrans_high_m10r.minn"
+```
+
+Expected sizes and SHA-256:
+
+| File | Size | SHA-256 |
+| ---- | ---- | ------- |
+| `styletrans_high_m10r.minn` | 39,972,948 | `db8a9c16…a31f9c1` |
+| `styletrans_high_m9.minn` | 39,731,284 | `99c38289…185acc3` |
+| `styletrans_low_m10r.minn` | 39,981,140 | `9c221259…e9e4f65` |
+| `styletrans_low_m9.minn` | 39,723,092 | `08701660…5b753e7` |
+
+The full 64-character hashes are in
+[02-legend-m10r.md](02-legend-m10r.md#style-transfer-models-m9-vs-m10r).
+`xxd` shows the `NNiM` magic (`4e 4e 69 4d`). The only shipped directory is
+`compressed/`; the uncompressed `styletrans/` directory does not exist in the
+extracted tree.
+
+Model-path selection disassembly:
+
+```bash
+llvm-objdump -d --no-show-raw-insn --start-address=0x2d780 \
+  --stop-address=0x2e1c0 "$P"
+```
+
+Look for `adrp`/`add` pairs targeting `0x8525`, `0x87d7`, `0x890c`, and
+`0x8ae8` at `0x2da58`, `0x2dfe0`, `0x2e124`, and `0x2e198`. The M9/M10R
+selector is the word at `[object + 0x160]`: zero chooses `_m9`, non-zero
+chooses `_m10r`. The high/low branch compares `[object + 0x188 + 0x10]` with
+`0x105` and `[object + 0x188 + 0x14]` with `0x1253`.
+
+Runtime mode string:
+
+```bash
+llvm-objdump -d --no-show-raw-insn --start-address=0x19600 \
+  --stop-address=0x19660 "$P"
+```
+
+Expected: `cmp w8, #0` at `0x19634`, then `csel x1, x11, x10, eq` at
+`0x1964c`, where `x11` points to `M9` (`0x9ecf`) and `x10` to `M10r`
+(`0x98a0`). This is used by the `mode=%s` log format at `0x844d`.
+
+Comparison with the 17 Ultra:
+
+```bash
+find 970/extracted_nezha/odm/etc/camera/styletrans/compressed \
+  -maxdepth 1 -type f -printf '%f %s\n' | sort
+stat -c '%s' 970/extracted_nezha/odm/lib64/libmialgo_styletrans.so
+```
+
+Expected: `styletrans_colorfix.minn` 6,953,155; `styletrans_high.minn`
+6,700,350; `styletrans_low.minn` 6,698,160; library 13,668,744. No `m9`/`m10r`
+names.
+
+## Legend strings in the SoC and CHI layers
+
+```bash
+for pair in \
+  '970/hal_analysis_madrid/binaries/camera.qcom.sm8975.so LegendM10R LegendMonopan' \
+  '970/hal_analysis_madrid/binaries/com.qti.chi.override.so com.xiaomi.legendMode xiaomi.camera.legendMode'; do
+  set -- $pair; P=$1; shift
+  echo "== $P"
+  for s in "$@"; do printf '%s: ' "$s"; grep -abo -- "$s" "$P" | head -1; done
+done
+```
+
+Expected offsets: `LegendM10R` `1327278` (`0x1327278`), `LegendMonopan`
+`1079455` (`0x1079455`), `com.xiaomi.legendMode` `625766` (`0x625766`),
+`xiaomi.camera.legendMode` `381628` (`0x381628`).
+
 ## Camera 6.8 decompilation
 
 The APK was decompiled with jadx (`--no-res`) and finished with 157 errors;
