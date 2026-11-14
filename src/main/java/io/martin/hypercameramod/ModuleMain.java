@@ -555,12 +555,10 @@ public class ModuleMain extends XposedModule {
 
     // On by default only on the phones whose hardware layer can run the Original portrait preview;
     // off on the 14 Ultra, where it deadlocks the preview (see MODE_PORTRAIT). The settings toggle
-    // wins, then the camera.feature.original_portrait system property.
+    // wins, then the camera.feature.original_portrait system property. Read on every call so
+    // turning the switch on takes effect the next time the style list is built, without restarting
+    // the camera process.
     private boolean originalPortraitEnabled() {
-        int state = originalPortraitState;
-        if (state >= 0) {
-            return state == 1;
-        }
         boolean enabled;
         try {
             android.content.SharedPreferences p = getRemotePreferences("hypercameramod");
@@ -571,14 +569,20 @@ public class ModuleMain extends XposedModule {
                 String value = property(ORIGINAL_PORTRAIT_PROP);
                 enabled = !value.isEmpty() ? "1".equals(value)
                         : DeviceSupport.originalPortraitDefault();
+                if (p == null) {
+                    log(Log.WARN, TAG, "getRemotePreferences returned null");
+                }
             }
         } catch (Throwable t) {
             log(Log.WARN, TAG, "cannot read " + ORIGINAL_PORTRAIT_KEY + ": " + t);
             enabled = DeviceSupport.originalPortraitDefault();
         }
-        originalPortraitState = enabled ? 1 : 0;
-        log(Log.INFO, TAG, "Original portrait style " + (enabled ? "enabled" : "disabled")
-                + " on " + DeviceSupport.modelName());
+        int state = enabled ? 1 : 0;
+        if (originalPortraitState != state) {
+            originalPortraitState = state;
+            log(Log.INFO, TAG, "Original portrait style " + (enabled ? "enabled" : "disabled")
+                    + " on " + DeviceSupport.modelName());
+        }
         return enabled;
     }
 

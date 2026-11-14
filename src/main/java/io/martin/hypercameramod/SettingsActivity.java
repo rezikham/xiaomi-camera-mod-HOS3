@@ -22,6 +22,8 @@ public class SettingsActivity extends AppCompatActivity {
     // The camera process reads these through libxposed remote preferences.
     private static final String PREFS_GROUP = "hypercameramod";
     private static final String ORIGINAL_PORTRAIT_KEY = "original_portrait_enabled";
+    // One-shot marker: older builds persisted Original portrait as on for every device.
+    private static final String MIGRATION_KEY = "device_defaults_migrated_v2";
     private static final String[] SETTING_KEYS = {
             "essential_mode_enabled", "leica_ui_enabled", "m10r_enabled", "extra_filters_enabled",
             ORIGINAL_PORTRAIT_KEY
@@ -70,9 +72,17 @@ public class SettingsActivity extends AppCompatActivity {
     }
 
     // Write the device-dependent defaults once, so the settings screen shows the same value the
-    // hooks use when the app has never been opened on this phone.
+    // hooks use when the app has never been opened on this phone. Older builds defaulted Original
+    // portrait on for every device; on the 14 Ultra that left the switch on even though the style
+    // is opt-in there now, so reset it once and remember that the migration ran.
     private void seedDeviceDefaults() {
         SharedPreferences local = PreferenceManager.getDefaultSharedPreferences(this);
+        if (!local.getBoolean(MIGRATION_KEY, false)) {
+            if (!DeviceSupport.originalPortraitDefault()) {
+                local.edit().putBoolean(ORIGINAL_PORTRAIT_KEY, false).apply();
+            }
+            local.edit().putBoolean(MIGRATION_KEY, true).apply();
+        }
         if (!local.contains(ORIGINAL_PORTRAIT_KEY)) {
             local.edit()
                     .putBoolean(ORIGINAL_PORTRAIT_KEY, DeviceSupport.originalPortraitDefault())

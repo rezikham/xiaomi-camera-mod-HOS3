@@ -43,7 +43,7 @@ public final class DeviceSupport {
     /**
      * The Original portrait style starts enabled on the phones whose hardware layer implements
      * it. On the 14 Ultra the Original portrait preview session never returns a frame (see the
-     * README), so it starts disabled there.
+     * README), so it starts disabled there; the user can still opt in from the settings.
      */
     public static boolean originalPortraitDefault() {
         int family = family();

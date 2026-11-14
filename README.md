@@ -10,7 +10,7 @@
 
 - Palette and Parameters panel
 - Original colour style (Photo)
-- Original portrait style (device-aware toggle; off by default on 14 Ultra due to HAL limitation)
+- Original portrait style (opt-in toggle; off by default on the 14 Ultra, where the HAL cannot preview it)
 - Leica Essential mode in the standard UI (M3/M9)
 - Leica Essential CMOS (M10R) style
 - Film simulation filters: R600, P100F, F-50, KC64, KP160
@@ -21,6 +21,7 @@ Package: `io.rezikham.hypercameramod`
 ## Requirements
 
 - A Xiaomi phone on HyperOS 3 or HyperOS 4 with Xiaomi Camera 6.7. Tested on the Xiaomi 14 Ultra (HyperOS 3) and the Xiaomi 17 Ultra (HyperOS 4).
+- The Original Portrait Style toggle and the portrait picker were verified on the Xiaomi 14 Ultra `24031PN0DC` / `aurora`, HyperOS `3.0.304.0.WNAMIXM` (Android 16), Xiaomi Camera `6.7.000280.0`.
 - Root with Magisk, KernelSU or APatch. Only the settings app's **Force Stop Camera** button needs root.
 - LSPosed or Vector with libxposed API 101/102. The settings-to-camera bridge uses API 102; on API 101 the toggles do not reach Camera, but the hooks and the system-property fallbacks still work.
 - Module scope: **Camera** only (`com.android.camera`).
@@ -34,13 +35,13 @@ The module can only expose what the phone's camera hardware layer (`camera.qcom.
 | Palette and Parameters | ✅ | ✅ | ✅ |
 | Film filters | ✅ | ✅ | ✅ |
 | Original colour style (Photo) | ✅ | ✅ | ✅ |
-| Original portrait style | ❌ HAL limitation | ✅ (on by default) | ✅ (on by default) |
+| Original portrait style | ⚠️ Opt-in — may freeze the preview | ✅ (on by default) | ✅ (on by default) |
 | Leica Essential (M3/M9) | ❌ HAL limitation | ✅ | ✅ |
 | CMOS (M10R) | ❌ HAL limitation | Experimental — the HAL has no M10R processing | Not verified |
 
 **14 Ultra HAL limitation.** On the 14 Ultra, M3, M9, M10R and Original portrait cannot work, because the camera hardware layer does not implement the processing they need:
 
-- **Original portrait** starts an algorithm-up SAT preview session. The Xiaomi preview-bokeh engine (`libmialgo_mc_bokeh_cdsp_skel.so`) never returns a frame, the camera waits 5780 ms on a semaphore (`ChiX WaitForSemaphore() ... timed out`), the preview drops to about 0.1 fps, and the vendor camera provider eventually aborts (`ExtensionModule::TriggerRecovery`). The module therefore removes Original from the Portrait style picker on the 14 Ultra by default and moves a saved value back to Master. The **Original Portrait Style** toggle is off there; turning it on only restores the freeze.
+- **Original portrait** starts an algorithm-up SAT preview session. The Xiaomi preview-bokeh engine (`libmialgo_mc_bokeh_cdsp_skel.so`) never returns a frame, the camera waits 5780 ms on a semaphore (`ChiX WaitForSemaphore() ... timed out`), the preview drops to about 0.1 fps, and the vendor camera provider eventually aborts (`ExtensionModule::TriggerRecovery`). The module therefore removes Original from the Portrait style picker on the 14 Ultra by default and moves a saved value back to Master. The **Original Portrait Style** toggle is off there; turning it on restores Original in the picker (together with the freeze), which is why it is opt-in rather than blocked.
 - **M3/M9 (Leica Essential)** need the Leica Essential processing available on the 17 Ultra-class hardware layer. The 14 Ultra HAL has no M10R processing either, so a CMOS shot comes back as an ordinary picture, without Leica processing and without the `legendmode` tag Gallery uses for its LEICA button.
 
 These are firmware limitations; no module can add the missing HAL processing. Original colour in Photo is unaffected and works on all three phones.
