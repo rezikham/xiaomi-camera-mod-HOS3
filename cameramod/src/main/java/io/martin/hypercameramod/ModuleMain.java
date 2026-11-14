@@ -21,6 +21,7 @@ import android.widget.Toast;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -75,6 +76,13 @@ public class ModuleMain extends XposedModule {
     };
     private static final String STYLE_ORIGINAL = "2";
     private static final String STYLE_AUTHENTIC = "1";
+    private static final String STYLE_MASTER = "0";
+    // In Portrait the same component lists Original, Master and Leica. Original portrait runs the
+    // algorithm-up SAT preview session, whose Xiaomi preview-bokeh engine never returns a frame on
+    // this hardware layer: the camera waits on a semaphore for 5780 ms, the preview drops to about
+    // 0.15 fps and the vendor camera provider eventually aborts. Photo mode keeps the Original
+    // colour style; Portrait lists Master and Leica only.
+    private static final int MODE_PORTRAIT = 171;
     private static final int ASSET_ORIGINAL_BADGE = 3;
     private static volatile android.content.pm.ApplicationInfo moduleInfo;
 
@@ -755,6 +763,15 @@ public class ModuleMain extends XposedModule {
                 Class<?> item = Class.forName(profile.itemClass(), false, loader);
                 Field key = field(item, "r");
                 Field[] images = {field(item, "c"), field(item, "g"), field(item, "h")};
+                Field currentMode = null;
+                for (Class<?> c = list.getSuperclass(); c != null && currentMode == null;
+                        c = c.getSuperclass()) {
+                    try {
+                        currentMode = field(c, "mCurrentMode");
+                    } catch (NoSuchFieldException ignored) {
+                    }
+                }
+                final Field modeField = currentMode;
 
                 hook(getItems).intercept(chain -> {
                     Object result = chain.proceed();
@@ -781,6 +798,39 @@ public class ModuleMain extends XposedModule {
                         }
                     } catch (Throwable t) {
                         log(Log.ERROR, TAG, "could not fix the Original colour style badge", t);
+                    }
+                    try {
+                        if (modeField != null && result instanceof List<?> items
+                                && modeField.getInt(chain.getThisObject()) == MODE_PORTRAIT
+                               ) {
+                            List<Object> kept = new ArrayList<>(items.size());
+                            for (Object entry : items) {
+                                if (!STYLE_ORIGINAL.equals(key.get(entry))) {
+                                    kept.add(entry);
+                                }
+                            }
+                            if (kept.size() != items.size()) {
+                                return kept;
+                            }
+                        }
+                    } catch (Throwable t) {
+                        log(Log.ERROR, TAG, "could not remove Original portrait", t);
+                    }
+                    return result;
+                });
+                // A camera that was left on Original portrait keeps value "2" in
+                // pref_camera_cv_type_key_171. Fall back to Master (the Portrait default) so the
+                // removed style is never requested from the hardware layer.
+                hook(list.getDeclaredMethod("getComponentValue", int.class)).intercept(chain -> {
+                    Object result = chain.proceed();
+                    try {
+                        if (chain.getArg(0) instanceof Integer mode && mode == MODE_PORTRAIT
+                                && STYLE_ORIGINAL.equals(result)) {
+                            log(Log.INFO, TAG, "moved the portrait style from Original to Master");
+                            return STYLE_MASTER;
+                        }
+                    } catch (Throwable t) {
+                        log(Log.ERROR, TAG, "could not fall back from Original portrait", t);
                     }
                     return result;
                 });
