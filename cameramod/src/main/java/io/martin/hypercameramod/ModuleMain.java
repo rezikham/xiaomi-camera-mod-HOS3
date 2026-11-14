@@ -469,6 +469,11 @@ public class ModuleMain extends XposedModule {
     }
 
     // ---- 2b. Beauty config fallback for missing portrait scenes (HyperOS 3 / 14 Ultra) ----------
+    // On HyperOS 3, some portrait scenes (RearPortraitOriginal, FrontMakeupsCapture,
+    // FrontPortraitMakeups) have no beauty JSON config, causing crashes when selected.
+    // This hook catches the "sceneKey don't exist" error and returns a minimal valid
+    // empty config so the camera doesn't crash. It does NOT change processing for
+    // scenes that already have configs.
 
     private void installBeautyConfigHook(ClassLoader loader) {
         if (beautyConfigHooked) {
@@ -485,7 +490,7 @@ public class ModuleMain extends XposedModule {
                 try {
                     return chain.proceed();
                 } catch (Throwable t) {
-                    // Provide fallback configs for missing scenes on HyperOS 3
+                    // Provide fallback configs ONLY for missing scenes on HyperOS 3
                     if (t.getMessage() != null && t.getMessage().contains("don't exist")) {
                         log(Log.INFO, TAG, "Providing fallback beauty config for missing scene: " + sceneKey);
                         return getFallbackBeautyConfig(sceneKey);
@@ -503,19 +508,23 @@ public class ModuleMain extends XposedModule {
     private volatile boolean beautyConfigHooked;
 
     // Default beauty configs for scenes missing on HyperOS 3 (based on standard portrait configs)
+    // Returns minimal empty JSON - only used when the scene has NO config at all.
     private String getFallbackBeautyConfig(String sceneKey) {
-        // Return minimal valid JSON that won't crash - based on RearPortrait config
         return "{\"Map\":{},\"INRegion\":{},\"GLRegion\":{}}";
     }
 
     // ---- 2c. Cap excessive blur radius for portrait preview (HyperOS 3 / 14 Ultra) -------------
+    // BlurBackgroundView is a UI View (com.android.camera.ui) used for the live preview's
+    // background blur rendering. It does NOT affect the final captured image processing.
+    // The original value 241 caused 60fps blur rendering lag in the preview; 150 is smooth
+    // and visually indistinguishable for the preview.
 
     private void installBlurRadiusHook(ClassLoader loader) {
         if (blurRadiusHooked) {
             return;
         }
         try {
-            // Hook BlurBackgroundView.makeBackgroundImage to cap blurRadius
+            // Hook BlurBackgroundView.makeBackgroundImage to cap blurRadius (preview only)
             Class<?> blurClass = Class.forName("com.android.camera.ui.BlurBackgroundView", false, loader);
             Method makeBg = blurClass.getDeclaredMethod("makeBackgroundImage", int.class, int.class, float.class);
             makeBg.setAccessible(true);
@@ -533,7 +542,7 @@ public class ModuleMain extends XposedModule {
                 return chain.proceed();
             });
             blurRadiusHooked = true;
-            log(Log.INFO, TAG, "hooked BlurBackgroundView.makeBackgroundImage (blur radius cap)");
+            log(Log.INFO, TAG, "hooked BlurBackgroundView.makeBackgroundImage (preview blur radius cap)");
         } catch (Throwable t) {
             log(Log.WARN, TAG, "cannot hook BlurBackgroundView: " + t);
         }
