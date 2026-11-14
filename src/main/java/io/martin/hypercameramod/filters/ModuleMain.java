@@ -94,6 +94,17 @@ public class ModuleMain extends XposedModule {
                     "E9.i", "c",
                     "com.android.camera.features.mode.capture.d", "M", "Y", "G",
                     "h2.a", "a", "x", "s2.t", "Ei.q", "b", "com.xiaomi.camera.effect.EffectController", "q"),
+            // Camera 6.8.002230.0 (Xiaomi 18 Pro Max, HyperOS 4). The list/item/workspace
+            // names are verified; the panel, Looks table and registry lookup are the best
+            // static candidates (the strip-order hook may log a failure on this build).
+            // imageIds is null: the drawables are resolved by name.
+            new Profile("6.8.002230", "xi.h0", "d",
+                    "i3.b", "b", "l", "e", "d", "g", "h", "i",
+                    "com.xiaomi.camera.cloudfilter.R$string", null,
+                    "com.android.camera.fragment.j0", "kt",
+                    "B9.j", "c",
+                    "com.android.camera.features.mode.capture.d", "K", "Y", "G",
+                    "g2.a", "a", "x", "r2.t", "ti.f", "b", "com.xiaomi.camera.effect.EffectController", "q"),
     };
 
     // ic_vector_lc_looks_filter_name_icon_standard in 6.7.000280.0 (no R classes at runtime).
