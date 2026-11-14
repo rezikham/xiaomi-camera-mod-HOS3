@@ -18,7 +18,7 @@ An LSPosed/Vector module (libxposed API 101-102) that turns on features the Xiao
 | Leica Essential mode in the standard UI | The Leica Essential mode (the M3/M9 camera) is added to the standard UI's mode strip, which only the Leica UI has. See Use. |
 | Leica Essential CMOS (M10R), off by default | "CMOS" is added to the Leica Essential style list, between B&W (M3) and CCD (M9), once enabled (see Use). |
 | Film filters | Adds R600, P100F, F-50 (shown in the standard panel as "Reversal") and KC64 ("Orchid") to the standard filter panel. In the Leica UI, adds all five film filters (R600, P100F, F-50, KC64 and KP160) to the Looks panel. |
-| Settings app | A small settings screen for the toggles above, with a Force Stop Camera button and a Hide launcher icon option. Open it from the app drawer or from the module entry in LSPosed/Vector. |
+| Settings app | A small settings screen with five toggles (Essential Mode, Leica UI, CMOS (M10R), Extra Film Filters, Original Portrait Style), a Force Stop Camera button, and a Hide launcher icon option. Open it from the app drawer or from the module entry in LSPosed/Vector. |
 
 Original colour style and CMOS only change the photo if the phone's camera hardware layer implements them. The camera sends the chosen style to the hardware layer; the module only makes the choice available.
 
