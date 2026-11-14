@@ -22,7 +22,4 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "HyperFilmFilters"
-
-include(":app")
-include(":cameramod")
+rootProject.name = "xiaomi-camera-mod"

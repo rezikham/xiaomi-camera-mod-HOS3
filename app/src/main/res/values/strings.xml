@@ -1,4 +1,0 @@
-<resources>
-    <string name="app_name">HyperFilmFilters</string>
-    <string name="module_description">Shows the legacy film filter list (R600, P100F, F-50, KC64, KP160) in the Xiaomi Camera filter panel.</string>
-</resources>

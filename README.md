@@ -1,27 +1,45 @@
 # Xiaomi Camera Mod
 
-LSPosed/Vector modules (libxposed API 101-102) for the Xiaomi Camera on HyperOS. **HyperCameraMod** is the all-in-one module: it turns on the Palette and Parameters panel, the Original colour style, the Leica Essential mode, brings back the film filters, and has a small settings app for the toggles. **HyperFilmFilters** remains available as the standalone film-filter module.
+**HyperCameraMod** is an LSPosed/Vector module (libxposed API 101-102) for the Xiaomi Camera on HyperOS. It turns on features the camera already contains but leaves off, and brings back the film filters:
 
-Install **one** of them, not both: they add the same film filters, and two copies in the same camera process would duplicate the entries.
+- Palette and Parameters panel
+- Original colour style (Photo)
+- Original portrait style (device-aware toggle; off by default on 14 Ultra due to HAL limitation)
+- Leica Essential mode in the standard UI (M3/M9)
+- Leica Essential CMOS (M10R) style
+- Film simulation filters: R600, P100F, F-50, KC64, KP160
+- Settings app with toggles, Force Stop Camera button, and Hide launcher icon option
 
-| Module | What it does | Package |
-| ------ | ------------ | ------- |
-| [HyperCameraMod](cameramod/README.md) | Palette and Parameters panel, Original colour style, Leica Essential mode (standard UI and CMOS/M10R), the film filters R600, P100F, F-50, KC64 and KP160, plus a settings app with toggles, a Force Stop Camera button and an option to hide the launcher icon. | `io.rezikham.hypercameramod` |
-| [HyperFilmFilters](app/README.md) | Brings the film filters R600, P100F, F-50 and KC64 (and KP160 in the Leica UI) back to the filter panel and the filter strip, in the standard UI and the Leica UI. | `io.rezikham.hyperfilters` |
-
-Both are developed and tested on the Xiaomi 17 Ultra (Leica edition) with Xiaomi Camera 6.7 on HyperOS 4, and on the Xiaomi 14 Ultra with Xiaomi Camera 6.7 on HyperOS 3. They do not check the camera's version number: they look for what they need and, when it is not there, leave the camera unchanged and say so. Each module's README lists what it looks for.
+Package: `io.rezikham.hypercameramod`
 
 ## Requirements
 
-| Requirement | Notes |
-| ----------- | ----- |
-| Xiaomi phone on HyperOS 3 or HyperOS 4 | Developed on the Xiaomi 14 Ultra (HyperOS 3) and the Xiaomi 17 Ultra (HyperOS 4). Other HyperOS phones with the same Camera 6.7 may work. |
-| Xiaomi Camera 6.7 | The module targets the camera app shipped with those builds. It does not change the camera APK on disk. |
-| Root: Magisk, KernelSU or APatch | Only the **Force Stop Camera** button needs root. The hooks themselves run inside LSPosed/Vector. |
-| LSPosed or Vector | A build that supports the libxposed API (API 101 for the hooks, API 102 for the settings-to-camera bridge). Set the module scope to **Camera** only (`com.android.camera`). |
-| No system partition changes | Nothing is written to `/system`; disable the module and force-stop Camera to return to stock. |
+- A Xiaomi phone on HyperOS 3 or HyperOS 4 with Xiaomi Camera 6.7. Tested on the Xiaomi 14 Ultra (HyperOS 3) and the Xiaomi 17 Ultra (HyperOS 4).
+- Root with Magisk, KernelSU or APatch. Only the settings app's **Force Stop Camera** button needs root.
+- LSPosed or Vector with libxposed API 101/102. The settings-to-camera bridge uses API 102; on API 101 the toggles do not reach Camera, but the hooks and the system-property fallbacks still work.
+- Module scope: **Camera** only (`com.android.camera`).
 
-If the manager supports only API 101, the hooks still work, but the settings toggles cannot reach the Camera process. Use the system-property fallbacks documented in [`cameramod/README.md`](cameramod/README.md) in that case.
+## Feature availability
+
+The module can only expose what the phone's camera hardware layer (`camera.qcom.so`, CHI) implements. It cannot add missing processing.
+
+| Feature | Xiaomi 14 Ultra | Xiaomi 17 Ultra | Xiaomi 18 Pro Max |
+| ------- | --------------- | --------------- | ----------------- |
+| Palette and Parameters | ✅ | ✅ | ✅ |
+| Film filters | ✅ | ✅ | ✅ |
+| Original colour style (Photo) | ✅ | ✅ | ✅ |
+| Original portrait style | ❌ HAL limitation | ✅ (on by default) | ✅ (on by default) |
+| Leica Essential (M3/M9) | ❌ HAL limitation | ✅ | ✅ |
+| CMOS (M10R) | ❌ HAL limitation | Experimental — the HAL has no M10R processing | Not verified |
+
+**14 Ultra HAL limitation.** On the 14 Ultra, M3, M9, M10R and Original portrait cannot work, because the camera hardware layer does not implement the processing they need:
+
+- **Original portrait** starts an algorithm-up SAT preview session. The Xiaomi preview-bokeh engine (`libmialgo_mc_bokeh_cdsp_skel.so`) never returns a frame, the camera waits 5780 ms on a semaphore (`ChiX WaitForSemaphore() ... timed out`), the preview drops to about 0.1 fps, and the vendor camera provider eventually aborts (`ExtensionModule::TriggerRecovery`). The module therefore removes Original from the Portrait style picker on the 14 Ultra by default and moves a saved value back to Master. The **Original Portrait Style** toggle is off there; turning it on only restores the freeze.
+- **M3/M9 (Leica Essential)** need the Leica Essential processing available on the 17 Ultra-class hardware layer. The 14 Ultra HAL has no M10R processing either, so a CMOS shot comes back as an ordinary picture, without Leica processing and without the `legendmode` tag Gallery uses for its LEICA button.
+
+These are firmware limitations; no module can add the missing HAL processing. Original colour in Photo is unaffected and works on all three phones.
+
+**CMOS is off by default.** The Xiaomi 17 Ultra's hardware layer (`camera.qcom.core.so`, `com.qti.chi.override.so`) has the Leica Essential processing for M3 and M9 only. A CMOS shot comes back as an ordinary picture, without the Leica processing and without the `legendmode` tag the Gallery uses for its LEICA button. Enable it with the CMOS (M10R) toggle (or `camera.feature.m10r=1`) only to experiment, or on a phone whose firmware supports it.
 
 ## Settings
 
@@ -33,26 +51,54 @@ HyperCameraMod has a settings app. Open it from the app drawer ("HyperCameraMod"
 | Leica UI (Looks) | on | Shows the Leica Looks panel in the filter strip instead of the standard filter UI. |
 | CMOS (M10R) Style | off | Adds the CMOS (M10R) style to the Leica Essential style list. |
 | Extra Film Filters | on | Adds the R600, P100F, F-50, KC64 and KP160 film filters. |
-| Original Portrait Style | on (17U/18PM), off (14U) | Shows Original in the Portrait style picker. Default is chosen from the phone model; on the 14 Ultra it is off because the HAL cannot preview it (see [Feature availability](cameramod/README.md#feature-availability)). |
+| Original Portrait Style | on (17U/18PM), off (14U) | Shows Original in the Portrait style picker. Default is chosen from the phone model; on the 14 Ultra it is off because the HAL cannot preview it (see Feature availability). |
 
 The toolbar has a **Force Stop Camera** button (root is required; grant it in Magisk/KernelSU/APatch). The overflow menu has **Hide launcher icon**, which removes the app icon without breaking access from LSPosed/Vector. After changing a toggle, force-stop Camera and open it again.
 
 ## Use
 
-1. Install the module you want and enable it in LSPosed or Vector. Set its scope to **Camera** only.
-2. Force-stop Camera and open it again.
+1. Install the module and enable it in LSPosed or Vector. Set its scope to **Camera** only.
+2. Open **HyperCameraMod** settings from the app drawer or from the module entry in LSPosed/Vector.
+3. Set the toggles, then use **Force Stop Camera** in the settings toolbar (root is required; grant it in Magisk/KernelSU/APatch) and open Camera again.
 
-If the camera misbehaves, disable the module and force-stop Camera to restore the stock behaviour. Nothing on the system partition is changed.
+The settings app has five toggles: Leica Essential mode in the standard UI (on by default), Leica UI / Looks (on), CMOS (M10R) (off), Extra Film Filters (on) and Original Portrait Style (on by default on the 17 Ultra and 18 Pro Max, off on the 14 Ultra). The Original Portrait Style default is chosen from the phone model when the app first opens; the toggle can override it on any phone. The overflow menu has **Hide launcher icon**; when the icon is hidden, settings stay reachable from LSPosed/Vector.
 
-## Troubleshooting and logs
+The system properties still work as a fallback. To add the CMOS entry without the settings app, run as root and force-stop Camera:
 
-If a feature does not appear:
+```bash
+su -c "setprop camera.feature.m10r 1"
+```
 
-1. Check its toggle in **HyperCameraMod** settings, then use **Force Stop Camera** and open Camera again. The toggles are read when the Camera process starts.
-2. If a layout is not recognised for that camera build, the module shows a toast in Camera once per camera version (for example, "The Leica Essential style list is different on this camera version").
-3. Pull the module log and send it with a report.
+It resets on reboot (set it to 0 or reboot to turn it off). To keep it, run the command from a boot script such as Magisk's `service.sh`.
 
-**From LSPosed/Vector:** open the manager, go to **Logs**, filter for `HyperCameraMod` (or `HyperFilmFilters` for the standalone module), reproduce the problem, and copy the lines around the Camera start. The important ones look like:
+The Original portrait toggle has a property too. It is only useful on hardware that can preview it; on the 14 Ultra it restores the freeze:
+
+```bash
+su -c "setprop camera.feature.original_portrait 1"
+```
+
+It also resets on reboot.
+
+The Leica Essential mode is added to the standard UI's mode strip, in front of "More". It is on by default; turn it off with the settings toggle, or as root:
+
+```bash
+su -c "setprop camera.feature.essential_std 0"
+```
+
+The property resets on reboot (the mode comes back). Tested on camera 6.7.000280.0 and 6.7.000500.0 (Xiaomi 14 Ultra, standard UI).
+
+If the camera misbehaves, disable the module and force-stop Camera to restore the stock behaviour.
+
+## Logs
+
+The module logs to logcat under the tag `HyperCameraMod`. Clear the buffer, open Camera, reproduce the problem, then dump it:
+
+```bash
+su -c "logcat -c"
+su -c "logcat -d -s HyperCameraMod"
+```
+
+The same lines are in LSPosed/Vector under **Logs** (filter `HyperCameraMod`). The useful ones look like:
 
 ```
 HyperCameraMod: hooked s2.A.<method> (Leica Essential, layout 6.7)
@@ -61,34 +107,22 @@ HyperCameraMod: the Leica Essential style list is not one this module knows
 HyperCameraMod: remote preferences are not available: ...
 ```
 
-**From a root shell or ADB:** the module mirrors its log lines to logcat under the same tag.
+When reporting a problem, include the phone model, HyperOS version, Camera version (for example `6.7.000500.0`), and these log lines. If a layout does not match, the `does not match` line names the class or field that is missing, which is what a new profile needs.
 
-```bash
-su -c "logcat -c"                       # clear
-# open Camera, reproduce the problem, then:
-su -c "logcat -d -s HyperCameraMod"
-```
+## Changelog
 
-Or over ADB: `adb logcat -c` then `adb logcat -d -s HyperCameraMod`.
-
-When reporting a problem, include:
-
-- Phone model and HyperOS version
-- Camera version (Settings → Apps → Camera → App info, for example `6.7.000500.0`)
-- Whether the module is HyperCameraMod or HyperFilmFilters
-- The `HyperCameraMod` / `HyperFilmFilters` log lines, or a screenshot of the toast
-- If **Force Stop Camera** fails: whether root was granted in Magisk/KernelSU/APatch
+The changes in each release are in [`CHANGELOG.md`](CHANGELOG.md). The current stable release is 1.0.0.
 
 ## Build
 
-A Gradle project with two modules. It needs the Android SDK (compileSdk 37, build-tools 37.0.0); put `sdk.dir=...` in `local.properties`, then:
+A Gradle project. It needs the Android SDK (compileSdk 37, build-tools 37.0.0); put `sdk.dir=...` in `local.properties`, then:
 
 ```bash
 ./gradlew assembleRelease
 ```
 
-or `:app:assembleRelease` / `:cameramod:assembleRelease` for one module. The release builds are signed with the debug key.
+The release builds are signed with the debug key.
 
 ## Disclaimer
 
-Unofficial community modules, not affiliated with Xiaomi. They hook internal camera code and are provided as is, for personal use. Use them at your own risk.
+An unofficial community module, not affiliated with Xiaomi or Leica. The three CMOS images in `src/main/assets/m10r` are taken from Xiaomi Camera. It hooks internal camera code and is provided as is, for personal use. Use it at your own risk.

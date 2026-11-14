@@ -43,8 +43,8 @@ jobs:
     - name: Calculate version from CI run number
       id: calc_version
       run: |
-        BASE_VERSION_CAMERAMOD="1.0.0"
-        BASE_VERSIONCODE_CAMERAMOD=1
+        BASE_VERSION="1.0.0"
+        BASE_VERSIONCODE=1
         CI_NUM=${{ github.run_number }}
 
         # versionCode: 100, 101, ... (base*100 + run_number).
@@ -52,24 +52,24 @@ jobs:
         # so the file name always matches what Android shows in App info.
         if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
           # Stable release: tag is the version, versionCode includes CI run for uniqueness
-          VERSION_NAME_CAMERAMOD="${GITHUB_REF_NAME#v}"
-          VERSION_CODE_CAMERAMOD=$((BASE_VERSIONCODE_CAMERAMOD * 100 + CI_NUM))
+          VERSION_NAME="${GITHUB_REF_NAME#v}"
+          VERSION_CODE=$((BASE_VERSIONCODE * 100 + CI_NUM))
         else
-          VERSION_CODE_CAMERAMOD=$((BASE_VERSIONCODE_CAMERAMOD * 100 + CI_NUM))
-          VERSION_NAME_CAMERAMOD="${BASE_VERSION_CAMERAMOD}-${VERSION_CODE_CAMERAMOD}"
+          VERSION_CODE=$((BASE_VERSIONCODE * 100 + CI_NUM))
+          VERSION_NAME="${BASE_VERSION}-${VERSION_CODE}"
         fi
 
-        echo "version_name_cameramod=$VERSION_NAME_CAMERAMOD" >> $GITHUB_OUTPUT
-        echo "version_code_cameramod=$VERSION_CODE_CAMERAMOD" >> $GITHUB_OUTPUT
+        echo "version_name=$VERSION_NAME" >> $GITHUB_OUTPUT
+        echo "version_code=$VERSION_CODE" >> $GITHUB_OUTPUT
         echo "ci_num=$CI_NUM" >> $GITHUB_OUTPUT
 
-    - name: Build cameramod module
-      run: ./gradlew :cameramod:assembleRelease --no-daemon -PversionName=${{ steps.calc_version.outputs.version_name_cameramod }} -PversionCode=${{ steps.calc_version.outputs.version_code_cameramod }}
+    - name: Build module
+      run: ./gradlew assembleRelease --no-daemon -PversionName=${{ steps.calc_version.outputs.version_name }} -PversionCode=${{ steps.calc_version.outputs.version_code }}
 
     - name: Get version info
       id: version
       run: |
-        VERSION=$(grep -E '^version=' cameramod/gradle.properties 2>/dev/null | cut -d'=' -f2 || echo "")
+        VERSION=$(grep -E '^version=' gradle.properties 2>/dev/null | cut -d'=' -f2 || echo "")
         if [ -z "$VERSION" ]; then
           VERSION="dev-$(git rev-parse --short HEAD)"
         fi
@@ -78,17 +78,17 @@ jobs:
 
     - name: Rename APK with version (includes versionCode)
       run: |
-        VERSION_CAMERAMOD=${{ steps.calc_version.outputs.version_name_cameramod }}
-        # cameramod: io.rezikham.hypercameramod
-        find cameramod/build/outputs/apk/release -name "*.apk" | while read f; do
-          mv "$f" "$(dirname "$f")/io.rezikham.hypercameramod-${VERSION_CAMERAMOD}.apk"
+        VERSION=${{ steps.calc_version.outputs.version_name }}
+        # module: io.rezikham.hypercameramod
+        find build/outputs/apk/release -name "*.apk" | while read f; do
+          mv "$f" "$(dirname "$f")/io.rezikham.hypercameramod-${VERSION}.apk"
         done
 
-    - name: Upload cameramod APK
+    - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
-        name: hypercameramod-${{ steps.calc_version.outputs.version_name_cameramod }}
-        path: cameramod/build/outputs/apk/release/io.rezikham.hypercameramod-${{ steps.calc_version.outputs.version_name_cameramod }}.apk
+        name: hypercameramod-${{ steps.calc_version.outputs.version_name }}
+        path: build/outputs/apk/release/io.rezikham.hypercameramod-${{ steps.calc_version.outputs.version_name }}.apk
 
     - name: Clean old assets from CI-Release
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -113,7 +113,7 @@ jobs:
 
           **CI Run:** #${{ github.run_number }}
 
-          **Version:** `${{ steps.calc_version.outputs.version_name_cameramod }}` (versionCode `${{ steps.calc_version.outputs.version_code_cameramod }}`)
+          **Version:** `${{ steps.calc_version.outputs.version_name }}` (versionCode `${{ steps.calc_version.outputs.version_code }}`)
 
           **Commit:** ${{ github.sha }}
 
@@ -175,7 +175,7 @@ jobs:
         draft: false
         prerelease: true
         files: |
-          cameramod/build/outputs/apk/release/io.rezikham.hypercameramod-${{ steps.calc_version.outputs.version_name_cameramod }}.apk
+          build/outputs/apk/release/io.rezikham.hypercameramod-${{ steps.calc_version.outputs.version_name }}.apk
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -184,7 +184,7 @@ jobs:
       run: |
         VERSION="${GITHUB_REF_NAME#v}"
         {
-          echo "**Version:** \`$VERSION\` (versionCode \`${{ steps.calc_version.outputs.version_code_cameramod }}\`)"
+          echo "**Version:** \`$VERSION\` (versionCode \`${{ steps.calc_version.outputs.version_code }}\`)"
           echo
           echo "**Commit:** ${{ github.sha }}"
           echo
@@ -225,6 +225,6 @@ jobs:
         draft: false
         prerelease: false
         files: |
-          cameramod/build/outputs/apk/release/io.rezikham.hypercameramod-${{ steps.calc_version.outputs.version_name_cameramod }}.apk
+          build/outputs/apk/release/io.rezikham.hypercameramod-${{ steps.calc_version.outputs.version_name }}.apk
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
