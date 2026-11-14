@@ -2,7 +2,9 @@ name: Build Module
 
 on:
   push:
-    branches: [ main, hyperos3-* ]
+    # Development builds (CI-Release) come from main only. Feature branches build on
+    # pull_request, not on every push, so CI-Release always describes main.
+    branches: [ main ]
     tags: [ 'v*' ]
   pull_request:
     branches: [ main ]
@@ -89,7 +91,7 @@ jobs:
         path: cameramod/build/outputs/apk/release/io.rezikham.hypercameramod-${{ steps.calc_version.outputs.version_name_cameramod }}.apk
 
     - name: Clean old assets from CI-Release
-      if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/hyperos3-'))
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
       run: |
         # Delete old assets from CI-Release tag
         gh release delete CI-Release --yes --cleanup-tag 2>/dev/null || true
@@ -101,7 +103,7 @@ jobs:
         GH_REPO: ${{ github.repository }}
 
     - name: Create "CI-Release" (development builds)
-      if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/hyperos3-'))
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
       uses: softprops/action-gh-release@v1
       with:
         tag_name: CI-Release
@@ -131,7 +133,8 @@ jobs:
 
           **Features:**
           - ✅ Palette & Parameters panel
-          - ✅ Original colour style
+          - ✅ Original colour style (Photo)
+          - ✅ Original portrait style (toggle: Original Portrait Style — on by default on 17 Ultra / 18 Pro Max, off on 14 Ultra due to HAL limitation)
           - ✅ Leica Essential mode in standard UI (toggle: Essential Mode in Standard UI)
           - ✅ Leica Looks panel in filter strip (toggle: Leica UI)
           - ✅ CMOS (M10R) style in photography styles (toggle: M10R)
@@ -139,11 +142,24 @@ jobs:
           - ✅ Force-stop Camera button in settings toolbar
           - ✅ Hide app icon from launcher (toggle in overflow menu)
 
+          **Feature availability (hardware-layer dependent):**
+
+          | Feature | 14 Ultra | 17 Ultra | 18 Pro Max |
+          | ------- | -------- | -------- | ---------- |
+          | Palette & Parameters | ✅ | ✅ | ✅ |
+          | Film filters | ✅ | ✅ | ✅ |
+          | Original colour (Photo) | ✅ | ✅ | ✅ |
+          | Original portrait | ❌ HAL limit | ✅ | ✅ |
+          | Leica Essential (M3/M9) | ❌ HAL limit | ✅ | ✅ |
+          | CMOS (M10R) | ❌ HAL limit | Experimental | Not verified |
+
+          On the 14 Ultra the camera hardware layer (`camera.qcom.so`, CHI) does not implement the processing that M3, M9, M10R and Original portrait need. Original portrait starts an algorithm-up SAT preview session whose preview-bokeh engine never returns a frame; the camera waits 5780 ms on a semaphore and the vendor camera provider eventually aborts. The module removes Original from the Portrait picker on the 14 Ultra by default; turning the toggle on only restores the freeze. Original colour in Photo is unaffected and works on all three phones.
+
           **Settings UI:**
           - Access via app drawer icon "HyperCameraMod" or Vector/LSPosed module list
           - Toolbar: Force Stop Camera button (top-right)
           - Overflow menu (⋮): "Hide launcher icon" toggle
-          - Toggles: Essential Mode, Leica UI, M10R, Extra Film Filters
+          - Toggles: Essential Mode, Leica UI, M10R, Extra Film Filters, Original Portrait Style
 
           **Logs / reporting a problem:**
           1. If a feature is missing, check its toggle, tap **Force Stop Camera**, and open Camera again.
