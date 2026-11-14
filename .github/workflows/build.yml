@@ -23,19 +23,18 @@ jobs:
         fetch-depth: 0
 
     - name: Set up JDK 21
-      uses: actions/setup-java@v4
+      uses: actions/setup-java@v5
       with:
         java-version: '21'
         distribution: 'temurin'
         cache: gradle
 
     - name: Setup Android SDK
+      # The app compiles against API 37 with build-tools 37.0.0 and has no native code,
+      # so only the platform, build-tools and platform-tools are needed.
       uses: android-actions/setup-android@v3
       with:
-        api-level: 34
-        build-tools-version: '34.0.0'
-        ndk-version: r26c
-        packages: 'platforms;android-34 build-tools;34.0.0 ndk;26.3.11579264 cmdline-tools;latest platform-tools'
+        packages: 'platforms;android-37.0 build-tools;37.0.0 platform-tools'
 
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
@@ -104,7 +103,7 @@ jobs:
 
     - name: Create "CI-Release" (development builds)
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
         tag_name: CI-Release
         name: "CI-Release (${{ steps.version.outputs.branch }} #${{ github.run_number }})"
@@ -121,7 +120,7 @@ jobs:
 
           **Requirements:**
           - Xiaomi phone on HyperOS 3 or HyperOS 4 (tested: Xiaomi 14 Ultra, Xiaomi 17 Ultra)
-          - Xiaomi Camera 6.7
+          - Xiaomi Camera 6.7 (verified on the 14 Ultra: HyperOS 3.0.304.0.WNAMIXM, Camera 6.7.000280.0)
           - Root: Magisk, KernelSU or APatch. Root is only needed for the **Force Stop Camera** button.
           - LSPosed or Vector with libxposed API 101/102. The settings-to-camera toggles need API 102.
           - Module scope: `com.android.camera` only
@@ -134,7 +133,7 @@ jobs:
           **Features:**
           - ✅ Palette & Parameters panel
           - ✅ Original colour style (Photo)
-          - ✅ Original portrait style (toggle: Original Portrait Style — on by default on 17 Ultra / 18 Pro Max, off on 14 Ultra due to HAL limitation)
+          - ✅ Original portrait style (toggle: Original Portrait Style — on by default on 17 Ultra / 18 Pro Max, off by default on 14 Ultra; opt-in there, the preview may freeze)
           - ✅ Leica Essential mode in standard UI (toggle: Essential Mode in Standard UI)
           - ✅ Leica Looks panel in filter strip (toggle: Leica UI)
           - ✅ CMOS (M10R) style in photography styles (toggle: M10R)
@@ -149,11 +148,11 @@ jobs:
           | Palette & Parameters | ✅ | ✅ | ✅ |
           | Film filters | ✅ | ✅ | ✅ |
           | Original colour (Photo) | ✅ | ✅ | ✅ |
-          | Original portrait | ❌ HAL limit | ✅ | ✅ |
+          | Original portrait | ⚠️ Opt-in — may freeze | ✅ | ✅ |
           | Leica Essential (M3/M9) | ❌ HAL limit | ✅ | ✅ |
           | CMOS (M10R) | ❌ HAL limit | Experimental | Not verified |
 
-          On the 14 Ultra the camera hardware layer (`camera.qcom.so`, CHI) does not implement the processing that M3, M9, M10R and Original portrait need. Original portrait starts an algorithm-up SAT preview session whose preview-bokeh engine never returns a frame; the camera waits 5780 ms on a semaphore and the vendor camera provider eventually aborts. The module removes Original from the Portrait picker on the 14 Ultra by default; turning the toggle on only restores the freeze. Original colour in Photo is unaffected and works on all three phones.
+          On the 14 Ultra the camera hardware layer (`camera.qcom.so`, CHI) does not implement the processing that M3, M9, M10R and Original portrait need. Original portrait starts an algorithm-up SAT preview session whose preview-bokeh engine never returns a frame; the camera waits 5780 ms on a semaphore and the vendor camera provider eventually aborts. The module removes Original from the Portrait picker on the 14 Ultra by default; the toggle is opt-in there, so turning it on restores Original (together with the freeze). Original colour in Photo is unaffected and works on all three phones.
 
           **Settings UI:**
           - Access via app drawer icon "HyperCameraMod" or Vector/LSPosed module list
@@ -198,7 +197,7 @@ jobs:
           echo
           echo "**Requirements:**"
           echo "- Xiaomi phone on HyperOS 3 or HyperOS 4 (tested: Xiaomi 14 Ultra, Xiaomi 17 Ultra)"
-          echo "- Xiaomi Camera 6.7"
+          echo "- Xiaomi Camera 6.7 (verified on the 14 Ultra: HyperOS 3.0.304.0.WNAMIXM, Camera 6.7.000280.0)"
           echo "- Root: Magisk, KernelSU or APatch. Root is only needed for the **Force Stop Camera** button."
           echo "- LSPosed or Vector with libxposed API 101/102. The settings-to-camera toggles need API 102."
           echo "- Module scope: \`com.android.camera\` only, package \`io.rezikham.hypercameramod\`"
@@ -217,7 +216,7 @@ jobs:
 
     - name: Create Versioned Release (stable builds only)
       if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
         tag_name: ${{ github.ref_name }}
         name: "HyperCameraMod ${{ github.ref_name }}"
