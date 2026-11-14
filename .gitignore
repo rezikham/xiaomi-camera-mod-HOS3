@@ -47,3 +47,6 @@ captures/
 # NDK
 .cxx/
 .externalNativeBuild/
+
+# Local dump volume symlink (external drive)
+/970
