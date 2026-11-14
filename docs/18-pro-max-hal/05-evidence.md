@@ -345,9 +345,9 @@ for pair in \
 done
 ```
 
-Expected offsets: `LegendM10R` `1327278` (`0x1327278`), `LegendMonopan`
-`1079455` (`0x1079455`), `com.xiaomi.legendMode` `625766` (`0x625766`),
-`xiaomi.camera.legendMode` `381628` (`0x381628`).
+Expected offsets: `LegendM10R` `1327278` (`0x1440ae`), `LegendMonopan`
+`1079455` (`0x10789f`), `com.xiaomi.legendMode` `625766` (`0x98c66`),
+`xiaomi.camera.legendMode` `381628` (`0x5d2bc`).
 
 ## Camera 6.8 decompilation
 

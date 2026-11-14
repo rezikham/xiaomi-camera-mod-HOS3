@@ -230,10 +230,10 @@ SoC-specific HAL and the CHI override also carry it:
 
 | Library | String | File offset |
 | ------- | ------ | ----------- |
-| `camera.qcom.sm8975.so` (9,180,936 bytes) | `LegendM10R` | `0x1327278` |
-| `camera.qcom.sm8975.so` | `LegendMonopan` | `0x1079455` |
-| `com.qti.chi.override.so` (6,423,544 bytes) | `com.xiaomi.legendMode` | `0x625766` |
-| `com.qti.chi.override.so` | `xiaomi.camera.legendMode` | `0x381628` |
+| `camera.qcom.sm8975.so` (9,180,936 bytes) | `LegendM10R` | `0x1440ae` (1,327,278) |
+| `camera.qcom.sm8975.so` | `LegendMonopan` | `0x10789f` (1,079,455) |
+| `com.qti.chi.override.so` (6,423,544 bytes) | `com.xiaomi.legendMode` | `0x98c66` (625,766) |
+| `com.qti.chi.override.so` | `xiaomi.camera.legendMode` | `0x5d2bc` (381,628) |
 
 This shows the selector is passed through the Qualcomm camera stack as well as
 the Xiaomi CHI/core layers. It does not by itself prove which layer originates
