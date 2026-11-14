@@ -33,7 +33,7 @@ HyperCameraMod has a settings app. Open it from the app drawer ("HyperCameraMod"
 | Leica UI (Looks) | on | Shows the Leica Looks panel in the filter strip instead of the standard filter UI. |
 | CMOS (M10R) Style | off | Adds the CMOS (M10R) style to the Leica Essential style list. |
 | Extra Film Filters | on | Adds the R600, P100F, F-50, KC64 and KP160 film filters. |
-| Original Portrait Style | on (17U/18PM), off (14U) | Shows Original in the Portrait style picker. Default is chosen from the phone model; on the 14 Ultra it is off because the HAL cannot preview it (see Feature availability). |
+| Original Portrait Style | on (17U/18PM), off (14U) | Shows Original in the Portrait style picker. Default is chosen from the phone model; on the 14 Ultra it is off because the HAL cannot preview it (see [Feature availability](cameramod/README.md#feature-availability)). |
 
 The toolbar has a **Force Stop Camera** button (root is required; grant it in Magisk/KernelSU/APatch). The overflow menu has **Hide launcher icon**, which removes the app icon without breaking access from LSPosed/Vector. After changing a toggle, force-stop Camera and open it again.
 
