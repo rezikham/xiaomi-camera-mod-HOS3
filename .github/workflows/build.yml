@@ -49,9 +49,9 @@ jobs:
         # Use the versionCode (not the raw CI run number) in versionName and APK filenames
         # so the file name always matches what Android shows in App info.
         if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-          # Stable release: the tag is the version, with no CI suffix.
+          # Stable release: tag is the version, versionCode includes CI run for uniqueness
           VERSION_NAME_CAMERAMOD="${GITHUB_REF_NAME#v}"
-          VERSION_CODE_CAMERAMOD=$((BASE_VERSIONCODE_CAMERAMOD * 100))
+          VERSION_CODE_CAMERAMOD=$((BASE_VERSIONCODE_CAMERAMOD * 100 + CI_NUM))
         else
           VERSION_CODE_CAMERAMOD=$((BASE_VERSIONCODE_CAMERAMOD * 100 + CI_NUM))
           VERSION_NAME_CAMERAMOD="${BASE_VERSION_CAMERAMOD}-${VERSION_CODE_CAMERAMOD}"
