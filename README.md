@@ -118,6 +118,26 @@ HyperCameraMod: the Leica Essential style list is not one this module knows
 HyperCameraMod: remote preferences are not available: ...
 ```
 
+### Collect a diagnostic file
+
+Two helpers live in [`tools/`](tools):
+
+- **`tools/hcm-log.sh`** runs on the phone (Termux or any root shell). It collects the versions, the module's stored toggles and the Camera/module log into one text file:
+
+  ```sh
+  su -c "sh /sdcard/Download/hcm-log.sh"
+  ```
+
+  Output: `/sdcard/Download/hcm-log-<timestamp>.txt`. Add `--no-restart` to capture what just happened instead of restarting Camera.
+
+- **`tools/pull_camera_log.sh`** runs on a computer with adb and writes the same kind of file:
+
+  ```sh
+  tools/pull_camera_log.sh -s <serial>
+  ```
+
+  Output: `logs/<serial>-<device>-<timestamp>.txt` (override with `-o`).
+
 When reporting a problem, include the phone model, HyperOS version, Camera version (for example `6.7.000500.0`), and these log lines. If a layout does not match, the `does not match` line names the class or field that is missing, which is what a new profile needs.
 
 ## Changelog
