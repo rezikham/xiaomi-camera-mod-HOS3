@@ -7,7 +7,9 @@ android {
     compileSdk = 37
     buildToolsVersion = "37.0.0"
 
-    // Version from CI: -PversionName=1.0.0-19 -PversionCode=119
+    // Version from CI: -PversionName=1.0.0 -PversionCode=100 (first run)
+    // Stable: versionName=1.0.0, versionCode=100+run_number
+    // CI: versionName=1.0.0-<versionCode>, versionCode=100+run_number
     val ciVersionName = project.findProperty("versionName")?.toString() ?: "1.0.0"
     val ciVersionCode = project.findProperty("versionCode")?.toString()?.toIntOrNull() ?: 100
 
