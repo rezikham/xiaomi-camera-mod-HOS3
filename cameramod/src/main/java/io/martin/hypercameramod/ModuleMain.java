@@ -476,25 +476,48 @@ public class ModuleMain extends XposedModule {
         if (blurRadiusHooked) {
             return;
         }
+        boolean anyHooked = false;
+        // 1) Hook BlurBackgroundView.setBlurRadius (legacy path, values 30/66)
         try {
-            // Hook BlurBackgroundView.setBlurRadius to cap blurRadius (preview only)
             Class<?> blurClass = Class.forName("com.xiaomi.camera.ui.blur.BlurBackgroundView", false, loader);
             Method setBlur = blurClass.getDeclaredMethod("setBlurRadius", int.class);
             setBlur.setAccessible(true);
-
             hook(setBlur).intercept(chain -> {
-                // Cap blurRadius at 100 (values up to 183 seen causing slow preview)
                 int blurRadius = (Integer) chain.getArg(0);
                 if (blurRadius > 100) {
-                    log(Log.INFO, TAG, "capped blurRadius " + blurRadius + " -> 100");
+                    log(Log.INFO, TAG, "capped BlurBackgroundView blurRadius " + blurRadius + " -> 100");
                     return chain.proceed(new Object[]{100});
                 }
                 return chain.proceed();
             });
-            blurRadiusHooked = true;
+            anyHooked = true;
             log(Log.INFO, TAG, "hooked BlurBackgroundView.setBlurRadius (preview blur radius cap)");
         } catch (Throwable t) {
-            log(Log.WARN, TAG, "cannot hook BlurBackgroundView: " + t);
+            log(Log.DEBUG, TAG, "BlurBackgroundView not found: " + t.getMessage());
+        }
+        // 2) Hook RenderEffect.createBlurEffect (modern path, values 150/160)
+        try {
+            Class<?> renderEffectClass = Class.forName("android.graphics.RenderEffect");
+            Method createBlur1 = renderEffectClass.getDeclaredMethod("createBlurEffect", float.class, float.class, Class.forName("android.graphics.Shader$TileMode"));
+            createBlur1.setAccessible(true);
+            hook(createBlur1).intercept(chain -> {
+                float radiusX = (Float) chain.getArg(0);
+                float radiusY = (Float) chain.getArg(1);
+                if (radiusX > 100 || radiusY > 100) {
+                    float cappedX = Math.min(radiusX, 100);
+                    float cappedY = Math.min(radiusY, 100);
+                    log(Log.INFO, TAG, "capped RenderEffect.createBlurEffect " + radiusX + "/" + radiusY + " -> " + cappedX + "/" + cappedY);
+                    return chain.proceed(new Object[]{cappedX, cappedY, chain.getArg(2)});
+                }
+                return chain.proceed();
+            });
+            anyHooked = true;
+            log(Log.INFO, TAG, "hooked RenderEffect.createBlurEffect (preview blur radius cap)");
+        } catch (Throwable t) {
+            log(Log.DEBUG, TAG, "RenderEffect.createBlurEffect not hookable: " + t.getMessage());
+        }
+        if (anyHooked) {
+            blurRadiusHooked = true;
         }
     }
 
