@@ -514,35 +514,31 @@ public class ModuleMain extends XposedModule {
     }
 
     // ---- 2c. Cap excessive blur radius for portrait preview (HyperOS 3 / 14 Ultra) -------------
-    // BlurBackgroundView is a UI View (com.android.camera.ui) used for the live preview's
+    // BlurBackgroundView is a UI View (com.xiaomi.camera.ui.blur) used for the live preview's
     // background blur rendering. It does NOT affect the final captured image processing.
-    // The original value 241 caused 60fps blur rendering lag in the preview; 150 is smooth
-    // and visually indistinguishable for the preview.
+    // Values seen in code: 30, 66; log showed 183 (from resource dimension). Cap at 100.
 
     private void installBlurRadiusHook(ClassLoader loader) {
         if (blurRadiusHooked) {
             return;
         }
         try {
-            // Hook BlurBackgroundView.makeBackgroundImage to cap blurRadius (preview only)
-            Class<?> blurClass = Class.forName("com.android.camera.ui.BlurBackgroundView", false, loader);
-            Method makeBg = blurClass.getDeclaredMethod("makeBackgroundImage", int.class, int.class, float.class);
-            makeBg.setAccessible(true);
+            // Hook BlurBackgroundView.setBlurRadius to cap blurRadius (preview only)
+            Class<?> blurClass = Class.forName("com.xiaomi.camera.ui.blur.BlurBackgroundView", false, loader);
+            Method setBlur = blurClass.getDeclaredMethod("setBlurRadius", int.class);
+            setBlur.setAccessible(true);
 
-            hook(makeBg).intercept(chain -> {
-                // Cap blurRadius at 150 (was 241 causing slow preview)
+            hook(setBlur).intercept(chain -> {
+                // Cap blurRadius at 100 (values up to 183 seen causing slow preview)
                 int blurRadius = (Integer) chain.getArg(0);
-                if (blurRadius > 150) {
-                    Object[] args = new Object[3];
-                    args[0] = 150;
-                    args[1] = chain.getArg(1);
-                    args[2] = chain.getArg(2);
-                    return chain.proceed(args);
+                if (blurRadius > 100) {
+                    log(Log.INFO, TAG, "capped blurRadius " + blurRadius + " -> 100");
+                    return chain.proceed(new Object[]{100});
                 }
                 return chain.proceed();
             });
             blurRadiusHooked = true;
-            log(Log.INFO, TAG, "hooked BlurBackgroundView.makeBackgroundImage (preview blur radius cap)");
+            log(Log.INFO, TAG, "hooked BlurBackgroundView.setBlurRadius (preview blur radius cap)");
         } catch (Throwable t) {
             log(Log.WARN, TAG, "cannot hook BlurBackgroundView: " + t);
         }
