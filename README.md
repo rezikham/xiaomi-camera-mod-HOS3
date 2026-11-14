@@ -69,7 +69,7 @@ These are firmware limitations; no module can add the missing HAL processing. Or
 
 **CMOS is off by default.** The Xiaomi 17 Ultra's hardware layer (`camera.qcom.core.so`, `com.qti.chi.override.so`) has the Leica Essential processing for M3 and M9 only. A CMOS shot comes back as an ordinary picture, without the Leica processing and without the `legendmode` tag the Gallery uses for its LEICA button. Enable it with the CMOS (M10R) toggle (or `camera.feature.m10r=1`) only to experiment, or on a phone whose firmware supports it.
 
-On the **18 Pro Max** the CMOS style is native: the HAL ships `LegendM10R`, the M10R Leica filter parameters and an M10R pipeline, and Camera 6.8 adds the M10R item and defaults to it. The toggle is not needed on that phone; see [`docs/18-pro-max-hal/02-legend-m10r.md`](docs/18-pro-max-hal/02-legend-m10r.md).
+On the **18 Pro Max** the CMOS style is native: the HAL ships `LegendM10R`, the M10R Leica filter parameters, an M10R pipeline and four dedicated M9/M10R style-transfer models, and Camera 6.8 adds the M10R item and defaults to it. The toggle is not needed on that phone; see [`docs/18-pro-max-hal/02-legend-m10r.md`](docs/18-pro-max-hal/02-legend-m10r.md).
 
 ## Settings
 
