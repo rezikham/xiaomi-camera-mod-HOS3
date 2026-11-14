@@ -4,10 +4,26 @@ on:
   push:
     # Development builds (CI-Release) come from main only. Feature branches build on
     # pull_request, not on every push, so CI-Release always describes main.
+    # Only app changes rebuild: docs, README, tools and other repo files are skipped.
+    # Path filters are not evaluated for tag pushes, so a v* tag always builds.
     branches: [ main ]
     tags: [ 'v*' ]
+    paths:
+      - 'src/**'
+      - 'gradle/**'
+      - '*.gradle.kts'
+      - 'gradle.properties'
+      - 'proguard-rules.pro'
+      - '.github/workflows/build.yml'
   pull_request:
     branches: [ main ]
+    paths:
+      - 'src/**'
+      - 'gradle/**'
+      - '*.gradle.kts'
+      - 'gradle.properties'
+      - 'proguard-rules.pro'
+      - '.github/workflows/build.yml'
   workflow_dispatch:
 
 jobs:
