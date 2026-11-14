@@ -79,10 +79,14 @@ public class ModuleMain extends XposedModule {
     private static final String STYLE_MASTER = "0";
     // In Portrait the same component lists Original, Master and Leica. Original portrait runs the
     // algorithm-up SAT preview session, whose Xiaomi preview-bokeh engine never returns a frame on
-    // this hardware layer: the camera waits on a semaphore for 5780 ms, the preview drops to about
-    // 0.15 fps and the vendor camera provider eventually aborts. Photo mode keeps the Original
-    // colour style; Portrait lists Master and Leica only.
+    // the 14 Ultra hardware layer: the camera waits on a semaphore for 5780 ms, the preview drops
+    // to about 0.15 fps and the vendor camera provider eventually aborts. Photo mode keeps the
+    // Original colour style. On the phones whose hardware layer implements the Original portrait
+    // preview (17 Ultra, 18 Pro Max) the style stays in the list; elsewhere it is removed and the
+    // settings toggle decides (see originalPortraitEnabled()).
     private static final int MODE_PORTRAIT = 171;
+    private static final String ORIGINAL_PORTRAIT_KEY = "original_portrait_enabled";
+    private static final String ORIGINAL_PORTRAIT_PROP = "camera.feature.original_portrait";
     private static final int ASSET_ORIGINAL_BADGE = 3;
     private static volatile android.content.pm.ApplicationInfo moduleInfo;
 
@@ -113,6 +117,8 @@ public class ModuleMain extends XposedModule {
     private volatile boolean assetsHooked;
     private volatile boolean styleHooked;
     private volatile boolean textHooked;
+    // -1 = not read yet, 0 = off, 1 = on. Read once per Camera process.
+    private volatile int originalPortraitState = -1;
 
     @Override
     public void onPackageLoaded(PackageLoadedParam param) {
@@ -547,6 +553,35 @@ public class ModuleMain extends XposedModule {
         return propertyOn(M10R_ENABLE_KEY);
     }
 
+    // On by default only on the phones whose hardware layer can run the Original portrait preview;
+    // off on the 14 Ultra, where it deadlocks the preview (see MODE_PORTRAIT). The settings toggle
+    // wins, then the camera.feature.original_portrait system property.
+    private boolean originalPortraitEnabled() {
+        int state = originalPortraitState;
+        if (state >= 0) {
+            return state == 1;
+        }
+        boolean enabled;
+        try {
+            android.content.SharedPreferences p = getRemotePreferences("hypercameramod");
+            if (p != null && p.contains(ORIGINAL_PORTRAIT_KEY)) {
+                enabled = p.getBoolean(ORIGINAL_PORTRAIT_KEY,
+                        DeviceSupport.originalPortraitDefault());
+            } else {
+                String value = property(ORIGINAL_PORTRAIT_PROP);
+                enabled = !value.isEmpty() ? "1".equals(value)
+                        : DeviceSupport.originalPortraitDefault();
+            }
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot read " + ORIGINAL_PORTRAIT_KEY + ": " + t);
+            enabled = DeviceSupport.originalPortraitDefault();
+        }
+        originalPortraitState = enabled ? 1 : 0;
+        log(Log.INFO, TAG, "Original portrait style " + (enabled ? "enabled" : "disabled")
+                + " on " + DeviceSupport.modelName());
+        return enabled;
+    }
+
     private static List<String> keys(List<?> items, Field key) throws IllegalAccessException {
         List<String> out = new java.util.ArrayList<>();
         for (Object item : items) {
@@ -567,12 +602,21 @@ public class ModuleMain extends XposedModule {
     }
 
     private static boolean propertyOn(String key) {
+        return "1".equals(property(key, "0"));
+    }
+
+    private static String property(String key) {
+        return property(key, "");
+    }
+
+    private static String property(String key, String fallback) {
         try {
             Class<?> props = Class.forName("android.os.SystemProperties");
-            return "1".equals(props.getMethod("get", String.class, String.class)
-                    .invoke(null, key, "0"));
+            Object value = props.getMethod("get", String.class, String.class)
+                    .invoke(null, key, fallback);
+            return value instanceof String string ? string : fallback;
         } catch (Throwable t) {
-            return false;
+            return fallback;
         }
     }
 
@@ -802,7 +846,7 @@ public class ModuleMain extends XposedModule {
                     try {
                         if (modeField != null && result instanceof List<?> items
                                 && modeField.getInt(chain.getThisObject()) == MODE_PORTRAIT
-                               ) {
+                                && !originalPortraitEnabled()) {
                             List<Object> kept = new ArrayList<>(items.size());
                             for (Object entry : items) {
                                 if (!STYLE_ORIGINAL.equals(key.get(entry))) {
@@ -825,7 +869,7 @@ public class ModuleMain extends XposedModule {
                     Object result = chain.proceed();
                     try {
                         if (chain.getArg(0) instanceof Integer mode && mode == MODE_PORTRAIT
-                                && STYLE_ORIGINAL.equals(result)) {
+                                && STYLE_ORIGINAL.equals(result) && !originalPortraitEnabled()) {
                             log(Log.INFO, TAG, "moved the portrait style from Original to Master");
                             return STYLE_MASTER;
                         }

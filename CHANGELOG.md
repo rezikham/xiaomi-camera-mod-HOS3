@@ -2,6 +2,17 @@
 
 All notable changes to HyperCameraMod. The module follows a simple scheme: stable releases are tagged `v<version>`, development builds are published as the `CI-Release` pre-release.
 
+## [Unreleased]
+
+### Added
+
+- **Original Portrait Style** toggle. It starts on for the Xiaomi 17 Ultra and 18 Pro Max and off for the 14 Ultra (chosen from the phone model when the settings app first opens) and can be overridden on any phone. It has a `camera.feature.original_portrait` system-property fallback.
+- A **feature availability** table in the README, plus a note that M3, M9, M10R and Original portrait cannot work on the 14 Ultra because its camera hardware layer does not implement the required processing.
+
+### Fixed
+
+- **Original portrait froze the preview on the 14 Ultra** (0.1 fps, HAL semaphore timeouts and a vendor camera-provider abort). Original is now removed from the Portrait style picker by default on that phone and a saved value falls back to Master. Original colour in Photo is unchanged, and Portrait keeps Master and Leica.
+
 ## [1.0.0] - 2026-11-14
 
 First stable release of this fork, verified on a **Xiaomi 14 Ultra** running **HyperOS 3.0.304MIXMC09** with **Xiaomi Camera 6.7.000280.0** (the 17 Ultra camera build, installed as a normal app update).

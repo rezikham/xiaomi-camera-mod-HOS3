@@ -21,10 +21,16 @@ public class SettingsActivity extends AppCompatActivity {
 
     // The camera process reads these through libxposed remote preferences.
     private static final String PREFS_GROUP = "hypercameramod";
+    private static final String ORIGINAL_PORTRAIT_KEY = "original_portrait_enabled";
     private static final String[] SETTING_KEYS = {
-            "essential_mode_enabled", "leica_ui_enabled", "m10r_enabled", "extra_filters_enabled"
+            "essential_mode_enabled", "leica_ui_enabled", "m10r_enabled", "extra_filters_enabled",
+            ORIGINAL_PORTRAIT_KEY
     };
-    private static final boolean[] SETTING_DEFAULTS = {true, true, false, true};
+    // Original portrait is only offered by default on phones whose camera hardware layer can
+    // preview it (17 Ultra, 18 Pro Max); on the 14 Ultra it deadlocks the preview.
+    private static final boolean[] SETTING_DEFAULTS = {
+            true, true, false, true, DeviceSupport.originalPortraitDefault()
+    };
 
     private SharedPreferences modulePrefs;
     private boolean prefListenerRegistered;
@@ -52,6 +58,7 @@ public class SettingsActivity extends AppCompatActivity {
         }
         toolbar.setNavigationOnClickListener(v -> finish());
 
+        seedDeviceDefaults();
         connectModuleSettings();
 
         if (savedInstanceState == null) {
@@ -59,6 +66,17 @@ public class SettingsActivity extends AppCompatActivity {
                 .beginTransaction()
                 .replace(R.id.settings_container, new SettingsFragment())
                 .commit();
+        }
+    }
+
+    // Write the device-dependent defaults once, so the settings screen shows the same value the
+    // hooks use when the app has never been opened on this phone.
+    private void seedDeviceDefaults() {
+        SharedPreferences local = PreferenceManager.getDefaultSharedPreferences(this);
+        if (!local.contains(ORIGINAL_PORTRAIT_KEY)) {
+            local.edit()
+                    .putBoolean(ORIGINAL_PORTRAIT_KEY, DeviceSupport.originalPortraitDefault())
+                    .apply();
         }
     }
 

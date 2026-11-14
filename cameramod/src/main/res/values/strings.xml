@@ -16,6 +16,10 @@
     <string name="pref_m10r_summary">Add the CMOS (M10R) style to the photography styles picker. Requires Leica UI enabled.</string>
     <string name="pref_m10r_key">m10r_enabled</string>
 
+    <string name="pref_original_portrait_title">Original Portrait Style</string>
+    <string name="pref_original_portrait_summary">Show Original in the Portrait style picker. On by default on the 17 Ultra and 18 Pro Max. On the 14 Ultra the camera hardware layer cannot finish the Original portrait preview session, so the preview freezes (it stays off by default there). Original colour in Photo is not affected.</string>
+    <string name="pref_original_portrait_key">original_portrait_enabled</string>
+
     <string name="pref_extra_filters_title">Extra Film Filters</string>
     <string name="pref_extra_filters_summary">Enable extra film simulation filters: R600, P100F, F-50, KC64, KP160.</string>
     <string name="pref_extra_filters_key">extra_filters_enabled</string>

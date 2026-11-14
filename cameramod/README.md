@@ -14,13 +14,33 @@ An LSPosed/Vector module (libxposed API 101-102) that turns on features the Xiao
 | Feature | What changes in the camera |
 | ------- | -------------------------- |
 | Palette and Parameters | The filter edit panel gets the Palette tab and the full Parameters list (tone, saturation, cold/warm, cyan/magenta, noise, soft light, texture, vignette), plus saving, sharing and importing filter presets. A preset saved in the Leica UI is shown in the filter strip by its thumbnail only (the Leica UI cannot show a text name for it). The two tabs are made as wide as their labels need (the camera makes them 60 dp wide, which fits two Chinese words, not "Palette" and "Parameters"). |
-| Original colour style | "Original" appears next to Leica Authentic and Leica Vibrant in the photography style picker. In the Leica UI it gets its own "ORIG" badge, because the camera would otherwise draw it as the Authentic badge. |
+| Original colour style | "Original" appears next to Leica Authentic and Leica Vibrant in the photography style picker. In the Leica UI it gets its own "ORIG" badge, because the camera would otherwise draw it as the Authentic badge. In Portrait it is listed only where the hardware layer can preview it; the **Original Portrait Style** toggle overrides that (see Feature availability). |
 | Leica Essential mode in the standard UI | The Leica Essential mode (the M3/M9 camera) is added to the standard UI's mode strip, which only the Leica UI has. See Use. |
 | Leica Essential CMOS (M10R), off by default | "CMOS" is added to the Leica Essential style list, between B&W (M3) and CCD (M9), once enabled (see Use). |
 | Film filters | Adds R600, P100F, F-50 (shown in the standard panel as "Reversal") and KC64 ("Orchid") to the standard filter panel. In the Leica UI, adds all five film filters (R600, P100F, F-50, KC64 and KP160) to the Looks panel. |
 | Settings app | A small settings screen for the toggles above, with a Force Stop Camera button and a Hide launcher icon option. Open it from the app drawer or from the module entry in LSPosed/Vector. |
 
 Original colour style and CMOS only change the photo if the phone's camera hardware layer implements them. The camera sends the chosen style to the hardware layer; the module only makes the choice available.
+
+### Feature availability
+
+The module can only expose what the phone's camera hardware layer (`camera.qcom.so`, CHI) implements. It cannot add missing processing.
+
+| Feature | Xiaomi 14 Ultra | Xiaomi 17 Ultra | Xiaomi 18 Pro Max |
+| ------- | --------------- | --------------- | ----------------- |
+| Palette and Parameters | Yes | Yes | Yes |
+| Film filters | Yes | Yes | Yes |
+| Original colour style (Photo) | Yes | Yes | Yes |
+| Original portrait style | **No** — HAL limitation | Yes (on by default) | Yes (on by default) |
+| Leica Essential (M3/M9) | **No** — HAL limitation | Yes | Yes |
+| CMOS (M10R) | **No** — HAL limitation | Experimental — the HAL has no M10R processing | Not verified |
+
+**14 Ultra HAL limitation.** On the 14 Ultra, M3, M9, M10R and Original portrait cannot work, because the camera hardware layer does not implement the processing they need:
+
+- **Original portrait** starts an algorithm-up SAT preview session. The Xiaomi preview-bokeh engine (`libmialgo_mc_bokeh_cdsp_skel.so`) never returns a frame, the camera waits 5780 ms on a semaphore (`ChiX WaitForSemaphore() ... timed out`), the preview drops to about 0.1 fps, and the vendor camera provider eventually aborts (`ExtensionModule::TriggerRecovery`). The module therefore removes Original from the Portrait style picker on the 14 Ultra by default and moves a saved value back to Master. The **Original Portrait Style** toggle is off there; turning it on only restores the freeze.
+- **M3/M9 (Leica Essential)** need the Leica Essential processing available on the 17 Ultra-class hardware layer. The 14 Ultra HAL has no M10R processing either, so a CMOS shot comes back as an ordinary picture, without Leica processing and without the `legendmode` tag Gallery uses for its LEICA button.
+
+These are firmware limitations; no module can add the missing HAL processing. Original colour in Photo is unaffected and works on all three phones.
 
 **CMOS is off by default.** The Xiaomi 17 Ultra's hardware layer (`camera.qcom.core.so`, `com.qti.chi.override.so`) has the Leica Essential processing for M3 and M9 only. A CMOS shot comes back as an ordinary picture, without the Leica processing and without the `legendmode` tag the Gallery uses for its LEICA button. Enable it with the CMOS (M10R) toggle (or `camera.feature.m10r=1`) only to experiment, or on a phone whose firmware supports it.
 
@@ -41,7 +61,7 @@ When the Leica Essential list is not one the module knows, it leaves the camera 
 ## How it works
 
 1. **Palette and Parameters.** The camera reads `camera.feature.styleVersion` through `android.os.SystemProperties` and builds the full Parameters list when it is 2 or more. The module returns 2 for that key when the real value is lower. The same effect without the module is `setprop camera.feature.styleVersion 2` as root, which resets on reboot.
-2. **Original colour style.** The camera shows Original only when bit 3 of `xiaomi.capabilities.stylizationTypeMask` is set. The module sets the bit when the camera reads the characteristic.
+2. **Original colour style.** The camera shows Original only when bit 3 of `xiaomi.capabilities.stylizationTypeMask` is set. The module sets the bit when the camera reads the characteristic. Portrait uses the same component but adds Original to its style list; when Original portrait is not supported (or the toggle is off), the module drops that entry and moves a saved value `2` back to Master (`0`).
 3. **CMOS.** The camera's Leica Essential list is built in `s2.A` (HyperOS 4) or `s2.B` (HyperOS 3). In this build the CMOS entry is compiled out, along with three of its images. The module appends the entry right after the camera builds that list (not when it is read: the style picker keeps the list and counts its items once, so growing it later crashes the picker); the item class has no constructor in this build, so the instance is made without one, and answers the three image ids from its own assets. The new entry starts as a copy of the CCD (M9) entry, so the fields the Leica UI and the standard UI fill in are there, with the CMOS strings and images swapped in. The CMOS title string is also missing from this build, so the module supplies it ("Modern vintage", in the phone's language where the camera had a translation).
 4. **Original badge.** The Leica UI picks a badge from a mapping that knows only two styles, so Original shares the Authentic badge. The module swaps the three image ids of the Original item for its own vector badge, and does the same for the badge the camera shows in the top bar for the chosen style, only when the camera picked an Authentic Leica UI drawable for Original.
 5. **Film filters.** The film LUTs are already in the camera app; the module adds the missing filters to the camera's filter list when it is built, in the standard panel and in the Leica UI. The filter list, item and registry classes are found by a known layout ("profile") per camera build.
@@ -52,7 +72,7 @@ When the Leica Essential list is not one the module knows, it leaves the camera 
 2. Open **HyperCameraMod** settings from the app drawer or from the module entry in LSPosed/Vector.
 3. Set the toggles, then use **Force Stop Camera** in the settings toolbar (root is required; grant it in Magisk/KernelSU/APatch) and open Camera again.
 
-The settings app has four toggles: Leica Essential mode in the standard UI (on by default), Leica UI / Looks (on), CMOS (M10R) (off) and Extra Film Filters (on). The overflow menu has **Hide launcher icon**; when the icon is hidden, settings stay reachable from LSPosed/Vector.
+The settings app has five toggles: Leica Essential mode in the standard UI (on by default), Leica UI / Looks (on), CMOS (M10R) (off), Extra Film Filters (on) and Original Portrait Style (on by default on the 17 Ultra and 18 Pro Max, off on the 14 Ultra). The Original Portrait Style default is chosen from the phone model when the app first opens; the toggle can override it on any phone. The overflow menu has **Hide launcher icon**; when the icon is hidden, settings stay reachable from LSPosed/Vector.
 
 The system properties still work as a fallback. To add the CMOS entry without the settings app, run as root and force-stop Camera:
 
@@ -61,6 +81,14 @@ su -c "setprop camera.feature.m10r 1"
 ```
 
 It resets on reboot (set it to 0 or reboot to turn it off). To keep it, run the command from a boot script such as Magisk's `service.sh`.
+
+The Original portrait toggle has a property too. It is only useful on hardware that can preview it; on the 14 Ultra it restores the freeze:
+
+```bash
+su -c "setprop camera.feature.original_portrait 1"
+```
+
+It also resets on reboot.
 
 The Leica Essential mode is added to the standard UI's mode strip, in front of "More". It is on by default; turn it off with the settings toggle, or as root:
 
