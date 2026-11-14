@@ -31,9 +31,11 @@ Package: `io.rezikham.hypercameramod`
 | ------ | ---------------- | -- | ------ | -------- |
 | Xiaomi 14 Ultra | `24031PN0DC` / aurora | HyperOS `3.0.304.0.WNAMIXM` (Android 16) | `6.7.000280.0` | Original Portrait toggle, film filters |
 | Xiaomi 14 Pro Ti | `23116PN5BC` / shennong | HyperOS `3.0.310.0.WNBCNXM` (Android 16) | `6.4.000430.0` | film filters |
-| Xiaomi 18 Pro Max | `M154FF` / madrid | HyperOS `4.0.29.0.XEOCNXM` (Android 17) | `6.8.002230.0` | film filters (experimental, pending verification) |
+| Xiaomi 18 Pro Max | `M154FF` / madrid | HyperOS `4.0.29.0.XEOCNXM` (Android 17) | `6.8.002230.0` | film filters (static, needs a device log); Legend/M10R native |
 
 The 17 Ultra results below come from the upstream project (HyperOS 4, Camera 6.7); this fork has not re-tested that phone.
+
+The 18 Pro Max HAL analysis — provider/device versions, Legend/M10R processing, metadata tags, pipelines and film LUTs — is in [`docs/18-pro-max-hal/`](docs/18-pro-max-hal/README.md).
 
 ## Camera version coverage
 
@@ -41,7 +43,7 @@ The 17 Ultra results below come from the upstream project (HyperOS 4, Camera 6.7
 | ------ | -------- |
 | 6.7 | All module features. |
 | 6.4 | Film filters only. The build has no style lists or mode order to hook, so the Original colour/portrait, Leica Essential (M3/M9) and CMOS (M10R) toggles have no effect. |
-| 6.8 | Film filters only, experimental. The layout was derived statically from the APK and still needs device verification; if a film is missing, pull a log (see [Logs](#logs)). |
+| 6.8 | Film filters, experimental. The layout was derived statically from the APK and still needs device verification; if a film is missing, pull a log (see [Logs](#logs)). On the 18 Pro Max the Leica Essential styles (M3/M9) and CMOS (M10R) are native in Camera 6.8, so the module does not inject them there. |
 
 **Palette and Parameters on 6.4.** The module turns that panel on by raising `camera.feature.styleVersion` to 2. Camera 6.4 does not read that property, so the hook has no effect on a 6.4 build; the panel is only there if the 6.4 camera shows it by itself. On 6.4 the module's support is limited to the film filters.
 
@@ -56,7 +58,7 @@ The module can only expose what the phone's camera hardware layer (`camera.qcom.
 | Original colour style (Photo) | ✅ | ✅ | ✅ |
 | Original portrait style | ⚠️ Opt-in — may freeze the preview | ✅ (on by default) | ✅ (on by default) |
 | Leica Essential (M3/M9) | ❌ HAL limitation | ✅ | ✅ |
-| CMOS (M10R) | ❌ HAL limitation | Experimental — the HAL has no M10R processing | Not verified |
+| CMOS (M10R) | ❌ HAL limitation | Experimental — the HAL has no M10R processing | ✅ Native (HAL + Camera 6.8) |
 
 **14 Ultra HAL limitation.** M3, M9, M10R and Original portrait cannot work on the 14 Ultra because its camera hardware layer does not implement the processing they need:
 
@@ -66,6 +68,8 @@ The module can only expose what the phone's camera hardware layer (`camera.qcom.
 These are firmware limitations; no module can add the missing HAL processing. Original colour in Photo is unaffected.
 
 **CMOS is off by default.** The Xiaomi 17 Ultra's hardware layer (`camera.qcom.core.so`, `com.qti.chi.override.so`) has the Leica Essential processing for M3 and M9 only. A CMOS shot comes back as an ordinary picture, without the Leica processing and without the `legendmode` tag the Gallery uses for its LEICA button. Enable it with the CMOS (M10R) toggle (or `camera.feature.m10r=1`) only to experiment, or on a phone whose firmware supports it.
+
+On the **18 Pro Max** the CMOS style is native: the HAL ships `LegendM10R`, the M10R Leica filter parameters and an M10R pipeline, and Camera 6.8 adds the M10R item and defaults to it. The toggle is not needed on that phone; see [`docs/18-pro-max-hal/02-legend-m10r.md`](docs/18-pro-max-hal/02-legend-m10r.md).
 
 ## Settings
 
