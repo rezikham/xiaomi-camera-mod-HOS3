@@ -20,8 +20,9 @@ Package: `io.rezikham.hypercameramod`
 
 ## Requirements
 
-- A Xiaomi phone on HyperOS 3 or HyperOS 4 with Xiaomi Camera 6.7. Tested on the Xiaomi 14 Ultra (HyperOS 3) and the Xiaomi 17 Ultra (HyperOS 4).
+- A Xiaomi phone on HyperOS 3 or HyperOS 4 with Xiaomi Camera 6.4 or 6.7. Tested on the Xiaomi 14 Ultra (HyperOS 3) and the Xiaomi 17 Ultra (HyperOS 4).
 - The Original Portrait Style toggle and the portrait picker were verified on the Xiaomi 14 Ultra `24031PN0DC` / `aurora`, HyperOS `3.0.304.0.WNAMIXM` (Android 16), Xiaomi Camera `6.7.000280.0`.
+- Film filters were verified on the Xiaomi 14 Pro Ti `23116PN5BC` / `shennong`, HyperOS `3.0.310.0.WNBCNXM` (Android 16), Xiaomi Camera `6.4.000430.0`.
 - Root with Magisk, KernelSU or APatch. Only the settings app's **Force Stop Camera** button needs root.
 - LSPosed or Vector with libxposed API 101/102. The settings-to-camera bridge uses API 102; on API 101 the toggles do not reach Camera, but the hooks and the system-property fallbacks still work.
 - Module scope: **Camera** only (`com.android.camera`).

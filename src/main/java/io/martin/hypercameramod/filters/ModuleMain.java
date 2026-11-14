@@ -249,11 +249,28 @@ public class ModuleMain extends XposedModule {
             create.setAccessible(true);
             Field category = field(item, "a");
             Field ordinal = field(item, "b");
-            Class<?> strings = Class.forName("Z9.f", false, loader);
+            // The camera's string-id class is R8-renamed per build (Z9.f on the 14 Ultra's
+            // 6.4.000430.0, something else on the 14 Pro's build of the same version). The
+            // cloudfilter R class is not obfuscated and exists in every build seen so far,
+            // with the same color_effect_entry_* fields.
+            Class<?> strings = null;
+            for (String name : new String[]{"Z9.f", "com.xiaomi.camera.cloudfilter.R$string"}) {
+                try {
+                    strings = Class.forName(name, false, loader);
+                    break;
+                } catch (ClassNotFoundException ignored) {
+                    // try the next candidate
+                }
+            }
+            if (strings == null) {
+                throw new ClassNotFoundException("Z9.f / com.xiaomi.camera.cloudfilter.R$string");
+            }
+            trace(stage + ": string ids from " + strings.getName());
+            final Class<?> stringsClass = strings;
             // The camera has no class for its image ids (they are inlined), so the images are
             // looked up by name when the lists are built.
             for (Film film : FILMS) {
-                strings.getField(film.stringId());
+                stringsClass.getField(film.stringId());
             }
             hook(lists).intercept(chain -> {
                 Object result = chain.proceed();
@@ -265,7 +282,7 @@ public class ModuleMain extends XposedModule {
                     }
                     if (asked instanceof Integer c && (c == LEGACY_CATEGORY
                             || c == LEGACY_PANEL_CATEGORY) && result instanceof List<?> list) {
-                        addLegacyFilms(list, c, create, category, ordinal, strings);
+                        addLegacyFilms(list, c, create, category, ordinal, stringsClass);
                         if (!list.isEmpty()) {
                             debugKeys("filter list category " + c + " (ordinals)", list, ordinal);
                         }
@@ -294,16 +311,38 @@ public class ModuleMain extends XposedModule {
     // out. When the films are missing after that, build it again from the list alone.
     private void installLegacyComponentHook(ClassLoader loader) {
         try {
-            Class<?> cls = Class.forName("f0.M", false, loader);
-            Method build = cls.getDeclaredMethod("mapToCloudItems", int.class, Map.class);
-            Method init = cls.getDeclaredMethod("initItems", int.class);
-            Method items = cls.getMethod("getItems");
+            // The filter component moved between builds of the same camera version: f0.M on the
+            // 14 Ultra's 6.4.000430.0, f0.L on the 14 Pro's. Both expose the same methods, so
+            // pick the first candidate that has them.
+            Class<?> cls = null;
+            Method build = null;
+            Method init = null;
+            Method items = null;
+            for (String name : new String[]{"f0.M", "f0.L"}) {
+                try {
+                    Class<?> candidate = Class.forName(name, false, loader);
+                    build = candidate.getDeclaredMethod("mapToCloudItems", int.class, Map.class);
+                    init = candidate.getDeclaredMethod("initItems", int.class);
+                    items = candidate.getMethod("getItems");
+                    cls = candidate;
+                    break;
+                } catch (Throwable ignored) {
+                    // try the next candidate
+                }
+            }
+            if (cls == null) {
+                throw new NoSuchMethodException("filter component (f0.M / f0.L)");
+            }
+            final Method componentBuild = build;
+            final Method componentInit = init;
+            final Method componentItems = items;
+            trace("string ids used, filter component is " + cls.getName());
             Class<?> data = Class.forName("com.android.camera.data.data.d", false, loader);
             Field key = field(data, "p");
-            hook(init).intercept(chain -> {
+            hook(componentInit).intercept(chain -> {
                 Object result = chain.proceed();
                 try {
-                    List<?> built = (List<?>) items.invoke(chain.getThisObject());
+                    List<?> built = (List<?>) componentItems.invoke(chain.getThisObject());
                     log(Log.INFO, TAG, "filter component set up for mode " + chain.getArg(0) + ": "
                             + built.size() + " items, " + countLegacyFilms(built, key) + " films");
                 } catch (Throwable t) {
@@ -311,12 +350,12 @@ public class ModuleMain extends XposedModule {
                 }
                 return result;
             });
-            hook(build).intercept(chain -> {
+            hook(componentBuild).intercept(chain -> {
                 Object result = chain.proceed();
                 try {
                     Object mode = chain.getArg(0);
                     Map<?, ?> cloud = (Map<?, ?>) chain.getArg(1);
-                    List<?> built = (List<?>) items.invoke(chain.getThisObject());
+                    List<?> built = (List<?>) componentItems.invoke(chain.getThisObject());
                     boolean hasCloud = cloud != null && cloud.containsKey(mode);
                     int films = countLegacyFilms(built, key);
                     log(Log.INFO, TAG, "filter component for mode " + mode + ": " + built.size()
@@ -332,9 +371,9 @@ public class ModuleMain extends XposedModule {
                             List<Object> merged = new ArrayList<>(built);
                             Map<Object, Object> local = new java.util.concurrent.ConcurrentHashMap<>(cloud);
                             local.remove(mode);
-                            build.invoke(self, mode, local);
+                            componentBuild.invoke(self, mode, local);
                             int added = 0;
-                            for (Object item : (List<?>) items.invoke(self)) {
+                            for (Object item : (List<?>) componentItems.invoke(self)) {
                                 if (isLegacyFilm(item, key)) {
                                     merged.add(item);
                                     added++;
@@ -353,7 +392,7 @@ public class ModuleMain extends XposedModule {
                 }
                 return result;
             });
-            log(Log.INFO, TAG, "hooked f0.M (filter component)");
+            log(Log.INFO, TAG, "hooked " + cls.getName() + " (filter component)");
         } catch (Throwable t) {
             log(Log.WARN, TAG, "cannot hook the filter component: " + t);
         }
