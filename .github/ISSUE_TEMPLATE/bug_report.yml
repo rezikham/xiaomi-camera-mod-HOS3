@@ -1,0 +1,128 @@
+name: Bug Report
+description: Report a bug in HyperCameraMod
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug! Please fill out the sections below.
+
+  - type: input
+    id: device
+    attributes:
+      label: Device Model
+      description: e.g., Xiaomi 14 Ultra, Xiaomi 17 Ultra
+      placeholder: Xiaomi 14 Ultra
+    validations:
+      required: true
+
+  - type: input
+    id: hyperos
+    attributes:
+      label: HyperOS Version
+      description: e.g., OS3.0.304.0.WNAMIXM, OS4.0.5.0
+      placeholder: OS3.0.304.0.WNAMIXM
+    validations:
+      required: true
+
+  - type: input
+    id: camera_version
+    attributes:
+      label: Camera Version
+      description: Find in Settings → Apps → Camera → App info
+      placeholder: 6.7.000500.0
+    validations:
+      required: true
+
+  - type: input
+    id: module_version
+    attributes:
+      label: Module Version
+      description: From HyperCameraMod settings or the APK filename (e.g., 1.0.0-105)
+      placeholder: 1.0.0-105
+    validations:
+      required: true
+
+  - type: dropdown
+    id: framework
+    attributes:
+      label: LSPosed/Vector Version
+      description: Which framework and version are you using?
+      options:
+        - LSPosed 1.9.2 (API 101)
+        - LSPosed 2.x (API 102)
+        - Vector 2.x (API 102)
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: feature
+    attributes:
+      label: Affected Feature
+      options:
+        - Palette & Parameters
+        - Original colour style (Photo)
+        - Original portrait style
+        - Leica Essential mode (standard UI)
+        - Leica Looks panel
+        - CMOS (M10R) style
+        - Film filters
+        - Settings app / toggles
+        - Force Stop Camera button
+        - Hide launcher icon
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened? What did you expect?
+      placeholder: |
+        Clear description of the bug...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      placeholder: |
+        1. Open Camera
+        2. Switch to Portrait mode
+        3. Tap style badge...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs (filter: HyperCameraMod)
+      description: |
+        Clear logcat, reproduce the issue, then dump:
+        ```bash
+        su -c "logcat -c"
+        # reproduce
+        su -c "logcat -d -s HyperCameraMod"
+        ```
+        Paste the relevant lines here.
+      placeholder: |
+        HyperCameraMod: hooked s2.m.getItems (colour styles, layout 6.7)
+        HyperCameraMod: could not remove Original portrait: ...
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have read the README and FAQ
+          required: true
+        - label: I have tried force-stopping Camera and reopening
+          required: true
+        - label: The issue is not already reported
+          required: true

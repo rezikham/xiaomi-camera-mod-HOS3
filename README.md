@@ -1,5 +1,11 @@
 # Xiaomi Camera Mod
 
+[![CI](https://github.com/rezikham/xiaomi-camera-mod-HOS3/actions/workflows/build.yml/badge.svg)](https://github.com/rezikham/xiaomi-camera-mod-HOS3/actions/workflows/build.yml)
+[![Release](https://img.shields.io/github/v/release/rezikham/xiaomi-camera-mod-HOS3?include_prereleases&label=latest%20release)](https://github.com/rezikham/xiaomi-camera-mod-HOS3/releases)
+[![License](https://img.shields.io/github/license/rezikham/xiaomi-camera-mod-HOS3)](LICENSE)
+[![API](https://img.shields.io/badge/libxposed%20API-101%2F102-blue)](https://github.com/LSPosed/libxposed)
+[![Android](https://img.shields.io/badge/Android-8.0%2B-green)](https://developer.android.com/about/versions)
+
 **HyperCameraMod** is an LSPosed/Vector module (libxposed API 101-102) for the Xiaomi Camera on HyperOS. It turns on features the camera already contains but leaves off, and brings back the film filters:
 
 - Palette and Parameters panel

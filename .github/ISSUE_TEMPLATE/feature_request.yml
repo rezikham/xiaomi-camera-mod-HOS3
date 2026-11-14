@@ -1,0 +1,72 @@
+name: Feature Request
+description: Suggest a new feature or enhancement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a feature! Please describe what you'd like to see.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Feature Description
+      description: What feature would you like? What problem does it solve?
+      placeholder: |
+        I'd like to see...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - New camera feature (style, mode, filter, etc.)
+        - Settings UI improvement
+        - Build/CI improvement
+        - Documentation
+        - Compatibility (new device/camera version)
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Use Case
+      description: How would this feature be used? Who benefits?
+      placeholder: |
+        This would help users who...
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Have you considered any alternative solutions or workarounds?
+      placeholder: |
+        Could also be done by...
+    validations:
+      required: false
+
+  - type: input
+    id: device
+    attributes:
+      label: Target Device(s)
+      description: Which device(s) should this work on?
+      placeholder: Xiaomi 14 Ultra, 17 Ultra, 18 Pro Max, etc.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: This feature doesn't already exist (checked README and issues)
+          required: true
+        - label: It's feasible within the module's scope (runtime hooks, no system partition changes)
+          required: true

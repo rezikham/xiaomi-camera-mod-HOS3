@@ -1,0 +1,16 @@
+HyperCameraMod
+Copyright 2024-2026 rezikham
+
+This product includes software developed at
+The Android Open Source Project (http://source.android.com/).
+
+This product includes software from the LSPosed project
+(https://github.com/LSPosed/LSPosed), licensed under GPL-3.0.
+
+This product includes software from libxposed
+(https://github.com/LSPosed/libxposed), licensed under Apache-2.0.
+
+The three CMOS images in src/main/assets/m10r/ are taken from
+Xiaomi Camera and are used under fair use for interoperability purposes.
+
+This is an unofficial community module, not affiliated with Xiaomi or Leica.
