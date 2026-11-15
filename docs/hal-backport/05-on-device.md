@@ -146,7 +146,7 @@ Tested fixes and results:
 | Patch `miexifmgr` offline globals and `catchLogEncryptLog` | progressed to `DFXEvent::setSkynetMessage`; the DFX relocation has no matching PLT stub |
 | Add Nezha `com.xiaomi.camdfx.so` | broke `camera.xiaomi.so`: `DFXEvent::putString` is not exported by Aurora's camdfx |
 | Replace `satsnapshot.json` with the Leica graph | legacy `MiaDLibrary` load is attempted, but the unpatched plugin still fails on `catchLogEncryptLog` |
-| Add an AArch64 shim for the missing logging/DFX/filesystem symbols | `MiaDLibrary` load error disappears; only `MiaPluginModule` registration remains |
+| Add an AArch64 shim for the missing logging/DFX/filesystem/libc++ symbols | `MiaDLibrary` load error disappears, but the SAT node is not in the executed node list |
 
 The replacement stack is not viable: each Nezha core library pulls another
 Aurora-missing dependency. The stable state is therefore the v5a minimal
@@ -166,8 +166,10 @@ installed with a reboot.
 
 ## What remains
 
-The remaining blocker is Aurora's `MiaPluginModule` registration, not the
-pipeline JSON and not SELinux. The next step is to port or patch the Aurora
+The remaining blocker is two-layered: the SAT node is masked out of the executed
+graph, and Aurora's `MiaPluginModule` does not register the plugin. The last
+capture's `MiviFwkResult` listed `MfnrInstance0`, `GainMap*`, `JpegInstanceFinal`
+and `jpegrAggrInstance`, but not `LeicaFilterInstance0`. The next step is to port or patch the Aurora
 plugin registry so it registers `com.xiaomi.plugin.mileicafilter` (and then
 `legendST`), or to replace the older Aurora engine with a compatible Nezha
 engine. Until that succeeds, M3/M9 do not render even though the picker and the
