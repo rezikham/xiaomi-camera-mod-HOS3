@@ -122,9 +122,53 @@ the output buffer, the JPEG comes out corrupted (`mean |R-G| = |G-B| = 135`).
 `isEnabled` now loads the donor first and returns 0 when that fails, which keeps
 the capture a clean pass-through.
 
+## Where it stands after the private libc++
+
+With `hcicxx.so` in the bundle and the donor repointed at it, the whole chain
+runs on the device:
+
+```text
+HCM-Legend: donor loaded vt=0x7965ab28b8
+HCM-Legend: isEnabled style=2
+HCM-Legend: pri in=0x… out=0x… ai=0x… ao=0x…
+HCM-Legend: donor initialized style=2
+HCM-Legend: native in=0x1200000 out=0x1200000      <- wrong
+```
+
+and then the provider dies inside the donor:
+
+```text
+#00 libc++.so
+#01 com.xiaomi.plugin.mileicafilter.so
+      MiLeicaFilterPlugin::candyProcess(FilterFrameParam*, FilterFrameParam*,
+                                        VideoFormat, param_lut_t*, param_shading_float_t*)+428
+#02 MiLeicaFilterPlugin::processRequest(ProcessRequestInfo*)+2308
+#03 com.xiaomi.plugin.hcmlegend.so plugin_process_request+720
+#04 libmialgoengine.so MiaNode::processRequest(...)+4428
+```
+
+Cause: `trying to execute non-executable memory` inside libc++, reached from
+`candyProcess`. The translated `ImageParams` is the suspect: the field our
+wrapper copies as the native handle reads `0x1200000` for both input and output,
+which is not a pointer. Aurora's `ImageParams` body differs from the Nezha one
+the donor expects, so the wrapper forwards a wrong handle and `candyProcess`
+builds a bogus `GraphicBuffer`.
+
+Next step before touching the algorithm: dump the first `0xC0` bytes of the
+Aurora input/output `ImageParams` from `plugin_process_request` and identify the
+real `native_handle*` word (it will be a `0xb4…`/`0x7…` pointer), then fix
+`translate()`. The rest of the five-field translation (`fmt`, `width`,
+`height`, `usage`) already lines up with the observed `fmt=0x23`, `4096x3072`.
+
+With `persist.vendor.camera.hypercam.style` set to `0`, `isEnabled` returns 0,
+the node is a pass-through, and the capture path is unaffected.
+
 ## Remaining blocker
 
-`dlopen` of the donor now fails at:
+### libc++ (solved)
+
+Aurora's `/system/lib64/libc++.so` predates `std::__1::__fs::filesystem`, so
+the donor failed to `dlopen` with
 
 ```text
 cannot locate symbol
@@ -132,17 +176,15 @@ cannot locate symbol
   referenced by "/odm/lib64/com.xiaomi.plugin.mileicafilter.so"
 ```
 
-The donor was built against a newer libc++ than Aurora's `/system/lib64/libc++.so`
-(no `std::__1::__fs::filesystem`). Options, in order:
+Solved with `tools/hal-port/aurora/patch_private_libcxx.py`: the Nezha
+`libc++.so` is installed as `/odm/lib64/hcicxx.so` with its SONAME rewritten,
+and the donor's `DT_NEEDED` entry is repointed to it. Both names are nine
+characters, so the patch is a byte-for-byte dynstr edit (no `patchelf` here).
 
-1. Ship the Nezha libc++ under a private SONAME and patch the donor's
-   `DT_NEEDED` (or its dynstr string) to use it. The earlier v6 work already
-   produced a private-SONAME `libcxx.so`; no `patchelf` on the host, so the
-   edit has to be scripted.
-2. Replace just the `__fs::filesystem` calls in the donor with direct
-   `stat`/`open` (the calls are `__status` and `__file_size`, used for parameter
-   file discovery).
-3. Fall back to the Essential Moments service path for the real algorithm.
+### Pixel ABI (open)
+
+See "Where it stands after the private libc++" above: the donor executes and
+faults in `candyProcess` because the translated `ImageParams` is incomplete.
 
 ## Device state used for the test
 

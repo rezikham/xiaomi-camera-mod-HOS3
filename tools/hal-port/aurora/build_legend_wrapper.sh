@@ -41,7 +41,15 @@ install -m 0644 "$TMP/libhcm_shim.so" "$OUT/system/odm/lib64/libhcm_shim.so"
 
 install -m 0644 "$TMP/com.xiaomi.plugin.hcmlegend.so" \
   "$OUT/system/odm/lib64/camera/plugins/com.xiaomi.plugin.hcmlegend.so"
+# Private libc++: Aurora's system one has no std::__1::__fs::filesystem, which
+# the donor needs. Ship the Nezha one under a second SONAME and repoint the
+# donor (and the companions built with it).
+NEZHA_CXX="$NEZHA_ODM/../vendor/lib64/libc++.so"
+[ -f "$NEZHA_CXX" ] || NEZHA_CXX="$NEZHA_ODM/lib64/libc++.so"
+install -m 0644 "$NEZHA_CXX" "$OUT/system/odm/lib64/hcicxx.so"
 install -m 0644 "$NEZHA_ODM/lib64/camera/plugins/com.xiaomi.plugin.mileicafilter.so" \
+  "$OUT/system/odm/lib64/com.xiaomi.plugin.mileicafilter.so"
+python3 "$HERE/patch_private_libcxx.py" "$OUT/system/odm/lib64/hcicxx.so" \
   "$OUT/system/odm/lib64/com.xiaomi.plugin.mileicafilter.so"
 for f in leica_filter_param.bin leica_filter_param_m3.bin \
          leica_filter_param_m9_preview.bin leica_filter_param_m9_snapshot.bin; do
