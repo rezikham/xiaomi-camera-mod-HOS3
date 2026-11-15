@@ -283,11 +283,32 @@ The screenshots that pin the UI: filter strip at `(1293,2284)` opens it; the
 *Negative* chip moves with the strip scroll (read the `filter_item_parent`
 bounds from `uiautomator dump`), and the shutter is at `(719,2785)`.
 
-## 6. Related observation (not investigated here)
+## 6. The stock app's Essential Moment mode is inert on Aurora
 
-While pinning the filter UI, the 6.7 app on Aurora exposed an **Essential
-Moment -> "Leica Essential"** panel with an `M9` chip and a `Modern Vintage`
-chip, and a `Leica M3` chip in the same mode; picking them turns the live
-preview monochrome. That is an app-native look path, separate from the LUT
-slot above and from the Nezha plugin. It was observed but **not captured or
-measured** here - it belongs to the app-side workstream.
+The 6.7 app on Aurora exposes an **Essential Moment / "Leica Essential"** panel
+with `M3` and `Modern vintage` chips, and the mode does open
+(`LegendaryModule`, `mid = 256`, `MCAM_LegendaryModeUI: items size = 1`). It was
+measured twice on the same scene, M3 selected (`pref_legendary_mode_key = M3`):
+
+| state | app log | capture |
+| --- | --- | --- |
+| gate off | `applyMIVIRenderType: 0`, `legendmode null` | 3072x4096, filterId 66048, sat 0.4591 |
+| `camera.debug.mivi3.output.jpeg=true`, app restarted | `applyMIVIRenderType: 0`, `legendmode null` | 3072x4096, filterId 66048, sat 0.4177 |
+
+So the gate does **not** make Essential Moment use the engine, and the app does
+not put `legendmode` in the request either. There is no `com.xiaomi.mivi2.render`
+payload at all in this mode (0 matching log lines), which is why the stock filter
+node has nothing to apply: the Legendary path asks for nodes and parameter files
+that Aurora does not have, and falls back to a plain capture.
+
+Consequence: on Aurora, M3/M9 can only be rendered through the filter/LUT slot
+above (Photo mode, Negative filter), not through Essential Moment. The
+`ModeUI` panel exists but its selection has no processing behind it.
+
+The standalone **Essential Moments** app (`com.martin.essentialmoments`) is the
+opposite case: it ships the real pipeline (`libmialgo_monopan.so`,
+`libm9base.so`, `legend18/leica_filter_param_m{3,9,m10r}*.bin`) and produced a
+verified exact-grayscale 3072x4096 M3 capture on Aurora, then crashed in the
+spawned Monopan helper (`posix_spawn` -> `SIGSEGV` in `libm9base.so`); the JPEG
+was already saved. It is an app-side reference, not a HAL path.
+
