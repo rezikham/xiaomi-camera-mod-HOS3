@@ -109,3 +109,4 @@ Evidence conventions:
 | [09-engine-lut-injection.md](09-engine-lut-injection.md) | Runtime consumer of the render payload (`com.xiaomi.plugin.filter`), LUT slot injection and the verified M3 monochrome capture |
 | [10-essential-moments.md](10-essential-moments.md) | The genuine Essential Moments M3/M9 pipeline: Java/native map, Monopan spawn and crash analysis, process-isolated module integration |
 | [11-chix-adapter.md](11-chix-adapter.md) | ChiX plugin lifecycle: `postProcess()` vs `processRequest()`, `NodeMask` dispatch, donor ABI and the wrapper-plugin plan to host the Legendary algorithm |
+| [12-essential-moments-internals.md](12-essential-moments-internals.md) | Essential Moments internals: JNI entry points and offsets, `libleicamodelembed` B12 wrapper, `legend18` binary format, helper argv/env, style models, preview shader, measured M3/M9 artifacts |

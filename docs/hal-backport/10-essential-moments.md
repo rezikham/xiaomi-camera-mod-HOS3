@@ -4,6 +4,16 @@ This page maps the genuine Leica pipeline in **Essential Moments**
 (`com.martin.essentialmoments`, version `6.8.001960.0`, 150 MB APK) and documents
 the optional module path that runs it on saved JPEGs.
 
+> **Deep material lives in
+> [12-essential-moments-internals.md](12-essential-moments-internals.md).**
+> That page has the JNI symbol/offset tables, the `legend18` binary layout,
+> the `libleicamodelembed` B12 wrapper, the helper argv/env contracts, the
+> preview shader, and the measured M3/M9 artifacts. Two conclusions below are
+> corrected there: the Monopan helper does not provably crash (the app
+> produced a processed mono M3 JPEG), and the M9 style stage fails on aurora
+> for a QNN-version reason, not a namespace rule. Section 12 of page 12 lists
+> every correction.
+
 The short version:
 
 * The app is a repackaged Xiaomi Camera (`com.android.camera`) with extra
@@ -13,10 +23,11 @@ The short version:
 * M3 and M9 use the same parametric filter (`libm9base.so` + a legend18 `.bin`)
   and differ in what runs around it. M3 adds Monopan grain; M9 adds the
   style-transfer model, warm grading, person correction, tone and gainmap.
-* The Monopan helper is spawned by `libm9base.so` with `posix_spawn`. It is the
-  stage that crashes on aurora. The module runs all native work in a private
-  process and treats Monopan as optional, falling back to the app's own
-  grayscale path.
+* The Monopan helper is spawned by `libm9base.so` with `posix_spawn`. It can
+  fail or be killed, so the module runs all native work in a private process
+  and treats Monopan as optional, falling back to the app's own grayscale path.
+  The app's own artifact shows the helper does run successfully on this unit
+  (page 12 section 7).
 * The module path is **off by default**, is **additional**, and never replaces
   the HAL LUT slot, the stock filters, or the existing LUT fallback.
 
@@ -164,23 +175,37 @@ protectShadows(...)
 `applyLeicaFilter`, which is the parametric filter. `applyStyle` and
 `applyMonochrome` both end in `applyAlgorithm`, which is the spawner.
 
+The app does not call these `libm9base` entries directly. Its static
+initializer loads `libleicamodelembed.so`, which `dlopen`s `libm9base.so`,
+calls the original symbol, and wraps it in a B12 reference/reconciliation pass
+(`snapshot` before, `finish` after). A process that loads only `libm9base`
+gets the same pixels but not the B12 reconciliation. Symbol addresses and the
+wrapper contract are in [12](12-essential-moments-internals.md) section 2-3.
+
 ### 3.5 How the legend18 `.bin` files are used
 
 The `.bin` files are **not** neural weights. `applyLeicaFilter` reads the whole
 file into a `std::vector<uint8_t>`, then:
 
-* reads a fixed header (`aiscene-lux-cct` at offset 0x20);
-* runs `adaptiveShading(data, lux, cct, zoom, out)` — the vignetting/shading
-  model, with records keyed by lux and CCT;
-* checks flags at offsets `0x362` and `0x366`;
-* when set, runs `adaptiveLut(data, lux, cct, out)` — the colour/mono LUT;
-* processes the bitmap in three worker threads, in horizontal bands, via
-  `AndroidBitmap_lockPixels`.
+* validates a little-endian header (`u16[0] = 6`, `u16[7] = 0x400`,
+  `u16[8] = 0x1000`, `u16[9] = 17`, `u16[10] = 5`; tag
+  `aiscene-lux-cct` at 0x20, `uint16_t` at 0x120);
+* runs `adaptiveShading(data, lux, cct, zoom, out[8])` — selects a zoom band
+  (0.6/1.0/3.0/4.3/10.0), then bilinearly blends the 8-float shading records
+  by lux and CCT;
+* checks flags at `0x362` (LUT) and `0x366` (shading);
+* when `0x362` is set, runs `adaptiveLut(data, lux, cct, out)` — a 17³ RGB
+  LUT (0x3993 bytes per block) blended from the `common` scene table;
+* processes the bitmap in four horizontal bands (main + three workers) when
+  `w*h >= 1,048,576`, via `AndroidBitmap_lockPixels`.
 
-`provenance.json` in the app records 20 shading records for M3 and 55 for M9.
-Sizes: M3 93,170 bytes, M9 1,686,102 bytes, M10R 1,597,668 bytes. The M3 file
-is small because it is a monochrome parameter set; M9 has the full colour
-shading table.
+`provenance.json` in the app records 20 shading records for M3 and 55 for M9;
+the file sizes are 93,170 / 1,686,102 / 1,597,668 bytes. The capture path uses
+`assets/leica_filter_param_m9_snapshot.bin` at the APK root (SHA-256
+`b2b7769a…`), which differs from the `assets/legend18/` copy (`60643c27…`) in
+one LUT block and a build timestamp; the module currently bundles the
+`legend18` copy. The full byte layout, per-file tables and selection
+algorithm are in [12](12-essential-moments-internals.md) section 4.
 
 Unknown metadata defaults, taken from `MadridLegendary.process`:
 
@@ -266,57 +291,68 @@ applyAlgorithm(env, bitmap, runnerPath, cacheDir, /*extra=*/NULL,
 5. `dlsym` for `MonopanInit` / `MonopanProcess` / `MonopanDeinit`;
 6. runs the model, writes `w*h` bytes, returns 0.
 
-### Why it SIGSEGVs from a foreign app process
+### What actually fails
 
-The failure is not a bad image, and it is not unconditional: the app produced a
-Monopan-marked M3 JPEG on this phone (XMP `Legend.MONOPAN`, 19:23:51), so the
-spawn can succeed. The known crash happens **after** that JPEG is saved, which
-points to a second invocation (thumbnail/gallery preview) or a frame-dependent
-helper fault rather than the first capture render. The static evidence narrows
-the candidates to:
+The earlier "the helper SIGSEGVs" diagnosis is not supported and is corrected
+here. **Observed:** the app produced a re-encoded monochrome M3 JPEG
+(`IMG_20261115_192351_1.jpg`, 19:23:51) with Skia quality-95 tables and an sRGB
+ICC profile. That output is only reachable when both `applyOriginalFilter` and
+`applyMonochrome` return `true`, so the Monopan spawn and the helper ran
+successfully on this unit. There is also no Monopan tombstone: the only
+`/data/tombstones` entries are the camera provider's unrelated
+`FORTIFY: fclose` aborts.
 
-* The runner loads `libc++_shared.so` and `libmialgo_monopan.so` through the
-  **`sphal` namespace**. `/data/app/.../lib/arm64` is not normally a permitted
-  path for `sphal` on Android 16; when `android_dlopen_ext` returns null the
-  runner does not null-check every subsequent symbol.
-* `libmialgo_monopan.so` has only `liblog/libm/libc++_shared/libdl/libc` in
-  `DT_NEEDED`, yet the APK ships `libQnnHtp.so`, `libQnnSystem.so` and
-  `libQnnHtpV81Stub.so` next to it. The QNN backend is opened late by name.
-  App namespace rules ignore `LD_LIBRARY_PATH` for `dlopen`, so a lookup can
-  fail from the APK directory, leaving a null function pointer or model handle.
-* The spawn sets only `LD_LIBRARY_PATH`, no `cwd`, no file actions, no
-  attributes. It inherits the camera app's `/` cwd and its SELinux domain.
-* Monopan is a model with global init/deinit. Two concurrent renders, or a
-  render during teardown, can race; the app has a `RenderQueue` but the helper
-  itself is a separate process with no supervision.
+The runner and the helper can still fail, and the failure is graceful: a bad
+`dlopen`, a QNN init error or a timeout makes the runner exit non-zero,
+`applyAlgorithm` returns `false`, and M3 would fall back to the source. The
+static risk factors remain real but are not the observed cause:
 
-This diagnosis is inferred from the runner and helper ELF strings plus
-Android's namespace rules; no tombstone for the helper was present under
-`/data/tombstones` or the app's xcrash directory when this page was written.
-The saved JPEG observed on aurora is consistent with the crash happening after
-storage, not during it.
+* `sphal`'s permitted paths on this Android 16 build are `/odm/lib64`,
+  `/vendor/lib64`, `/vendor/odm/lib64` and `/system/vendor/lib64` — not
+  `/data/app`. If `android_get_exported_namespace("sphal")` returned a handle
+  to the app, the absolute-path `android_dlopen_ext` would fail. Since Monopan
+  works, the likely path is that the lookup returns `NULL`, the runner leaves
+  `flags=0`, and the app's default namespace (which does permit `/data/app`)
+  loads the two libraries `[inferred]`.
+* Monopan's `MonopanInit` is global; two concurrent renders or a render during
+  teardown can still race. The app's `RenderQueue` and the module's private
+  process are the mitigations.
+* The spawn sets only `LD_LIBRARY_PATH` (no cwd, file actions or attributes);
+  a helper that opens libraries late by name relies on the app's
+  native-library search path.
 
-The same `applyAlgorithm` mechanism is used by `applyStyle` for M9 with
-`libstyletrans_runner.so` + `libmialgo_styletrans.so`, so the M9 style-transfer
-stage is exposed to the same class of failure.
+The style-transfer stage uses the same `applyAlgorithm` mechanism but fails
+for a different reason: the APK ships **QNN HTP V81** stubs and
+DSP skels for the SM8750 generation, while aurora is SM8650 (HTP V75-era). The
+observed M9 JPEG never received the styled bitmap: its EXIF was not re-inserted
+and the `legendmode` tag is absent, so the M9 chain discarded the result. The
+`applyStyle` gate is the leading failure point, with the QNN version mismatch
+as the likely cause. Details and the artifact proof are in
+[12](12-essential-moments-internals.md) sections 6-7.
 
 ## 5. Preview vs capture
 
 The capture path above is the only path that produces the final look. The
 preview path is different:
 
-* `LegendaryPostProcessor.previewShader()` and `bindPreview()` are stubs in
+* `LegendaryPostProcessor.previewShader()` / `bindPreview()` are dead code in
   this build (`previewShader` returns its input, `bindPreview` is empty).
-* `OemExtensionSession` (OEM camera extension) and `SoftwareRaw` maintain the
-  preview session, exposure and white balance; `rememberPreview` stores the
-  last `CaptureResult` for capture tuning.
-* `LookStage.wrap` maps the extension output surfaces, but the visible preview
-  look comes from the camera's normal preview pipeline.
+* `SoftwareRaw` opens an `OemExtensionSession` when the device supports camera
+  extensions; `LookStage.wrap()` replaces the preview surface with an OES
+  texture and a GLES2 pass renders an **approximate** look per frame:
+  `uStyle == 1` is M3 (luma + contrast 1.22), `uStyle == 4` is M10R (0.9
+  saturation, 1.10 contrast, shadow tint, S-curve, vignette). There is no M9
+  branch, so an M9 preview is unstyled.
+* `StyleSync` writes the shader's style field (`1` for M3, `4` for M10R;
+  default `4`); `persist.em.look` can disable the stage.
 * `LegendaryPostProcessor.previewLut` / `previewShading` exist in
-  `libm9base.so` but are not used by the capture chain in this build.
+  `libm9base.so` (and can return a `byte[14739]` LUT and a `float[8]`) but no
+  Java class declares them, so they are unreachable.
 
-So M3/M9 is effectively a **post-capture** look. The module follows the same
-model: preview is untouched, the saved JPEG is processed.
+So the preview is a cheap shader approximation; the real M3/M9 look is
+**post-capture**. The module follows the same model: preview is untouched, the
+saved JPEG is processed. The shader source and lifecycle are in
+[12](12-essential-moments-internals.md) section 9.
 
 ## 6. Integration design
 
@@ -365,8 +401,8 @@ Why a bound service instead of a thread:
 
 * `applyOriginalFilter` is native and can fault on a bad bitmap or a future
   library mismatch. A fault kills only `:essential`.
-* `applyMonochrome` `posix_spawn`s a helper that is known to crash. It runs as
-  a child of `:essential`, not of the camera.
+* `applyMonochrome` `posix_spawn`s a helper that can load third-party QNN code
+  and fault; it runs as a child of `:essential`, not of the camera.
 * If `:essential` dies, the binder connection drops, the client's latch is
   released, and the original JPEG stays. The camera session is unaffected.
 * No storage permission is needed: the JPEG travels through pipes, not through
@@ -381,12 +417,13 @@ validates `msg.sendingUid`; requests from any other UID are rejected.
 | --- | --- | --- |
 | `lib/arm64-v8a/libm9base.so` | 132 KB | Parametric filter + spawn logic. |
 | `lib/arm64-v8a/libc++_shared.so` | 1.26 MB | `DT_NEEDED` of `libm9base.so`. |
-| `assets/essential/leica_filter_param_m3.bin` | 93 KB | M3 shading/LUT parameters. |
-| `assets/essential/leica_filter_param_m9_snapshot.bin` | 1.69 MB | M9 shading/LUT parameters. |
+| `assets/essential/leica_filter_param_m3.bin` | 93 KB | M3 shading/LUT parameters (identical to the APK root file). |
+| `assets/essential/leica_filter_param_m9_snapshot.bin` | 1.69 MB | M9 shading/LUT parameters — currently the `assets/legend18/` copy (`60643c27…`), not the capture file (`b2b7769a…`). |
 
 Release APK: **2.47 MB** (was 1.36 MB). The 18 MB Monopan helper, the 13 MB
 style-transfer helper, the 4.7 MB model embed and the QNN runtime are **not**
-bundled.
+bundled. Page 12 section 10 recommends loading `libleicamodelembed.so` and
+switching the M9 file to the capture variant.
 
 ### 6.4 Optional Monopan grain
 
@@ -410,9 +447,10 @@ cp /tmp/opencode/em_libs/lib/arm64-v8a/libmonopan_runner.so \
 ./gradlew :assembleRelease --offline
 ```
 
-This is intentionally not the default: it adds about 22 MB and the helper is
-the crash-prone stage. When it returns false or dies, the fallback is the same
-saturation-0 result the app itself uses when grain is unavailable.
+This is intentionally not the default: it adds about 22 MB. The app's own
+artifact proves the helper runs on aurora, but it can still return `false` when
+the QNN dependencies are wrong. When it returns false or dies, the fallback is
+the same saturation-0 result the app itself uses when grain is unavailable.
 
 ### 6.5 What is implemented vs blocked
 
@@ -439,11 +477,18 @@ Not implemented (deliberately, to keep this small and honest):
 
 Blocked on aurora / not bundled:
 
-* Monopan grain: correct-by-design only when the optional helper and QNN
-  libraries are added; the app can produce it, but it is the crash-prone stage.
-  Without them M3 uses the app's own grayscale fallback.
-* M9 style-transfer: same spawn mechanism and same missing model/runtime
-  dependencies; the module uses the M9 parametric filter instead.
+* Monopan grain: the helper and its QNN closure are optional and not bundled by
+  default. Evidence now shows the app's own Monopan stage runs on aurora, so
+  this is a packaging choice, not a platform block; without the closure M3 uses
+  the app's own grayscale fallback.
+* M9 style-transfer: the APK's model/runtime is QNN HTP **V81** (SM8750), while
+  aurora is SM8650 (V75). The observed M9 JPEG never received the styled
+  bitmap, so this stage fails on aurora; the module uses the M9 parametric
+  filter instead.
+* The module calls `libm9base` directly, so it misses the app's
+  `libleicamodelembed` B12 reconciliation. See
+  [12](12-essential-moments-internals.md) section 10 for the recommended
+  change.
 
 ## 7. Test steps (on device)
 
