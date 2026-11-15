@@ -582,6 +582,36 @@ public class ModuleMain extends XposedModule {
                 }
             };
             observer.startWatching();
+            final java.util.Set<String> processed =
+                    java.util.concurrent.ConcurrentHashMap.newKeySet();
+            java.io.File[] existing = dir.listFiles(
+                    (d, n) -> n.toLowerCase(java.util.Locale.ROOT).endsWith(".jpg"));
+            if (existing != null) {
+                for (java.io.File f : existing) {
+                    processed.add(f.getAbsolutePath());
+                }
+            }
+            new Thread(() -> {
+                while (true) {
+                    try {
+                        java.io.File[] files = dir.listFiles(
+                                (d, n) -> n.toLowerCase(java.util.Locale.ROOT).endsWith(".jpg"));
+                        if (files != null) {
+                            for (java.io.File f : files) {
+                                if (processed.add(f.getAbsolutePath())) {
+                                    long size = f.length();
+                                    Thread.sleep(1500);
+                                    if (f.length() == size && size > 200000) {
+                                        applyLutToFile(f);
+                                    }
+                                }
+                            }
+                        }
+                        Thread.sleep(2000);
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }, "hcm-lut-poll").start();
             watcherStarted = true;
             log(Log.INFO, TAG, "watching DCIM/Camera for LUT post-processing");
         } catch (Throwable t) {
@@ -598,6 +628,10 @@ public class ModuleMain extends XposedModule {
             String asset = legend == 1 ? "leica_luts/130_LeicaNatural.png"
                     : legend == 2 ? "leica_luts/M3_Monopan.png" : null;
             if (asset == null || moduleApk == null) {
+                return;
+            }
+            if (file.length() < 500_000L
+                    || System.currentTimeMillis() - file.lastModified() < 3000L) {
                 return;
             }
             Thread.sleep(800);
@@ -617,11 +651,17 @@ public class ModuleMain extends XposedModule {
             if (out == null) {
                 return;
             }
-            try (java.io.FileOutputStream fos = new java.io.FileOutputStream(file)) {
+            java.io.File tmp = new java.io.File(file.getParentFile(), file.getName() + ".hcm.tmp");
+            try (java.io.FileOutputStream fos = new java.io.FileOutputStream(tmp)) {
                 out.compress(android.graphics.Bitmap.CompressFormat.JPEG, 95, fos);
             }
             out.recycle();
             bm.recycle();
+            if (!tmp.renameTo(file)) {
+                tmp.delete();
+                log(Log.WARN, TAG, "could not replace " + file.getName());
+                return;
+            }
             log(Log.INFO, TAG, "applied Leica LUT to " + file.getName());
         } catch (Throwable t) {
             log(Log.WARN, TAG, "LUT file post-process failed: " + t);
