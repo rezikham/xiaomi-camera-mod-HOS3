@@ -85,9 +85,23 @@ JSON at startup.
 
 ## Results
 
-Validation is in progress. The sections below are filled in from the device
-after the reboot; until then, no claim is made that the overlay loads or that
-M3/M9 render.
+The device rebooted and is reachable on Tailscale, but ADB over TCP did not come
+back automatically:
+
+```console
+$ ping -c 1 100.104.2.7
+64 bytes from 100.104.2.7: icmp_seq=1 ttl=64 time=56.7 ms
+
+$ adb connect 100.104.2.7:5555
+failed to connect to '100.104.2.7:5555': Connection refused
+
+$ adb mdns services
+List of discovered mdns services
+```
+
+Wireless debugging is off after the reboot, so the device cannot be queried
+until it is re-enabled. No claim is made yet that the overlay mounts, that the
+plugins load, or that M3/M9 render.
 
 ### Boot and overlay visibility
 
