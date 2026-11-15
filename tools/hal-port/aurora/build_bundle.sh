@@ -4,8 +4,8 @@
 #
 # This does not modify the source firmware. It copies only the files the HAL
 # needs and generates a patched `leicasnapshot.json`. Flash the resulting
-# directory as a Magisk module (or copy `odm/` into a writable /odm) on a
-# rooted device.
+# directory as a Magisk module on a rooted device with KernelSU/Magisk; use
+# package_module.py to create a flashable zip with the `system/odm` layout.
 #
 # Usage:
 #   tools/hal-port/aurora/build_bundle.sh [OUT_DIR]
@@ -81,7 +81,7 @@ name=HyperCameraMod Aurora Legend HAL port
 version=v0.1-experimental
 versionCode=1
 author=HyperCameraMod
-description=Adds the 17 Ultra M3/M9 Legendary plugin stack to the 14 Ultra. Experimental; requires a rooted device and a writable /odm.
+description=Adds the 17 Ultra M3/M9 Legendary plugin stack to the 14 Ultra. Experimental; install with KernelSU/Magisk and reboot.
 EOF
 
 cat > "$OUT/README.md" <<'EOF'
@@ -101,11 +101,11 @@ the two M10R models, which the 17 Ultra does not have.
 
 ## Install
 
-1. Flash this directory as a Magisk/KernelSU module (zip it first), or copy its
-   `odm/` contents over `/odm` on a rooted device with a writable vendor
-   partition.
-2. Reboot, clear the Camera app data if the pipeline is cached, and open the
-   camera.
+1. Run `tools/hal-port/aurora/package_module.py <bundle>` and install the
+   resulting zip with `ksud module install` (KernelSU) or the Magisk app.
+   `/odm` is read-only EROFS, so do not try to copy files into it directly.
+2. Reboot. The overlay is a `system/odm/...` module; clear the Camera app data
+   only if the pipeline is cached, then open the camera.
 3. Select Leica Essential -> M3 or M9. If the camera process fails, capture
    `logcat -b all -d` and restore the stock `leicasnapshot.json`.
 

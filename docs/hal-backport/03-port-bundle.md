@@ -124,13 +124,26 @@ which is exactly the failure mode already documented for the 17 Ultra.
 
 ## Install
 
-1. Zip the bundle directory or push its `odm/` tree to the device.
-2. On Magisk/KernelSU, install it as a module. If the manager does not overlay
-   `/odm`, bind-mount the files or copy them with a root file manager while
-   `/odm` is writable.
-3. Reboot. The camera provider reads the pipeline JSON at startup.
-4. Clear Camera app data only if the app caches the style list.
-5. Verify the module log contains:
+Aurora's `/odm` is a read-only EROFS mount, so copying files into it is not an
+install method. Package the bundle with the partition layout expected by
+KernelSU/Magisk:
+
+```console
+$ tools/hal-port/aurora/package_module.py /tmp/opencode/aurora-legend-port
+$ adb push /tmp/opencode/aurora-legend-port.zip /data/local/tmp/
+$ adb shell su -c 'ksud module install /data/local/tmp/aurora-legend-port.zip'
+$ adb reboot
+```
+
+The packager rewrites `odm/...` as `system/odm/...` and keeps `module.prop` at
+the archive root. On the tested device (KernelSU 3.2.5 with Hybrid Mount 6.2.3)
+`ksud` reports `Module installed successfully` and stages it under
+`/data/adb/modules_update/hypercam-aurora-legend`; it becomes active after the
+reboot. The camera provider reads the pipeline JSON at startup.
+
+1. Reboot after installing. The camera provider reads the pipeline JSON at startup.
+2. Clear Camera app data only if the app caches the style list.
+3. Verify the module log contains:
 
 ```text
 HyperCameraMod: HAL capabilities: legend=true m10r=false styleTransfer=true bridge=true

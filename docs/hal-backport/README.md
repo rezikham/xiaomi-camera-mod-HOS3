@@ -45,6 +45,8 @@ two M10R models, and the Android 17-era engine. See
 * `tools/hal-port/aurora/patch_leicasnapshot.py` — inserts
   `LeicaFilterInstance0` and `StyleTransInstance0` into Aurora's
   `leicasnapshot.json`.
+* `tools/hal-port/aurora/package_module.py` — repackages the bundle as a
+  KernelSU/Magisk zip with `system/odm/...` paths.
 * `tools/hal-port/aurora/verify_bundle.sh` — static file, pipeline and dynamic
   dependency checks.
 * `HalCapabilities.java` in the module — file-based feature detection so the
@@ -53,12 +55,13 @@ two M10R models, and the Android 17-era engine. See
 
 ## Evidence status
 
-Everything here is static evidence from extracted firmware, APK decompilation
-and ELF disassembly. No physical Aurora device was available during this work:
-the only ADB target was a Nothing Phone, not a Xiaomi camera device. The port
-bundle therefore has **not** been executed on a 14 Ultra. Do not present it as
-working until the test plan in
-[03-port-bundle.md](03-port-bundle.md#test-plan) has been run.
+The analysis pages are static evidence from extracted firmware, APK
+decompilation and ELF disassembly. A physical 14 Ultra became available at the
+end of the work; the overlay and module APK were installed on
+`OS3.0.304.0.WNAMIXM` with KernelSU 3.2.5. Execution results are tracked in
+[05-on-device.md](05-on-device.md), separated from the static claims. Until that
+page records a successful plugin load and M9/M3 capture, do not present the
+port as working.
 
 Evidence conventions:
 
@@ -74,3 +77,4 @@ Evidence conventions:
 | [02-legend-data-path.md](02-legend-data-path.md) | App request → metadata → plugin → pipeline |
 | [03-port-bundle.md](03-port-bundle.md) | Overlay contents, build/verify/install, risks and test plan |
 | [04-evidence.md](04-evidence.md) | Commands, hashes, offsets and reproducibility |
+| [05-on-device.md](05-on-device.md) | Physical 14 Ultra install and validation log |
