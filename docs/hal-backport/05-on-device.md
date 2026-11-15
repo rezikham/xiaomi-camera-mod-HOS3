@@ -445,3 +445,23 @@ No Aurora plugin examined so far issues an output-buffer request from a
 plugin's calls resolve through its own stored interface and different argument
 registers). Mapping the exact `requestOutputBuffer` argument tuple and the
 node-scheduling condition remains the open item.
+
+### Aurora never calls the MiaNodeInterface output callbacks (stock)
+
+On the device build the callbacks are exported and were hooked by name:
+
+```text
+requestOutputBuffer   0x56f70
+preRequestOutputBuffer 0x576a4
+setResultBuffer       0x56b18
+setOutputFormat       0x56948
+```
+
+A verified stock capture (`takePicture`=1, new 2,196,017-byte JPEG) produced
+**zero** calls to any of them. So Aurora does not allocate plugin outputs
+through `MiaNodeInterface` for these offline nodes; the earlier plan of having
+the donor issue a buffer request in `preProcess` cannot unblock scheduling.
+
+The remaining question is how Aurora decides which nodes enter the offline
+`postProcess` set. The donor is initialized and preProcessed but never reaches
+`processRequest`, while other offline nodes (Mfnr, gainmap, JPEG) do run.
