@@ -85,36 +85,81 @@ JSON at startup.
 
 ## Results
 
-The device rebooted and is reachable on Tailscale, but ADB over TCP did not come
-back automatically:
+The device rebooted and was reachable over USB and Tailscale. The first
+installation (v2, full Nezha plugin stack) reached the camera HAL and showed
+that Aurora selects the SAT pipeline for ordinary Leica captures:
 
-```console
-$ ping -c 1 100.104.2.7
-64 bytes from 100.104.2.7: icmp_seq=1 ttl=64 time=56.7 ms
-
-$ adb connect 100.104.2.7:5555
-failed to connect to '100.104.2.7:5555': Connection refused
-
-$ adb mdns services
-List of discovered mdns services
+```text
+ChiX: OnProcessCaptureResult() sat_snapshot, frame=..., capture done
 ```
 
-Wireless debugging is off after the reboot, so the device cannot be queried
-until it is re-enabled. No claim is made yet that the overlay mounts, that the
-plugins load, or that M3/M9 render.
+The stock Aurora `satsnapshot.json` is the pipeline that must contain the
+Legendary nodes; the earlier `leicasnapshot.json`-only port was on the wrong
+path.
 
-### Boot and overlay visibility
+### v5a: stable minimal overlay
 
-_Pending._
+To separate a pipeline problem from a plugin problem, v5a contains only
+`mileicafilter`, the four Leica parameter files, the three compatibility
+libraries, and one `LeicaFilterInstance0` node in both `leicasnapshot.json` and
+`satsnapshot.json`. It does **not** contain `legendST`, style-transfer models,
+or replacement core libraries.
 
-### Camera provider and plugin load
+Result: the camera app and provider stay alive, Leica Authentic remains in the
+style panel, and a capture completes:
 
-_Pending._
+```text
+MCAM_MiCamera2: takePicture CaptureModule ... mid = 163
+ChiX: OnProcessCaptureResult() sat_snapshot, ... capture done
+```
 
-### M9/M3 capture
+The plugin is still not processed:
 
-_Pending._
+```text
+MiaPluginModule.cpp:28 getPluginWraperByPluginName()error not found pluginName: com.xiaomi.plugin.mileicafilter
+MiaOfflineSession.cpp:1199 initAllNodes()node:com.xiaomi.plugin.mileicafilter Init failed
+```
 
-### Regression and rollback
+No `MiaDLibrary` error is emitted and no `avc: denied` appears, so the node is
+reached but the Aurora `MiaPluginModule` registry does not contain the Nezha
+plugin.
 
-_Pending._
+### Symbol work
+
+The Nezha plugins import two symbols that Aurora's older libraries do not
+export:
+
+```text
+midebug::Log::catchLogEncryptLog(...)
+mialgo2::PluginUtils::printAndroidAndOfflineLog(...)
+```
+
+Tested fixes and results:
+
+| Attempt | Result |
+| --- | --- |
+| Add a `DT_NEEDED` shim library | Android linker did not pick up the added dependency |
+| `wrap.vendor.camera-provider=LD_PRELOAD=...` | property was set, but the provider did not load the shim |
+| Rewrite the missing dynsym entries to a local `ret` | symbol table showed `T`, but `dlopen` still reported `cannot locate` |
+| Patch the `catchLogEncryptLog` PLT relocation/stub to no-op | `MiaDLibrary` error disappeared, but registration still failed |
+| Replace Aurora `libcom.xiaomi.debug.so` with Nezha's | provider crash loop: missing `libcom.xiaomi.threadpool.so`, then `libabnormal_img_dectect.so`, then `libcamera.xiaomi.catchlog.so`, then `camlog::send_message_to_mqs` |
+
+The replacement stack is not viable: each Nezha core library pulls another
+Aurora-missing dependency. The stable state is therefore the v5a minimal
+overlay, with `legendST` and M10R disabled.
+
+### Current device state
+
+The `hypercam-aurora-legend` KernelSU module is **disabled**, `/odm` is stock,
+and the stock camera/provider are running. The v5a bundle is retained at
+`/tmp/opencode/v5a.zip` for further work; no experimental module is active.
+
+## What remains
+
+The remaining blocker is Aurora's `MiaPluginModule` registration, not the
+pipeline JSON and not SELinux. The next step is to port or patch the Aurora
+plugin registry so it registers `com.xiaomi.plugin.mileicafilter` (and then
+`legendST`), or to replace the older Aurora engine with a compatible Nezha
+engine. Until that succeeds, M3/M9 do not render even though the picker and the
+SAT pipeline accept the node.
+

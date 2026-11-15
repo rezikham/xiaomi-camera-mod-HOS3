@@ -37,7 +37,7 @@ def main() -> int:
         return 1
 
     root_files = [module_prop]
-    for name in ("README.md", "SHA256SUMS"):
+    for name in ("README.md", "SHA256SUMS", "post-fs-data.sh", "sepolicy.rule"):
         path = bundle / name
         if path.is_file():
             root_files.append(path)
@@ -55,7 +55,8 @@ def main() -> int:
             # Fixed timestamp keeps repeated builds byte-comparable.
             info = zipfile.ZipInfo(arcname, date_time=(2026, 1, 1, 0, 0, 0))
             info.compress_type = zipfile.ZIP_DEFLATED
-            info.external_attr = (0o644 & 0xFFFF) << 16
+            mode = 0o755 if arcname.endswith(".sh") else 0o644
+            info.external_attr = (mode & 0xFFFF) << 16
             archive.writestr(info, path.read_bytes())
 
     print(f"module: {output}")

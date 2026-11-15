@@ -31,6 +31,15 @@ ORIGINAL = bytes.fromhex("21b80d91")   # add x1, x1, #0x36e
 PATCHED = bytes.fromhex("215c3791")    # add x1, x1, #0xdd7
 OFFSETS = (0xC768, 0xD780)             # initialize, isEnabled
 
+# Aurora's libcom.xiaomi.debug.so predates the offline logger symbols that
+# Nezha's plugins import. Redirect those imports to the equivalent globals that
+# Aurora does export. The replacement is shorter, so the NUL-terminated dynstr
+# entry can be rewritten in place.
+SYMBOLS = {
+    b"_ZN7midebug21gMiCamOfflineLogLevelE": b"_ZN7midebug14gMiCamLogLevelE",
+    b"_ZN7midebug21gMiCamOfflineLogGroupE": b"_ZN7midebug14gMiCamLogGroupE",
+}
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -40,6 +49,20 @@ def main() -> int:
     args = parser.parse_args()
 
     data = bytearray(args.input.read_bytes())
+    symbol_states = []
+    for old, new in SYMBOLS.items():
+        if len(new) > len(old):
+            raise SystemExit(f"replacement {new!r} is longer than {old!r}")
+        count = data.count(old)
+        if count == 0 and new in data:
+            symbol_states.append((old, "already patched"))
+            continue
+        if count != 1:
+            raise SystemExit(f"{args.input}: expected one {old!r}, found {count}")
+        start = data.index(old)
+        data[start:start + len(old)] = new + b"\0" * (len(old) - len(new))
+        symbol_states.append((old, "patchable"))
+
     states = []
     for offset in OFFSETS:
         current = bytes(data[offset:offset + 4])
@@ -54,6 +77,8 @@ def main() -> int:
             )
 
     if args.check:
+        for old, state in symbol_states:
+            print(f"{old.decode()}: {state}")
         for offset, state in states:
             print(f"0x{offset:x}: {state}")
         return 0
@@ -61,6 +86,8 @@ def main() -> int:
     if args.output is None:
         raise SystemExit("OUTPUT is required unless --check is used")
     args.output.write_bytes(data)
+    for old, state in symbol_states:
+        print(f"{old.decode()}: {state}")
     for offset, state in states:
         print(f"0x{offset:x}: {state}")
     print(f"wrote {args.output}")

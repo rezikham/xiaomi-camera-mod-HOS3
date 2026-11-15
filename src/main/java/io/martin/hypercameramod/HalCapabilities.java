@@ -24,6 +24,15 @@ public final class HalCapabilities {
     private static final String PLUGINS = ODM + "/lib64/camera/plugins";
     private static final String LIB = ODM + "/lib64";
 
+    // The port module sets these from post-fs-data.sh. The camera app can be in a
+    // different mount namespace from the HAL and may not see the /odm overlay,
+    // while the property namespace is shared. A property is therefore a positive
+    // override; file checks remain the fallback for stock nezha/madrid.
+    private static final String PROP_LEGEND = "persist.sys.hypercam.legend";
+    private static final String PROP_M10R = "persist.sys.hypercam.m10r";
+    private static final String PROP_STYLE_TRANSFER = "persist.sys.hypercam.style_transfer";
+    private static final String PROP_BRIDGE = "persist.sys.hypercam.bridge";
+
     private HalCapabilities() {
     }
 
@@ -47,12 +56,12 @@ public final class HalCapabilities {
      * does not: the filter parameter files, the filter plugin, and the style-transfer plugin.
      */
     public static boolean hasLegendHal() {
-        return hasMileicaFilter()
+        return flag(PROP_LEGEND) || (hasMileicaFilter()
                 && hasLegendST()
                 && exists(CAMERA + "/leica_filter_param.bin")
                 && exists(CAMERA + "/leica_filter_param_m3.bin")
                 && exists(CAMERA + "/leica_filter_param_m9_preview.bin")
-                && exists(CAMERA + "/leica_filter_param_m9_snapshot.bin");
+                && exists(CAMERA + "/leica_filter_param_m9_snapshot.bin"));
     }
 
     /**
@@ -61,13 +70,13 @@ public final class HalCapabilities {
      * stock 14 Ultra have none of them, so the module must not inject the item there.
      */
     public static boolean hasM10r() {
-        return hasMileicaFilter()
+        return flag(PROP_M10R) || (hasMileicaFilter()
                 && hasLegendCT()
                 && exists(LIB + "/libmialgo_styletrans.so")
                 && exists(CAMERA + "/leica_filter_param_m10r_preview.bin")
                 && exists(CAMERA + "/leica_filter_param_m10r_snapshot.bin")
                 && exists(CAMERA + "/styletrans/compressed/styletrans_high_m10r.minn")
-                && exists(CAMERA + "/styletrans/compressed/styletrans_low_m10r.minn");
+                && exists(CAMERA + "/styletrans/compressed/styletrans_low_m10r.minn"));
     }
 
     /**
@@ -76,13 +85,14 @@ public final class HalCapabilities {
      * {@code legendMode} request into that key.
      */
     public static boolean hasLegendBridge() {
-        return exists(LEGEND_BRIDGE_MARKER);
+        return flag(PROP_BRIDGE) || exists(LEGEND_BRIDGE_MARKER);
     }
 
     /** The external style-transfer engine and its model description. */
     public static boolean hasStyleTransfer() {
-        return exists(LIB + "/libmialgo_styletrans.so")
-                && exists(CAMERA + "/styletrans_params.json");
+        return flag(PROP_STYLE_TRANSFER)
+                || (exists(LIB + "/libmialgo_styletrans.so")
+                && exists(CAMERA + "/styletrans_params.json"));
     }
 
     /** Short state for one log line; no file paths, so it stays readable in a bug report. */
@@ -91,6 +101,17 @@ public final class HalCapabilities {
                 + " m10r=" + hasM10r()
                 + " styleTransfer=" + hasStyleTransfer()
                 + " bridge=" + hasLegendBridge();
+    }
+
+    private static boolean flag(String key) {
+        try {
+            Class<?> props = Class.forName("android.os.SystemProperties");
+            Object value = props.getMethod("get", String.class, String.class)
+                    .invoke(null, key, "0");
+            return "1".equals(String.valueOf(value).trim());
+        } catch (Throwable t) {
+            return false;
+        }
     }
 
     private static boolean exists(String path) {

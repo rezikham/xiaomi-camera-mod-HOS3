@@ -115,6 +115,26 @@ def main() -> int:
         help="also insert legendST before DepurpleInstance0",
     )
     parser.add_argument(
+        "--filter-before",
+        default="FilterInstance0",
+        help="node before the inserted mileicafilter node",
+    )
+    parser.add_argument(
+        "--filter-after",
+        default="WatermarkInstance0",
+        help="node after the inserted mileicafilter node",
+    )
+    parser.add_argument(
+        "--styletrans-before",
+        default="YuvReprocessInstance0",
+        help="node before the inserted legendST node",
+    )
+    parser.add_argument(
+        "--styletrans-after",
+        default="DepurpleInstance0",
+        help="node after the inserted legendST node",
+    )
+    parser.add_argument(
         "--check",
         action="store_true",
         help="validate the input only; do not write the output",
@@ -133,8 +153,8 @@ def main() -> int:
         added.append("LeicaFilterInstance0")
     insert_between(
         doc,
-        "FilterInstance0",
-        "WatermarkInstance0",
+        args.filter_before,
+        args.filter_after,
         "LeicaFilterInstance0",
         port_format="YUV420_NV12",
         buffer_type="Gralloc",
@@ -145,8 +165,8 @@ def main() -> int:
             added.append("StyleTransInstance0")
         insert_between(
             doc,
-            "YuvReprocessInstance0",
-            "DepurpleInstance0",
+            args.styletrans_before,
+            args.styletrans_after,
             "StyleTransInstance0",
             port_format="YUV420_NV12",
         )

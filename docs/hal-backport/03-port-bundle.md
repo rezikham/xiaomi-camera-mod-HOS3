@@ -1,3 +1,9 @@
+> **On-device status (2026-11-15):** the full `mileicafilter` + `legendST`
+> bundle reaches the SAT pipeline but Aurora's `MiaPluginModule` does not
+> register the Nezha plugin. The stable bundle is the minimal
+> `mileicafilter`-only variant; see [05-on-device.md](05-on-device.md). Do not
+> enable the full bundle on a daily device.
+
 # Aurora Legend port bundle
 
 This is the first implementation of the HAL backport. It is a file overlay plus

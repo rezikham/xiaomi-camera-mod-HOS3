@@ -31,9 +31,6 @@ die() { printf '[aurora-legend] error: %s\n' "$*" >&2; exit 1; }
 # produce a module that fails to load a plugin at capture time.
 FILES=(
   "lib64/camera/plugins/com.xiaomi.plugin.mileicafilter.so"
-  "lib64/camera/plugins/com.xiaomi.plugin.legendST.so"
-  "lib64/libmialgo_styletrans.so"
-  "lib64/libLMSceneSeg.so"
   "lib64/libcom.xiaomi.cam.miexifmgr.so"
   "lib64/libcameraopt_stub.so"
   "lib64/libmetatagwrapper.so"
@@ -41,12 +38,10 @@ FILES=(
   "etc/camera/leica_filter_param_m3.bin"
   "etc/camera/leica_filter_param_m9_preview.bin"
   "etc/camera/leica_filter_param_m9_snapshot.bin"
-  "etc/camera/styletrans_params.json"
 )
 for rel in "${FILES[@]}"; do
   [ -f "$NEZHA_ODM/$rel" ] || die "missing donor file: $NEZHA_ODM/$rel"
 done
-[ -d "$NEZHA_ODM/etc/camera/styletrans" ] || die "missing donor model directory"
 
 log "cleaning $OUT"
 rm -rf "$OUT"
@@ -57,23 +52,46 @@ for rel in "${FILES[@]}"; do
   install -D -m 0644 "$NEZHA_ODM/$rel" "$OUT/odm/$rel"
 done
 
-# Both compressed and uncompressed models are shipped by Nezha. The library
-# chooses one through styletrans_params.json; copying the directory keeps that
-# choice intact.
-cp -a "$NEZHA_ODM/etc/camera/styletrans" "$OUT/odm/etc/camera/styletrans"
-
 # Aurora's engine has no legendMode -> MiMetadata tag 508 path. Patch the
 # plugin to read stylizationType, and leave a marker so the module knows to
 # bridge the app's legendMode request into that key.
 PLUGIN="$OUT/odm/lib64/camera/plugins/com.xiaomi.plugin.mileicafilter.so"
 python3 "$ROOT/tools/hal-port/aurora/patch_plugin.py" "$PLUGIN" "$PLUGIN.patched"
 mv "$PLUGIN.patched" "$PLUGIN"
+
 : > "$OUT/odm/etc/camera/hypercameramod_legend_bridge"
 
 python3 "$ROOT/tools/hal-port/aurora/patch_leicasnapshot.py" \
   "$AURORA_ODM/etc/camera/xiaomi/leicasnapshot.json" \
-  "$OUT/odm/etc/camera/xiaomi/leicasnapshot.json" \
-  --with-styletrans
+  "$OUT/odm/etc/camera/xiaomi/leicasnapshot.json"
+
+# Aurora 6.7 selects SatSnapshot for ordinary Leica captures, so the same
+# LeicaFilter node must be present there too.
+python3 "$ROOT/tools/hal-port/aurora/patch_leicasnapshot.py" \
+  "$AURORA_ODM/etc/camera/xiaomi/satsnapshot.json" \
+  "$OUT/odm/etc/camera/xiaomi/satsnapshot.json"
+
+# The app process may not share the HAL's mount namespace, so the module
+# advertises the overlay through properties as well as files. HalCapabilities
+# treats these as a positive override; the files stay the source of truth for
+# stock nezha/madrid.
+cat > "$OUT/post-fs-data.sh" <<'EOF'
+#!/system/bin/sh
+RESETPROP=/data/adb/ksu/bin/resetprop
+[ -x "$RESETPROP" ] || RESETPROP=resetprop
+"$RESETPROP" -n persist.sys.hypercam.legend 1
+"$RESETPROP" -n persist.sys.hypercam.style_transfer 0
+"$RESETPROP" -n persist.sys.hypercam.bridge 1
+"$RESETPROP" -n persist.sys.hypercam.m10r 0
+EOF
+chmod 0755 "$OUT/post-fs-data.sh"
+
+# KernelSU mounts module files with the system_file label. The camera HAL
+# domain may read /odm/vendor_file but not /odm/system_file, so allow the
+# overlay's plugins and parameter files explicitly.
+cat > "$OUT/sepolicy.rule" <<'EOF'
+allow hal_camera_default system_file file { read open getattr map execute execute_no_trans }
+EOF
 
 cat > "$OUT/module.prop" <<'EOF'
 id=hypercam-aurora-legend
@@ -81,7 +99,7 @@ name=HyperCameraMod Aurora Legend HAL port
 version=v0.1-experimental
 versionCode=1
 author=HyperCameraMod
-description=Adds the 17 Ultra M3/M9 Legendary plugin stack to the 14 Ultra. Experimental; install with KernelSU/Magisk and reboot.
+description=Experimental Aurora mileicafilter/LeicaFilter pipeline port; plugin registration is still unresolved.
 EOF
 
 cat > "$OUT/README.md" <<'EOF'
