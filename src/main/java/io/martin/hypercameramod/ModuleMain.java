@@ -1329,8 +1329,8 @@ public class ModuleMain extends XposedModule {
     // build, and their look name - which MIVIRenderTag puts into "lutNames" and MIVILutSaver
     // writes out - is redirected to our own files in Di.k.d.
     private static final int LOOK_TEXT_BASE = 0x7e030000;   // made-up ids for the chip labels
-    private static final int LOOK_M3 = 85;                  // enum entry N_V_250, hidden here
-    private static final int LOOK_M9 = 86;                  // enum entry N_H_400, hidden here
+    private static final int LOOK_M3 = 86;                  // enum entry N_H_400, hidden here
+    private static final int LOOK_M9 = 85;                  // enum entry N_V_250, hidden here
     private static final String LOOKS_ENTRIES_KEY = "looks_entries_enabled";
     private static final java.util.Map<String, android.graphics.Bitmap> LOOK_BITMAPS =
             new java.util.concurrent.ConcurrentHashMap<>();
@@ -1520,15 +1520,16 @@ public class ModuleMain extends XposedModule {
             ArrayList<?> labels = proto == null ? null : (ArrayList<?>) labelsField.get(proto);
             int desc = proto == null ? 0 : descField.getInt(proto);
             int order = proto == null ? 100 : Math.max(100, orderField.getInt(proto) + 90);
-            // The strip shows the highest order first, so M3 gets the larger value.
-            if (!hasM3) {
-                target.add(stripItem(make, LOOK_M3, LOOK_TEXT_BASE | 1, STRIP_ICON_BASE | 1,
-                        icon, nameIcon, samples, labels, desc, order + 1, ordinalField,
-                        samplesField, labelsField, descField, cloudField));
-            }
+            // The strip inserts a filter it does not know yet at position 1, so the item added
+            // last ends up first: add M9 first, M3 last, to get "M3, M9".
             if (!hasM9) {
                 target.add(stripItem(make, LOOK_M9, LOOK_TEXT_BASE | 2, STRIP_ICON_BASE | 2,
                         icon, nameIcon, samples, labels, desc, order, ordinalField,
+                        samplesField, labelsField, descField, cloudField));
+            }
+            if (!hasM3) {
+                target.add(stripItem(make, LOOK_M3, LOOK_TEXT_BASE | 1, STRIP_ICON_BASE | 1,
+                        icon, nameIcon, samples, labels, desc, order + 1, ordinalField,
                         samplesField, labelsField, descField, cloudField));
             }
             log(Log.INFO, TAG, "strip: M3/M9 entries added (" + target.size() + " items)");
@@ -1650,6 +1651,8 @@ public class ModuleMain extends XposedModule {
                 if (name == null || result == null) {
                     return result;
                 }
+                log(Log.INFO, TAG, "look resolve: id=" + id + " ordinal=" + ordinal
+                        + " name=" + name);
                 return make.newInstance(name, idField.getInt(result), degreeField.getInt(result),
                         (float[]) paramsField.get(result), 0);
             });
