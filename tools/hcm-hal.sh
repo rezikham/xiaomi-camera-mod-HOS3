@@ -1,6 +1,9 @@
 #!/system/bin/sh
 # hcm-hal.sh - on-device Xiaomi Camera HAL dump (no computer needed).
 #
+# Requires root (su) or a Shizuku shell such as aShell You. Without either, the
+# root-only vendor/odm files and the dumpsys sections are missing or partial.
+#
 # Run on the phone (Termux or any root shell):
 #   su -c "sh /sdcard/Download/hcm-hal.sh"
 # or, inside a root shell:

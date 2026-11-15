@@ -141,6 +141,8 @@ Two helpers live in [`tools/`](tools):
 
   Output: `logs/<serial>-<device>-<timestamp>.txt` (override with `-o`).
 
+**Root or Shizuku.** The on-device scripts (`hcm-log.sh`, `hcm-hal.sh`) need root (`su`). With Shizuku, run them from a shell app such as **aShell You**. Without either, the module preferences, dmesg and some vendor/odm files are unavailable and the dump is partial.
+
 When reporting a problem, include the phone model, HyperOS version, Camera version and the log lines. If a layout does not match, the `does not match` line names the missing class or field, which is what a new profile needs.
 
 ## Build
@@ -165,6 +167,8 @@ Without a computer, `tools/hcm-hal.sh` runs on the phone and writes the same set
 su -c "sh /sdcard/Download/hcm-hal.sh"
 # → /sdcard/Download/hal-<codename>-<model>-<os>-<timestamp>.tar
 ```
+
+On Windows, `tools/windows/dump-hal.ps1` does the same from a computer. It uses `adb.exe` from `PATH`, and if adb is missing it downloads Google's official platform-tools into `tools/windows/platform-tools` (not committed to the repository) and uses that copy.
 
 ## Changelog
 

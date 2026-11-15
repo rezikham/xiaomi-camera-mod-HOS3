@@ -1,6 +1,9 @@
 #!/system/bin/sh
 # hcm-log.sh - on-device HyperCameraMod / Camera log collector.
 #
+# Requires root (su) or a Shizuku shell such as aShell You. Without either, the
+# module preferences, logcat and dmesg sections are empty or incomplete.
+#
 # Run on the phone (Termux or any root shell):
 #   su -c "sh /sdcard/Download/hcm-log.sh"
 # or, inside a root shell:
