@@ -71,3 +71,23 @@ The minimum honest scope is:
 
 That is a separate feature from the HAL backport, and it should not be used to
 justify enabling the M3/M9 picker on a device whose provider cannot process it.
+
+## Compatibility fallback toggle
+
+`compat_fallback_enabled` (Settings -> Compatibility fallback) is off by
+default. When enabled on a device without the real Legendary HAL bridge, the
+module still forwards the app's M9/M3 choice as
+`com.xiaomi.sessionparams.stylizationType`. The stock Leica
+Authentic/Vibrant colour path then produces an approximation.
+
+It is explicitly **not** the Nezha `mileicafilter`/`legendST` pipeline: no
+preview style transfer, no M3/M9 parameter LUTs, and no claim of identical
+output. The real HAL bridge marker takes precedence when the plugin path is
+installed.
+
+On-device check (stock 14 Ultra, module disabled): toggling it on and
+restarting Camera logs:
+
+```text
+HyperCameraMod: installed the Legendary -> stylizationType request bridge (compatibility fallback)
+```

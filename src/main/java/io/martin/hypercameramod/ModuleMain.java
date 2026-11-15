@@ -91,6 +91,7 @@ public class ModuleMain extends XposedModule {
     // settings toggle decides (see originalPortraitEnabled()).
     private static final int MODE_PORTRAIT = 171;
     private static final String ORIGINAL_PORTRAIT_KEY = "original_portrait_enabled";
+    private static final String COMPAT_FALLBACK_KEY = "compat_fallback_enabled";
     private static final String ORIGINAL_PORTRAIT_PROP = "camera.feature.original_portrait";
     private static final int ASSET_ORIGINAL_BADGE = 3;
     private static volatile android.content.pm.ApplicationInfo moduleInfo;
@@ -545,6 +546,20 @@ public class ModuleMain extends XposedModule {
 
     private volatile boolean blurRadiusHooked;
 
+    // Read on every request build. Off by default: on a stock device it approximates M9/M3
+    // with the normal Leica colour pipeline instead of the missing Legendary plugin.
+    private boolean compatFallbackEnabled() {
+        try {
+            android.content.SharedPreferences p = getRemotePreferences("hypercameramod");
+            if (p != null && p.contains(COMPAT_FALLBACK_KEY)) {
+                return p.getBoolean(COMPAT_FALLBACK_KEY, false);
+            }
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot read " + COMPAT_FALLBACK_KEY + ": " + t);
+        }
+        return propertyOn("camera.feature.compat_fallback");
+    }
+
     // ---- 2b. Legendary request bridge -----------------------------------------------------------
     // The 6.7 app sends com.xiaomi.sessionparams.legendMode (M9=1, M3=2). The Aurora engine has no
     // code to copy that key into MiMetadata tag 508, so a ported plugin would see 0 and disable
@@ -552,7 +567,12 @@ public class ModuleMain extends XposedModule {
     // request carry the Legendary byte in that key. It only runs when the port's marker file is
     // present, so a stock camera is never changed.
     private void installLegendBridgeHook() {
-        if (legendBridgeHooked || !HalCapabilities.hasLegendBridge()) {
+        // The marker means the real Nezha plugin is installed. Without it, the optional
+        // compatibility fallback still forwards the M9/M3 choice as stylizationType, which
+        // makes the stock Leica Authentic/Vibrant colour path approximate the look. It is
+        // not the real Legendary plugin.
+        boolean realBridge = HalCapabilities.hasLegendBridge();
+        if (legendBridgeHooked || (!realBridge && !compatFallbackEnabled())) {
             return;
         }
         try {
@@ -613,7 +633,8 @@ public class ModuleMain extends XposedModule {
                 }
             });
             legendBridgeHooked = true;
-            log(Log.INFO, TAG, "installed the Legendary -> stylizationType request bridge");
+            log(Log.INFO, TAG, "installed the Legendary -> stylizationType request bridge"
+                    + (realBridge ? " (HAL plugin)" : " (compatibility fallback)"));
         } catch (Throwable t) {
             log(Log.WARN, TAG, "cannot install the Legendary request bridge: " + t);
         }

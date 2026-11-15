@@ -24,6 +24,12 @@
         android:summary="@string/pref_original_portrait_summary" />
 
     <SwitchPreferenceCompat
+        android:key="@string/pref_compat_fallback_key"
+        android:title="@string/pref_compat_fallback_title"
+        android:summary="@string/pref_compat_fallback_summary"
+        android:defaultValue="false" />
+
+    <SwitchPreferenceCompat
         android:key="@string/pref_extra_filters_key"
         android:title="@string/pref_extra_filters_title"
         android:summary="@string/pref_extra_filters_summary"

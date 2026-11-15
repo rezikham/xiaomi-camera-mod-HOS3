@@ -5,7 +5,7 @@
 
     <string name="settings_title">HyperCameraMod Settings</string>
     <string name="pref_essential_mode_title">Leica Essential Mode in Standard UI</string>
-    <string name="pref_essential_mode_summary">Show Leica Essential mode (M3/M9) in the standard UI mode strip. Note: M3/M9 processing requires 17 Ultra hardware and will not work on 14 Ultra.</string>
+    <string name="pref_essential_mode_summary">Show Leica Essential mode (M3/M9) in the standard UI mode strip. Real M3/M9 processing needs the 17 Ultra/18 Pro Max HAL; on other devices enable the compatibility fallback below.</string>
     <string name="pref_essential_mode_key">essential_mode_enabled</string>
 
     <string name="pref_leica_ui_title">Leica UI (Looks)</string>
@@ -19,6 +19,10 @@
     <string name="pref_original_portrait_title">Original Portrait Style</string>
     <string name="pref_original_portrait_summary">Show Original in the Portrait style picker. On by default on the 17 Ultra and 18 Pro Max; off by default on the 14 Ultra, whose camera hardware layer cannot complete the Original portrait preview session — enabling it there may freeze the preview. Original colour in Photo mode is not affected. Restart Camera after changing this.</string>
     <string name="pref_original_portrait_key">original_portrait_enabled</string>
+
+    <string name="pref_compat_fallback_title">Compatibility fallback (M9/M3 approximation)</string>
+    <string name="pref_compat_fallback_summary">When the Legendary HAL plugin is missing, forward M9/M3 to the stock Leica Authentic/Vibrant colour path. This is an approximation, not the real M3/M9 processing. Off by default.</string>
+    <string name="pref_compat_fallback_key">compat_fallback_enabled</string>
 
     <string name="pref_extra_filters_title">Extra Film Filters</string>
     <string name="pref_extra_filters_summary">Enable extra film simulation filters: R600, P100F, F-50, KC64, KP160.</string>
