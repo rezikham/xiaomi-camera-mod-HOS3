@@ -397,3 +397,25 @@ normally. With this build the previous `getCustomFrameOrder+8` SIGSEGV is gone.
 A forced capture still produced the 1440x1080 quick-shot JPEG (56 KB) and no
 full-resolution image, so the pipeline still does not consume the node's
 output; `processRequest` execution has not yet been observed directly.
+
+### processRequest is not invoked (atime proof)
+
+`MiLeicaFilterPlugin::processRequest()` calls `initResource()`, which reads the
+`leica_filter_param*.bin` files. Their atime was sampled around a forced
+capture on the file-patched build:
+
+```text
+BEFORE 3659589 3659589 3659589 3659589
+AFTER  3659589 3659589 3659589 3659589
+```
+
+No read happened, so `processRequest`/`initResource` never ran. The capture
+still produced the 1440x1080 quick-shot (57,884 bytes) and there was no crash.
+
+The node goes `initialize` -> `isEnabled` -> `preProcess` and is then dropped
+before the offline stage. The likely reason is that the donor's `preProcess`
+does not ask the engine for an output buffer through the `MiaNodeInterface`
+callbacks, so the node has no output and is not scheduled for `postProcess`.
+The next step is to map `MiaNodeInterface` (`requestOutputBuffer`,
+`setResultBuffer`, `setOutputFormat`) and have the shim issue the output request
+during `preProcess`.
