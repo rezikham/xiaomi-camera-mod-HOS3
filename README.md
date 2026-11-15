@@ -57,7 +57,7 @@ The module can only expose what the phone's camera hardware layer (`camera.qcom.
 | Film filters | ✅ | ✅ | ✅ |
 | Original colour style (Photo) | ✅ | ✅ | ✅ |
 | Original portrait style | ⚠️ Opt-in — may freeze the preview | ✅ (on by default) | ✅ (on by default) |
-| Leica Essential (M3/M9) | ❌ stock HAL; ⚠️ experimental HAL overlay | ✅ | ✅ |
+| Leica Essential (M3/M9) | ⚠️ stock HAL cannot process; app-side approximation toggle | ✅ | ✅ |
 | CMOS (M10R) | ❌ HAL limitation | Experimental — the HAL has no M10R processing | ✅ Native (HAL + Camera 6.8) |
 
 **14 Ultra HAL limitation.** M3, M9, M10R and Original portrait cannot work on the 14 Ultra because its camera hardware layer does not implement the processing they need:
@@ -65,7 +65,7 @@ The module can only expose what the phone's camera hardware layer (`camera.qcom.
 - **Original portrait** starts an algorithm-up SAT preview session. The Xiaomi preview-bokeh engine (`libmialgo_mc_bokeh_cdsp_skel.so`) never returns a frame, the camera waits 5780 ms on a semaphore (`ChiX WaitForSemaphore() ... timed out`), the preview drops to about 0.1 fps, and the vendor camera provider eventually aborts (`ExtensionModule::TriggerRecovery`). The module therefore removes Original from the Portrait style picker on the 14 Ultra by default and moves a saved value back to Master. The **Original Portrait Style** toggle is off there; turning it on restores Original in the picker (together with the freeze), which is why it is opt-in rather than blocked.
 - **M3/M9 (Leica Essential)** need the Leica Essential processing available on the 17 Ultra-class hardware layer. The 14 Ultra HAL has no M10R processing either, so a CMOS shot comes back as an ordinary picture, without Leica processing and without the `legendmode` tag Gallery uses for its LEICA button.
 
-These are firmware limitations; no APK-only module can add the missing HAL processing. A first **experimental HAL overlay** that copies the Nezha M3/M9 plugin stack to Aurora is in [`docs/hal-backport/`](docs/hal-backport/). It is a rooted-device file overlay plus a small plugin patch, has passed static dependency/pipeline checks, and has **not** been run on a physical 14 Ultra. Original colour in Photo is unaffected.
+These are firmware limitations; no APK-only module can add the real missing HAL processing. A first **experimental HAL overlay** that copies the Nezha M3/M9 plugin stack to Aurora is in [`docs/hal-backport/`](docs/hal-backport/). It has been installed on a physical 14 Ultra: the SAT pipeline accepts the node, but Aurora's plugin registry does not register the Nezha plugin yet. The **Compatibility fallback** toggle (Settings) maps M9/M3 to the stock Leica Authentic/Vibrant colour path as an explicit approximation; it is off by default and is not the real M3/M9 pipeline. Original colour in Photo is unaffected.
 
 **CMOS is off by default.** The Xiaomi 17 Ultra's hardware layer (`camera.qcom.core.so`, `com.qti.chi.override.so`) has the Leica Essential processing for M3 and M9 only. A CMOS shot comes back as an ordinary picture, without the Leica processing and without the `legendmode` tag the Gallery uses for its LEICA button. Enable it with the CMOS (M10R) toggle (or `camera.feature.m10r=1`) only to experiment, or on a phone whose firmware supports it.
 
