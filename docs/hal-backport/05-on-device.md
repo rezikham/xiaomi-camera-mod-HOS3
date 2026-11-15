@@ -378,3 +378,22 @@ Next fix: replace the mprotect-in-place patch with an anonymous
 original contents first, then write the remapped slots), or relocate the vtable
 entries in the file. The patch logic itself is known-good; only the write
 primitive is blocked.
+
+### File-level vtable patch works
+
+Because `mprotect()` on the RELRO page is denied, the vtable is now patched
+offline in the donor file instead (`/tmp/opencode/patch_vtable_file.py`):
+
+- `slot 2 -> 0xdafc` (`processRequest`)
+- `slot 3 -> 0x10f28` (`processRequestV2`)
+- `slot 7 -> 0x11200` (`destroy`)
+- `slot 8 -> 0xd714` (`isEnabled`)
+- `initialize` writes `this+0x25 = this+0x26 = 1` (M9) and skips the
+  `CreateInfo` metadata reads
+- `isEnabled` returns 1
+
+The four patched vtable words are RELR addends, so the loader rebases them
+normally. With this build the previous `getCustomFrameOrder+8` SIGSEGV is gone.
+A forced capture still produced the 1440x1080 quick-shot JPEG (56 KB) and no
+full-resolution image, so the pipeline still does not consume the node's
+output; `processRequest` execution has not yet been observed directly.
