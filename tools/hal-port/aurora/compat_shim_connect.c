@@ -19,6 +19,7 @@ extern void *dlopen(const char *path, int flags);
 extern void *dlsym(void *handle, const char *symbol);
 extern int __android_log_print(int prio, const char *tag, const char *fmt, ...);
 extern void shim_apply_vtable_patch(void);
+extern void shim_mark(const char *msg, unsigned long a, unsigned long b);
 
 typedef int (*mivi_connect_fn)(void *provider_manager);
 
@@ -26,7 +27,7 @@ int connect(void *provider_manager) {
     static mivi_connect_fn real;
 
     shim_apply_vtable_patch();
-    __android_log_print(4, "HyperCamCt", "connect called pm=%p", provider_manager);
+    shim_mark("connect", (unsigned long)provider_manager, 0);
     if (!real) {
         /* RTLD_NOW matches how the engine loaded the plugin. The library is
          * already mapped, so this only bumps its refcount. */

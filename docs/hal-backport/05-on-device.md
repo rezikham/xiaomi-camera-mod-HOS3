@@ -355,3 +355,26 @@ registering the donor under its own name (`com.xiaomi.plugin.mileicafilter`).
 
 This also means the vtable registration as `com.xiaomi.plugin.filter` is only a
 diagnostic; the production bundle should keep the two plugins distinct.
+
+### Shim marker result: mprotect is denied
+
+`compat_vtable.c` writes a marker to `/data/vendor/camera/hcm_shim.txt` so shim
+execution is visible without logcat. A forced-style boot produced:
+
+```text
+start 0 0
+base 7a2f94d000 0
+mprotect_fail 0 0
+connect b400007c2192e948 0
+```
+
+So the shim is a real dependency of the donor, `dl_iterate_phdr` finds the
+module, and `connect()` runs. The vtable patch fails only because `mprotect()`
+on the donor's `.data.rel.ro` page is refused (Android 16 RELRO/sealing), which
+is why `getCustomFrameOrder+8` still crashes.
+
+Next fix: replace the mprotect-in-place patch with an anonymous
+`MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED` remap of that 4 KiB page (copy the
+original contents first, then write the remapped slots), or relocate the vtable
+entries in the file. The patch logic itself is known-good; only the write
+primitive is blocked.

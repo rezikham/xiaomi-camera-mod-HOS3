@@ -48,6 +48,20 @@ extern int __android_log_print(int prio, const char *tag, const char *fmt, ...);
 extern int __system_property_get(const char *name, char *value);
 extern void *malloc(unsigned long size);
 extern void *_Znwm(unsigned long size) __asm__("_Znwm");
+extern int open(const char *path, int flags, ...);
+extern long write(int fd, const void *buf, unsigned long count);
+extern int close(int fd);
+extern int snprintf(char *buf, unsigned long size, const char *fmt, ...);
+
+void shim_mark(const char *msg, unsigned long a, unsigned long b) {
+    char buf[160];
+    int n = snprintf(buf, sizeof(buf), "%s %lx %lx\n", msg, a, b);
+    int fd = open("/data/vendor/camera/hcm_shim.txt", 1 | 64 | 1024, 0644);
+    if (fd >= 0) {
+        write(fd, buf, (unsigned long)n);
+        close(fd);
+    }
+}
 
 #define PROT_READ 1
 #define PROT_WRITE 2
@@ -198,7 +212,9 @@ static int find_plugin(struct dl_phdr_info *info, unsigned long size, void *data
 }
 
 void shim_apply_vtable_patch(void) {
+    shim_mark("start", 0, 0);
     dl_iterate_phdr(find_plugin, 0);
+    shim_mark("base", g_plugin_base, 0);
     __android_log_print(4, "HyperCamVt", "plugin base=%p", (void *)g_plugin_base);
     if (!g_plugin_base) {
         return;
@@ -208,7 +224,7 @@ void shim_apply_vtable_patch(void) {
     u64 page = vtable & ~0xfffUL;
 
     if (mprotect((void *)page, 0x1000, PROT_READ | PROT_WRITE) != 0) {
-        __android_log_print(4, "HyperCamVt", "mprotect failed");
+        shim_mark("mprotect_fail", 0, 0);
         return;
     }
 
@@ -244,7 +260,7 @@ void shim_apply_vtable_patch(void) {
     provider[5] = (u64)&shim_provider_name;
 #endif
 
-    __android_log_print(4, "HyperCamVt", "vtable remapped at %p", (void *)vtable);
+    shim_mark("patched", vtable, 0);
 }
 
 __attribute__((constructor)) static void shim_ctor(void) {
