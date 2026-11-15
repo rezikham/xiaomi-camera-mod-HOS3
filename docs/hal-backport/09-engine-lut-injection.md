@@ -169,11 +169,58 @@ Restored state: with the property cleared the next capture was
 `FilterId 66048`, no `applySettingsForMIVIRender` line, saturation `0.598`, i.e.
 the stock pipeline is back.
 
+### 3b. Module integration: the gate without root
+
+The camera reads `camera.debug.mivi3.output.jpeg` once into a static field
+(`f16477e.B8() || Va.b.f17711X`, `Va.b.f17711X = SystemProperties.getBoolean(...)`).
+A `SystemProperties` hook installed before the camera class initialises is
+therefore equivalent to `setprop`, and needs no root at capture time.
+
+`ModuleMain.installHalGateHook()` answers that key with `true` while the module
+setting **Render M3/M9 in the camera engine (HAL LUT slot)**
+(`hal_lut_slot_enabled`) is on. Only the LUT *file* needs root, once, to land in
+`/data/vendor/camera`; the module never writes it.
+
+`tools/hal-port/engine/leica_look.sh` is the root side:
+
+```sh
+leica_look.sh m3            # Monopan LUT into lut_nc + gate property + restarts
+leica_look.sh m9            # Leica Natural LUT into the same slot
+leica_look.sh m3 --no-gate  # leave the gate to the module setting
+leica_look.sh off           # restore the stock slot and property
+leica_look.sh status
+```
+
+Two traps found while wiring it:
+
+* **The camera provider caches the decoded LUT per process.** Swapping the file
+  with the same slot name kept rendering the previous look (M9 stayed perfectly
+  monochrome). `leica_look.sh` therefore restarts `vendor.camera-provider`
+  (`setprop ctl.restart vendor.camera-provider`) after every install, and the
+  camera app so it re-reads the gate.
+* **The app's filter strip scrolls.** `filter_item_parent` bounds move; with the
+  selected chip in view *Negative* was at `(1217,2235)` and its node reads
+  `content-desc="Negative, Selected"`. Select it by reading the dump, not by a
+  hard-coded coordinate.
+
+A/B with the gate supplied only by the module (`getprop` empty), same scene,
+same filter `655591`, provider restarted between captures:
+
+| capture | LUT in `lut_nc` | mean RGB | \|R-G\| | \|G-B\| | saturation |
+| --- | --- | --- | --- | --- | --- |
+| `ab_m3.jpg` 18:23:02 | `M3_Monopan.png` (21 772 B) | 33.36 / 33.36 / 33.36 | 0.0 | 0.0 | **0.000** |
+| `ab_m9.jpg` 18:23:49 | `130_LeicaNatural.png` (77 354 B) | 44.91 / 43.91 / 59.98 | 1.99 | 16.08 | **0.310** |
+
+Both at 3072x4096 with `FilterId 655591`; the module logged
+`LUT candidate ... legend=0` and `applied` never appeared, i.e. the file the app
+saved was untouched and the colour came from the engine.
+
 ### Limits
 
-* `camera.debug.mivi3.output.jpeg` must stay set for the HAL path. It is a normal
-  system property; the overlay/script can set it from a boot hook. Without it the
-  app renders the filter itself and the slot file is ignored.
+* `camera.debug.mivi3.output.jpeg` must be true for the HAL path. Either set it as
+  a normal system property or let the module answer it
+  (`hal_lut_slot_enabled`, section 3b). Without it the app renders the filter
+  itself and the slot file is ignored.
 * the app overwrites `<name>.png` whenever the filter selection changes for the
   first time in a process, hence the read-only bind mount. The preview keeps
   using the in-memory APK bitmap, so preview ≠ capture while a slot is overridden
@@ -200,22 +247,28 @@ on this device.
 ## 5. Reproduce
 
 ```sh
-# 0. stock state, app in Photo mode, some scene
+# with the module: enable "Render M3/M9 in the camera engine (HAL LUT slot)",
+# then use the root helper, which installs the LUT and restarts both processes
+tools/hal-port/engine/leica_look.sh m3
+# -> Filters -> Negative, capture
+
+# without the module (gate from the property)
 adb -s 1c4e4dec shell 'setprop camera.debug.mivi3.output.jpeg true'
 adb -s 1c4e4dec shell 'am force-stop com.android.camera'
 adb -s 1c4e4dec shell 'am start -n com.android.camera/.Camera'
-# 1. Filters -> Negative, then capture once (the app writes lut_nc.png)
-# 2. install the M3 LUT into the slot
 tools/hal-port/engine/install_lut_slot.sh --serial 1c4e4dec \
     --lut assets/leica_luts/M3_Monopan.png --name lut_nc
-# 3. capture again and compare saturation
-# 4. restore
-tools/hal-port/engine/install_lut_slot.sh --serial 1c4e4dec --restore
+# restore
+tools/hal-port/engine/leica_look.sh off
 ```
 
-The screenshots that pin the UI: filter strip at `(1293,2284)` opens it,
-`(1218,2215)` selects *Negative* when the strip is at its origin, shutter at
-`(719,2785)`.
+`install_lut_slot.sh` does not restart the provider; run
+`setprop ctl.restart vendor.camera-provider` (or use `leica_look.sh`) or the
+previous LUT stays cached.
+
+The screenshots that pin the UI: filter strip at `(1293,2284)` opens it; the
+*Negative* chip moves with the strip scroll (read the `filter_item_parent`
+bounds from `uiautomator dump`), and the shutter is at `(719,2785)`.
 
 ## 6. Related observation (not investigated here)
 

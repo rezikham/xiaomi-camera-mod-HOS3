@@ -28,6 +28,10 @@
     <string name="pref_extra_filters_summary">Enable extra film simulation filters: R600, P100F, F-50, KC64, KP160.</string>
     <string name="pref_extra_filters_key">extra_filters_enabled</string>
 
+    <string name="pref_hal_lut_slot_title">Render M3/M9 in the camera engine (HAL LUT slot)</string>
+    <string name="pref_hal_lut_slot_summary">Hand the look to the stock filter node instead of post-processing the photo. Requires the LUT file installed in /data/vendor/camera (tools/hal-port/engine/leica_look.sh) and the Negative filter selected. Restart Camera and the camera provider after changing this or the LUT.</string>
+    <string name="pref_hal_lut_slot_key">hal_lut_slot_enabled</string>
+
     <string name="menu_force_stop_camera">Force Stop Camera</string>
     <string name="menu_hide_launcher">Hide launcher icon</string>
     <string name="pref_hide_launcher_title">Hide App Icon from Launcher</string>

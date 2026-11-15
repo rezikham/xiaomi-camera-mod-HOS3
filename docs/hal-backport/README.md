@@ -58,6 +58,14 @@ two M10R models, and the Android 17-era engine. See
   `/data/vendor/camera/<name>.png` and restores the stock state with
   `--restore`. This is the engine-side injection that works on Aurora today;
   see [09-engine-lut-injection.md](09-engine-lut-injection.md).
+* `tools/hal-port/engine/leica_look.sh` — one command per look
+  (`m3`, `m9`, `off`, `status`): installs the LUT, restarts the camera provider
+  (it caches the decoded LUT) and the camera app, and can leave the engine gate
+  to the module with `--no-gate`.
+* The module's **Render M3/M9 in the camera engine (HAL LUT slot)** setting
+  (`hal_lut_slot_enabled`) answers `camera.debug.mivi3.output.jpeg` from a
+  `SystemProperties` hook, so after the one-time root install of the LUT the
+  capture path needs no adb and no root.
 * `tools/hal-port/engine/hook_tag_lookup.py` — Frida 17 probe for
   `MiMetadata::find` / `ChiMetadata::GetTag`. Unverified on aurora: attaching to
   the camera provider reboots this unit (immune-system protection switch).
@@ -68,9 +76,15 @@ The analysis pages are static evidence from extracted firmware, APK
 decompilation and ELF disassembly. A physical 14 Ultra became available at the
 end of the work; the overlay and module APK were installed on
 `OS3.0.304.0.WNAMIXM` with KernelSU 3.2.5. Execution results are tracked in
-[05-on-device.md](05-on-device.md), separated from the static claims. Until that
-page records a successful plugin load and M9/M3 capture, do not present the
-port as working.
+[05-on-device.md](05-on-device.md), separated from the static claims.
+
+What has run on the device: the engine renders a supplied LUT through the stock
+`com.xiaomi.plugin.filter` node - M3 (Monopan) as exact grayscale and the M9
+look in colour, both at full resolution with the module's own post-processing
+disabled ([09](09-engine-lut-injection.md) section 3b). The Nezha
+`mileicafilter` plugin itself still never executes on Aurora
+(`processRequest`/`initResource` never run), so the real Legendary pipeline is
+not ported; the LUT slot is the engine-side approximation that works today.
 
 Evidence conventions:
 

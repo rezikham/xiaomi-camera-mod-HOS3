@@ -94,6 +94,14 @@ public class ModuleMain extends XposedModule {
     private static final int MODE_PORTRAIT = 171;
     private static final String ORIGINAL_PORTRAIT_KEY = "original_portrait_enabled";
     private static final String COMPAT_FALLBACK_KEY = "compat_fallback_enabled";
+    // The stock filter node (com.xiaomi.plugin.filter / FilterInstance0) renders the look itself
+    // when the camera hands it the render payload. The camera only does that when
+    // camera.debug.mivi3.output.jpeg is true; otherwise it renders in the app and the HAL LUT is
+    // ignored. The gate is read once by the camera process, so the module can answer it here
+    // without root. The LUT file still lives in /data/vendor/camera and is installed by
+    // tools/hal-port/engine/leica_look.sh.
+    private static final String HAL_GATE_KEY = "camera.debug.mivi3.output.jpeg";
+    private static final String HAL_LUT_SLOT_KEY = "hal_lut_slot_enabled";
     private static final String ORIGINAL_PORTRAIT_PROP = "camera.feature.original_portrait";
     private static final int ASSET_ORIGINAL_BADGE = 3;
     private static volatile android.content.pm.ApplicationInfo moduleInfo;
@@ -206,6 +214,70 @@ public class ModuleMain extends XposedModule {
         } catch (Throwable t) {
             log(Log.WARN, TAG, "cannot hook SystemProperties: " + t);
         }
+        installHalGateHook();
+    }
+
+    // The camera caches camera.debug.mivi3.output.jpeg in a static field on first use
+    // (f16477e.B8() || Va.b.f17711X), so it must be answered before the app touches it. Hooking
+    // the property reads gives the same effect as setprop, per module preference.
+    private void installHalGateHook() {
+        if (halGateHooked) {
+            return;
+        }
+        try {
+            Class<?> props = Class.forName("android.os.SystemProperties");
+            hook(props.getDeclaredMethod("getBoolean", String.class, boolean.class)).intercept(chain -> {
+                Object result = chain.proceed();
+                if (HAL_GATE_KEY.equals(chain.getArg(0))
+                        && !Boolean.TRUE.equals(result) && halLutSlotEnabled()) {
+                    return true;
+                }
+                return result;
+            });
+            try {
+                hook(props.getDeclaredMethod("getBoolean", String.class)).intercept(chain -> {
+                    Object result = chain.proceed();
+                    if (HAL_GATE_KEY.equals(chain.getArg(0))
+                            && !Boolean.TRUE.equals(result) && halLutSlotEnabled()) {
+                        return true;
+                    }
+                    return result;
+                });
+            } catch (NoSuchMethodException ignored) {
+            }
+            hook(props.getDeclaredMethod("get", String.class, String.class)).intercept(chain -> {
+                Object result = chain.proceed();
+                if (HAL_GATE_KEY.equals(chain.getArg(0)) && halLutSlotEnabled()) {
+                    return "true";
+                }
+                return result;
+            });
+            hook(props.getDeclaredMethod("get", String.class)).intercept(chain -> {
+                Object result = chain.proceed();
+                if (HAL_GATE_KEY.equals(chain.getArg(0)) && halLutSlotEnabled()) {
+                    return "true";
+                }
+                return result;
+            });
+            halGateHooked = true;
+            log(Log.INFO, TAG, "hooked SystemProperties (" + HAL_GATE_KEY + " -> HAL when enabled)");
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot hook " + HAL_GATE_KEY + ": " + t);
+        }
+    }
+
+    private volatile boolean halGateHooked;
+
+    private boolean halLutSlotEnabled() {
+        try {
+            android.content.SharedPreferences p = getRemotePreferences("hypercameramod");
+            if (p != null) {
+                return p.getBoolean(HAL_LUT_SLOT_KEY, false);
+            }
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot read " + HAL_LUT_SLOT_KEY + ": " + t);
+        }
+        return false;
     }
 
     private static int parse(Object value) {
@@ -675,6 +747,12 @@ public class ModuleMain extends XposedModule {
             }
             if ("M3".equalsIgnoreCase(forced)) {
                 return 2;
+            }
+            // An explicit property always wins, including "off": without this, a build that
+            // always starts the watcher would still resolve the style from the camera's saved
+            // preference and post-process a capture the HAL already rendered.
+            if (!forced.isEmpty()) {
+                return 0;
             }
         } catch (Throwable ignored) {
         }
