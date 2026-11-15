@@ -108,8 +108,10 @@ LUT handling [observed]:
   (identical layout to the `odm/etc/camera/videofilter/*.png` and to the
   module's `assets/leica_luts/*.png`);
 * the LUT directory used at runtime is the app's `lutPath`
-  (`/data/vendor/camera/`); `/mnt/vendor/persist/camera` is the plugin's
-  fallback string when the JSON carries no directory.
+  (`/data/vendor/camera/`). The plugin also carries the literal
+  `/mnt/vendor/persist/camera`; [inferred] that is the fallback when the JSON
+  has no directory - a black LUT placed there was *not* picked up while the
+  `/data/vendor/camera` one was.
 
 Cross-check with SELinux [observed, `dmesg`]:
 
