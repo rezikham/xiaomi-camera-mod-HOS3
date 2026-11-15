@@ -9,6 +9,8 @@ build/
 *.ap_
 *.aab
 *.so
+# The genuine Leica core is bundled on purpose (see docs/hal-backport/10-essential-moments.md).
+!src/main/jniLibs/**/*.so
 *.dex
 local.properties
 *.keystore

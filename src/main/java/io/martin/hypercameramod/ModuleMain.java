@@ -58,8 +58,10 @@ public class ModuleMain extends XposedModule {
     private static final String LEGEND_MODE_KEY = "com.xiaomi.sessionparams.legendMode";
     private static final String STYLIZATION_TYPE_KEY = "com.xiaomi.sessionparams.stylizationType";
     private static final ThreadLocal<Byte> BRIDGE_LEGEND = new ThreadLocal<>();
-    // Last Legendary style seen in a request: 1 = M9, 2 = M3. Used by the LUT fallback.
+    // Last Legendary style seen in a request: 1 = M9, 2 = M3. Used by the LUT fallback and by
+    // the optional Essential pipeline. The timestamp lets the pipeline ignore a stale selection.
     private static volatile byte lastLegend;
+    private static volatile long lastLegendTime;
     private static final ThreadLocal<Boolean> BRIDGE_SETTING = ThreadLocal.withInitial(() -> false);
 
     // 3. M10R. The Leica Essential style list builds M3 (B&W) and M9 (CCD); a profile names where
@@ -95,6 +97,11 @@ public class ModuleMain extends XposedModule {
     private static final int MODE_PORTRAIT = 171;
     private static final String ORIGINAL_PORTRAIT_KEY = "original_portrait_enabled";
     private static final String COMPAT_FALLBACK_KEY = "compat_fallback_enabled";
+    // Genuine Essential Moments M3/M9 pipeline. Off by default. Runs all native work in the
+    // module's private :essential process (EssentialService), never in the camera process.
+    private static final String ESSENTIAL_PIPELINE_KEY = "essential_pipeline_enabled";
+    private static final String ESSENTIAL_PIPELINE_PROP = "camera.feature.essential_pipeline";
+    private static final long ESSENTIAL_LEGEND_FRESH_MS = 180_000;
     // The stock filter node (com.xiaomi.plugin.filter / FilterInstance0) renders the look itself
     // when the camera hands it the render payload. The camera only does that when
     // camera.debug.mivi3.output.jpeg is true; otherwise it renders in the app and the HAL LUT is
@@ -131,6 +138,7 @@ public class ModuleMain extends XposedModule {
     private volatile boolean nameStyleHooked;
     private volatile boolean stylizationHooked;
     private volatile boolean legendBridgeHooked;
+    private volatile boolean legendObserverHooked;
     private volatile boolean legendHooked;
     private volatile boolean assetsHooked;
     private volatile boolean styleHooked;
@@ -169,6 +177,7 @@ public class ModuleMain extends XposedModule {
         installNameStyleHook(loader);
         installStylizationHook();
         installLegendBridgeHook();
+        installLegendObserver();
         installLutFallbackHook(loader);
         installLutFileWatcher();
         installBlurRadiusHook(loader);
@@ -687,6 +696,28 @@ public class ModuleMain extends XposedModule {
 
     private void applyLutToFile(java.io.File file) {
         try {
+            // The genuine pipeline is an additional path. It never replaces the LUT fallback or
+            // the HAL slot: when it is on it owns the file, and it refuses to run if the HAL slot
+            // is also rendering M3/M9 in the camera engine.
+            byte latest = lastLegend;
+            if (essentialPipelineEnabled()) {
+                if (halLutSlotEnabled()) {
+                    log(Log.INFO, TAG, "Essential pipeline skipped: HAL LUT slot is on");
+                    return;
+                }
+                long age = android.os.SystemClock.elapsedRealtime() - lastLegendTime;
+                if (latest == 0 || age > ESSENTIAL_LEGEND_FRESH_MS) {
+                    log(Log.INFO, TAG, "Essential pipeline skipped " + file.getName()
+                            + ": no fresh M3/M9 selection (legend=" + latest + ", age=" + age + " ms)");
+                    return;
+                }
+                log(Log.INFO, TAG, "Essential candidate " + file.getName() + " legend=" + latest);
+                EssentialPipeline.handle(file, latest);
+                // One selection, one file: a later normal capture must not inherit this look.
+                lastLegend = 0;
+                lastLegendTime = 0;
+                return;
+            }
             if (!compatFallbackEnabled()) {
                 return;
             }
@@ -860,6 +891,23 @@ public class ModuleMain extends XposedModule {
         return propertyOn("camera.feature.compat_fallback");
     }
 
+    // Genuine Leica Essential pipeline from Essential Moments. Off by default; all native work
+    // happens in the module's :essential process.
+    private boolean essentialPipelineEnabled() {
+        if (propertyOn(ESSENTIAL_PIPELINE_PROP)) {
+            return true;
+        }
+        try {
+            android.content.SharedPreferences p = getRemotePreferences("hypercameramod");
+            if (p != null && p.contains(ESSENTIAL_PIPELINE_KEY)) {
+                return p.getBoolean(ESSENTIAL_PIPELINE_KEY, false);
+            }
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot read " + ESSENTIAL_PIPELINE_KEY + ": " + t);
+        }
+        return false;
+    }
+
     // ---- 2b. Legendary request bridge -----------------------------------------------------------
     // The 6.7 app sends com.xiaomi.sessionparams.legendMode (M9=1, M3=2). The Aurora engine has no
     // code to copy that key into MiMetadata tag 508, so a ported plugin would see 0 and disable
@@ -906,6 +954,7 @@ public class ModuleMain extends XposedModule {
                     BRIDGE_LEGEND.set(legend);
                     if (legend != 0) {
                         lastLegend = legend;
+                        lastLegendTime = android.os.SystemClock.elapsedRealtime();
                     }
                     Object result = chain.proceed();
                     if (legend != 0 && !BRIDGE_SETTING.get()) {
@@ -940,6 +989,44 @@ public class ModuleMain extends XposedModule {
                     + (realBridge ? " (HAL plugin)" : " (compatibility fallback)"));
         } catch (Throwable t) {
             log(Log.WARN, TAG, "cannot install the Legendary request bridge: " + t);
+        }
+    }
+
+    // Records the M3/M9 choice even when the real HAL bridge or the compatibility fallback is off,
+    // so the optional Essential pipeline knows which look the user selected. It does not modify
+    // the request: stock filters and LUT slots stay exactly as they were.
+    private void installLegendObserver() {
+        if (legendObserverHooked || legendBridgeHooked || !essentialPipelineEnabled()) {
+            return;
+        }
+        try {
+            Class<?> builder = Class.forName("android.hardware.camera2.CaptureRequest$Builder");
+            Class<?> keyClass = Class.forName("android.hardware.camera2.CaptureRequest$Key");
+            Method set = null;
+            for (Method m : builder.getDeclaredMethods()) {
+                if (m.getName().equals("set") && m.getParameterCount() == 2
+                        && m.getParameterTypes()[0] == keyClass) {
+                    set = m;
+                }
+            }
+            if (set == null) {
+                return;
+            }
+            hook(set).intercept(chain -> {
+                Object key = chain.getArg(0);
+                if (key instanceof CaptureRequest.Key<?> requestKey
+                        && LEGEND_MODE_KEY.equals(requestKey.getName())
+                        && chain.getArg(1) instanceof Number number
+                        && number.byteValue() != 0) {
+                    lastLegend = number.byteValue();
+                    lastLegendTime = android.os.SystemClock.elapsedRealtime();
+                }
+                return chain.proceed();
+            });
+            legendObserverHooked = true;
+            log(Log.INFO, TAG, "observing " + LEGEND_MODE_KEY + " for the Essential pipeline");
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot observe the Legendary style: " + t);
         }
     }
 

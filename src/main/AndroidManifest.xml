@@ -13,6 +13,12 @@
         android:name="${applicationId}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
         tools:node="remove" />
 
+    <!-- The :essential service validates the caller by package, so it must be able to see
+         the camera package on Android 11+ package-visibility rules. -->
+    <queries>
+        <package android:name="com.android.camera" />
+    </queries>
+
     <application
         android:description="@string/module_description"
         android:label="@string/app_name"
@@ -42,6 +48,16 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity-alias>
+
+        <!--
+            Genuine Leica Essential pipeline. Runs in its own process so a native SIGSEGV can
+            never take down the camera. The camera process binds explicitly and sends the JPEG
+            through a pipe; the service checks the caller UID before doing any work.
+        -->
+        <service
+            android:name=".EssentialService"
+            android:exported="true"
+            android:process=":essential" />
 
     </application>
 

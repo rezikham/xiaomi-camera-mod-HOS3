@@ -104,3 +104,4 @@ Evidence conventions:
 | [06-app-side-processing.md](06-app-side-processing.md) | Why vendor HAL plugins cannot run inside the LSPosed app process |
 | [07-device-porting.md](07-device-porting.md) | Inventory and path choice for other devices (e.g. 14 Pro Ti) |
 | [09-engine-lut-injection.md](09-engine-lut-injection.md) | Runtime consumer of the render payload (`com.xiaomi.plugin.filter`), LUT slot injection and the verified M3 monochrome capture |
+| [10-essential-moments.md](10-essential-moments.md) | The genuine Essential Moments M3/M9 pipeline: Java/native map, Monopan spawn and crash analysis, process-isolated module integration |

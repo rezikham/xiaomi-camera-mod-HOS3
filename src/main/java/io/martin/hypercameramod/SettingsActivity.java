@@ -27,12 +27,12 @@ public class SettingsActivity extends AppCompatActivity {
     private static final String[] SETTING_KEYS = {
             "essential_mode_enabled", "leica_ui_enabled", "m10r_enabled", "extra_filters_enabled",
             "compat_fallback_enabled", "hal_lut_slot_enabled", "looks_entries_enabled",
-            ORIGINAL_PORTRAIT_KEY
+            "essential_pipeline_enabled", ORIGINAL_PORTRAIT_KEY
     };
     // Original portrait is only offered by default on phones whose camera hardware layer can
     // preview it (17 Ultra, 18 Pro Max); on the 14 Ultra it deadlocks the preview.
     private static final boolean[] SETTING_DEFAULTS = {
-            true, true, false, true, false, false, true, DeviceSupport.originalPortraitDefault()
+            true, true, false, true, false, false, true, false, DeviceSupport.originalPortraitDefault()
     };
 
     private SharedPreferences modulePrefs;

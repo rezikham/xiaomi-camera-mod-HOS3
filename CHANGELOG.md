@@ -6,6 +6,7 @@ All notable changes to HyperCameraMod. The module follows a simple scheme: stabl
 
 ### Added
 
+- **Leica Essential pipeline (real M3/M9)**. An optional post-capture path that runs the genuine Essential Moments parametric filter and the M3/M9 legend18 parameter files in a private module process, with the app's grayscale M3 fallback. Off by default; it never replaces the HAL LUT slot or a stock filter. See [docs/hal-backport/10-essential-moments.md](docs/hal-backport/10-essential-moments.md).
 - **Original Portrait Style** toggle. It starts on for the Xiaomi 17 Ultra and 18 Pro Max and off for the 14 Ultra (chosen from the phone model when the settings app first opens) and can be overridden on any phone. It has a `camera.feature.original_portrait` system-property fallback.
 - A **feature availability** table in the README, plus a note that M3, M9, M10R and Original portrait cannot work on the 14 Ultra because its camera hardware layer does not implement the required processing.
 

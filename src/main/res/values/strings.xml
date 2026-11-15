@@ -24,6 +24,10 @@
     <string name="pref_compat_fallback_summary">When the Legendary HAL plugin is missing, forward M9/M3 to the stock Leica Authentic/Vibrant colour path. This is an approximation, not the real M3/M9 processing. Off by default.</string>
     <string name="pref_compat_fallback_key">compat_fallback_enabled</string>
 
+    <string name="pref_essential_pipeline_title">Leica Essential pipeline (real M3/M9)</string>
+    <string name="pref_essential_pipeline_summary">Apply the genuine Leica filter from Essential Moments to saved JPEGs when M3 or M9 is selected. Native code runs in a private module process, so a crash cannot take down Camera. Off by default; restart Camera after changing. Do not combine with the HAL LUT slot. M3 uses the app\'s grayscale fallback unless the optional Monopan libs are bundled.</string>
+    <string name="pref_essential_pipeline_key">essential_pipeline_enabled</string>
+
     <string name="pref_extra_filters_title">Extra Film Filters</string>
     <string name="pref_extra_filters_summary">Enable extra film simulation filters: R600, P100F, F-50, KC64, KP160.</string>
     <string name="pref_extra_filters_key">extra_filters_enabled</string>

@@ -44,6 +44,11 @@ android {
             merges += "META-INF/xposed/*"
             excludes += "**"
         }
+        // The optional Monopan stage posix_spawns libmonopan_runner.so, which needs a real,
+        // executable file in nativeLibraryDir. Extracting the small core libs is cheap.
+        jniLibs {
+            useLegacyPackaging = true
+        }
     }
 }
 

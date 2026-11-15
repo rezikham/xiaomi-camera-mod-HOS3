@@ -30,6 +30,12 @@
         android:defaultValue="false" />
 
     <SwitchPreferenceCompat
+        android:key="@string/pref_essential_pipeline_key"
+        android:title="@string/pref_essential_pipeline_title"
+        android:summary="@string/pref_essential_pipeline_summary"
+        android:defaultValue="false" />
+
+    <SwitchPreferenceCompat
         android:key="@string/pref_hal_lut_slot_key"
         android:title="@string/pref_hal_lut_slot_title"
         android:summary="@string/pref_hal_lut_slot_summary"
