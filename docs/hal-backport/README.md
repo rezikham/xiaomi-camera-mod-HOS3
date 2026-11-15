@@ -79,3 +79,4 @@ Evidence conventions:
 | [04-evidence.md](04-evidence.md) | Commands, hashes, offsets and reproducibility |
 | [05-on-device.md](05-on-device.md) | Physical 14 Ultra install and validation log |
 | [06-app-side-processing.md](06-app-side-processing.md) | Why vendor HAL plugins cannot run inside the LSPosed app process |
+| [07-device-porting.md](07-device-porting.md) | Inventory and path choice for other devices (e.g. 14 Pro Ti) |
