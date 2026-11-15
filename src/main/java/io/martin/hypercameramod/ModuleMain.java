@@ -1522,13 +1522,15 @@ public class ModuleMain extends XposedModule {
             int order = proto == null ? 100 : Math.max(100, orderField.getInt(proto) + 90);
             // The strip inserts a filter it does not know yet at position 1, so the item added
             // last ends up first: add M9 first, M3 last, to get "M3, M9".
+            // The name icon is the stock one: the palette editor draws that field large, and
+            // a generated label there shows up as text over a transparency checkerboard.
             if (!hasM9) {
-                target.add(stripItem(make, LOOK_M9, LOOK_TEXT_BASE | 2, STRIP_ICON_BASE | 2,
+                target.add(stripItem(make, LOOK_M9, LOOK_TEXT_BASE | 2, nameIcon,
                         icon, nameIcon, samples, labels, desc, order, ordinalField,
                         samplesField, labelsField, descField, cloudField));
             }
             if (!hasM3) {
-                target.add(stripItem(make, LOOK_M3, LOOK_TEXT_BASE | 1, STRIP_ICON_BASE | 1,
+                target.add(stripItem(make, LOOK_M3, LOOK_TEXT_BASE | 1, nameIcon,
                         icon, nameIcon, samples, labels, desc, order + 1, ordinalField,
                         samplesField, labelsField, descField, cloudField));
             }
