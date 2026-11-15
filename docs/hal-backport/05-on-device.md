@@ -494,3 +494,14 @@ engine calls an entry the donor does not implement.
 This also explains why the output-buffer callbacks never fire and why the
 vendor graph (mileica upstream of the filter) does not help. Running the Nezha
 plugin binary on Aurora cannot work without an Aurora-`postProcess` adapter.
+
+### Correction (static, see [11](11-chix-adapter.md))
+
+The `postProcess` line above is a per-node *teardown* call, not the pixel path:
+the stock filter's slot 5 is a no-op, and its LUT code is slot 2
+(`processRequest(ProcessRequestInfo*)`). The engine reaches slot 2 through
+`MiaNode::processRequest(...)` when the node's `NodeMask` bit 0 is clear (the
+stock filter has no `NodeMask`). The real blocker is therefore not "Aurora has
+no `processRequest`" but that the donor's lifecycle/ABI and the node
+scheduling never lined up; [11-chix-adapter.md](11-chix-adapter.md) maps the
+exact call chain and the wrapper-plugin design that forwards the request.
