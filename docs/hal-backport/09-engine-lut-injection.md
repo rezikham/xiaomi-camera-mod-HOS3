@@ -191,7 +191,9 @@ leica_look.sh off           # restore the stock slot and property
 leica_look.sh status
 ```
 
-Two traps found while wiring it:* **The camera provider caches the decoded LUT per process.** Swapping the file
+Three traps found while wiring it:
+
+* **The camera provider caches the decoded LUT per process.** Swapping the file
   with the same slot name kept rendering the previous look (M9 stayed perfectly
   monochrome). `leica_look.sh` therefore restarts `vendor.camera-provider`
   (`setprop ctl.restart vendor.camera-provider`) after every install, and the
