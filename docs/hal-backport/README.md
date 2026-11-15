@@ -26,6 +26,7 @@ The work separates two questions:
 | Capability | Aurora stock | Aurora + this port | Nezha 17 Ultra | Madrid 18 Pro Max |
 | --- | --- | --- | --- | --- |
 | M3/M9 picker in Camera 6.7 | app-side only | app + HAL | native | native |
+| M3/M9 look rendered by the engine | no | **yes, via a LUT slot** ([09](09-engine-lut-injection.md)) | native | native |
 | `mileicafilter` plugin | no | yes | yes | yes |
 | `legendST` + style-transfer models | no | yes (Nezha models) | yes | yes (M9/M10R models) |
 | M3/M9 Leica parameters | no | yes (Nezha files) | yes | yes |
@@ -52,6 +53,14 @@ two M10R models, and the Android 17-era engine. See
 * `HalCapabilities.java` in the module — file-based feature detection so the
   M10R picker item is only injected when the HAL can render it. `ModuleMain`
   also stops trying to inject the M10R item when Camera 6.8 builds it natively.
+* `tools/hal-port/engine/install_lut_slot.sh` — installs a 512x512 RGB LUT
+  (e.g. `assets/leica_luts/M3_Monopan.png`) into the HAL filter slot
+  `/data/vendor/camera/<name>.png` and restores the stock state with
+  `--restore`. This is the engine-side injection that works on Aurora today;
+  see [09-engine-lut-injection.md](09-engine-lut-injection.md).
+* `tools/hal-port/engine/hook_tag_lookup.py` — Frida 17 probe for
+  `MiMetadata::find` / `ChiMetadata::GetTag`. Unverified on aurora: attaching to
+  the camera provider reboots this unit (immune-system protection switch).
 
 ## Evidence status
 
@@ -80,3 +89,4 @@ Evidence conventions:
 | [05-on-device.md](05-on-device.md) | Physical 14 Ultra install and validation log |
 | [06-app-side-processing.md](06-app-side-processing.md) | Why vendor HAL plugins cannot run inside the LSPosed app process |
 | [07-device-porting.md](07-device-porting.md) | Inventory and path choice for other devices (e.g. 14 Pro Ti) |
+| [09-engine-lut-injection.md](09-engine-lut-injection.md) | Runtime consumer of the render payload (`com.xiaomi.plugin.filter`), LUT slot injection and the verified M3 monochrome capture |

@@ -246,3 +246,60 @@ No output means success.
   removed or moved, is unproven.
 * The `ParamMode` enum values and the `this+0xd0` process-mode semantics are
   not resolved.
+
+## 9. Engine-side LUT injection (2026-11-15, on device)
+
+The runtime consumer of the app's render payload and the LUT-slot injection are
+proven on `1c4e4dec` (`OS3.0.304.0.WNAMIXM`, Camera 6.7.000280.0). Full method
+and measurements: [09-engine-lut-injection.md](09-engine-lut-injection.md).
+
+Producer side (app, `classes4.dex`):
+
+```text
+n9.A0.K1(CaptureRequest.Builder) @ 0x5bb6cc
+  MIVIRenderTag.<init>:(IIIIFZ)V @ 0x5bb744   (mMIVIFilter = true)
+  gate: Te.c.o2() = f16477e.B8() || Va.b.f17711X
+  Va.b.f17711X = SystemProperties.getBoolean("camera.debug.mivi3.output.jpeg", false)
+```
+
+Runtime log with the property set:
+
+```text
+D MCAM_CaptureRequestBuilder: applyMIVIRenderType: 1
+D MCAM_MiCamera2: applySettingsForMIVIRender: {"lutPath":"/data/vendor/camera/",
+  "generalFilterId":72,"filterScript":"@CubeLutEffect;cube_strength=1.0;lut_type=0;...",
+  "isCustomLut":false,"renderType":1,"version":3.002,"lutNames":["lut_nc"]}
+D MCAM_MIVILutSaver: Write Lut to persist dir: lut_nc.png
+```
+
+Consumer side (`com.xiaomi.plugin.filter.so`, 169 672 B):
+
+```text
+0xc194  FilterPlugin::isEnabled(MiaParams)        -> find("com.xiaomi.mivi2.renderType")
+0xc218  FilterPlugin::processRequest(...)         -> find("com.xiaomi.mivi2.render") + JSON
+0xb06c  candyProcess(...)                         -> "lutNames", "CubeLutEffect", "<dir>/<name>.png"
+import  MiMetadata::find(char const*)             <- libcom.xiaomi.metadatautils.so 0xb684
+```
+
+Access proof (SELinux audit, provider thread):
+
+```text
+avc: denied { read } for comm="AlgoFwkThd1" name="lut_nc.png" dev="dm-54"
+  scontext=u:r:hal_camera_default:s0 tcontext=u:object_r:shell_data_file:s0 tclass=file
+```
+
+A/B capture, identical scene/filter/payload (`FilterId 655591`,
+`lutNames:["lut_nc"]`), only `/data/vendor/camera/lut_nc.png` changed:
+
+```text
+stock lut_nc  md5 1717c1a51fc32dc3b82f1ba5bad94d76  mean 0.138/0.150/0.188  sat 0.142
+M3_Monopan    md5 167c769a022945ea5bce80985b344209  mean 0.122/0.122/0.122  sat 0.000
+solid black   md5 da2e6a66c89e3a17973274b5088c85bc  mean 0.000/0.000/0.000  sat 0.000
+```
+
+Restored: property cleared, captures return `FilterId 66048` with no
+`applySettingsForMIVIRender` line and a normal colour image (`sat 0.446`).
+
+Frida was not usable for the lookup hook: two attach attempts to
+`vendor.qti.camera.provider-service_64` were followed by a device reboot;
+`persist.vendor.camera.immunesystem.protection.switch` is `true` on this unit.
