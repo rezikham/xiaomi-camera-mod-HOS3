@@ -57,6 +57,8 @@ public class ModuleMain extends XposedModule {
     private static final String LEGEND_MODE_KEY = "com.xiaomi.sessionparams.legendMode";
     private static final String STYLIZATION_TYPE_KEY = "com.xiaomi.sessionparams.stylizationType";
     private static final ThreadLocal<Byte> BRIDGE_LEGEND = new ThreadLocal<>();
+    // Last Legendary style seen in a request: 1 = M9, 2 = M3. Used by the LUT fallback.
+    private static volatile byte lastLegend;
     private static final ThreadLocal<Boolean> BRIDGE_SETTING = ThreadLocal.withInitial(() -> false);
 
     // 3. M10R. The Leica Essential style list builds M3 (B&W) and M9 (CCD); a profile names where
@@ -157,6 +159,7 @@ public class ModuleMain extends XposedModule {
         installNameStyleHook(loader);
         installStylizationHook();
         installLegendBridgeHook();
+        installLutFallbackHook(loader);
         installBlurRadiusHook(loader);
         installLegendHook(loader);
         installStyleHook(loader);
@@ -545,9 +548,65 @@ public class ModuleMain extends XposedModule {
     }
 
     private volatile boolean blurRadiusHooked;
+    private volatile boolean lutHooked;
+    private final java.util.Map<String, LeicaLut> lutCache =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
-    // Read on every request build. Off by default: on a stock device it approximates M9/M3
-    // with the normal Leica colour pipeline instead of the missing Legendary plugin.
+    // Applies the reproduced Leica 64^3 LUT to the full-size bitmap right before JPEG encoding.
+    // Only active when the compatibility fallback is enabled and the app requested M9/M3.
+    private void installLutFallbackHook(ClassLoader loader) {
+        if (lutHooked || !compatFallbackEnabled()) {
+            return;
+        }
+        try {
+            Method compress = android.graphics.Bitmap.class.getDeclaredMethod("compress",
+                    android.graphics.Bitmap.CompressFormat.class, int.class,
+                    java.io.OutputStream.class);
+            compress.setAccessible(true);
+            hook(compress).intercept(chain -> {
+                try {
+                    android.graphics.Bitmap bm = (android.graphics.Bitmap) chain.getThisObject();
+                    if (bm == null || bm.getWidth() < 2000) {
+                        return chain.proceed();
+                    }
+                    byte legend = lastLegend;
+                    String asset = legend == 1 ? "leica_luts/130_LeicaNatural.png"
+                            : legend == 2 ? "leica_luts/M3_Monopan.png" : null;
+                    if (asset == null) {
+                        return chain.proceed();
+                    }
+                    if (moduleApk == null) {
+                        return chain.proceed();
+                    }
+                    LeicaLut lut = lutCache.get(asset);
+                    if (lut == null) {
+                        lut = LeicaLut.loadFromApk(moduleApk, asset);
+                        if (lut == null) {
+                            return chain.proceed();
+                        }
+                        lutCache.put(asset, lut);
+                    }
+                    android.graphics.Bitmap out = lut.apply(bm, 1.0f);
+                    if (out == null) {
+                        return chain.proceed();
+                    }
+                    out.compress((android.graphics.Bitmap.CompressFormat) chain.getArg(0),
+                            (Integer) chain.getArg(1), (java.io.OutputStream) chain.getArg(2));
+                    out.recycle();
+                    log(Log.INFO, TAG, "applied Leica LUT " + asset);
+                    return true;
+                } catch (Throwable t) {
+                    log(Log.WARN, TAG, "LUT fallback failed: " + t);
+                    return chain.proceed();
+                }
+            });
+            lutHooked = true;
+            log(Log.INFO, TAG, "installed the Leica LUT compatibility fallback");
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot hook Bitmap.compress: " + t);
+        }
+    }
+
     private boolean compatFallbackEnabled() {
         try {
             android.content.SharedPreferences p = getRemotePreferences("hypercameramod");
@@ -604,6 +663,9 @@ public class ModuleMain extends XposedModule {
                     byte legend = chain.getArg(1) instanceof Number number
                             ? number.byteValue() : 0;
                     BRIDGE_LEGEND.set(legend);
+                    if (legend != 0) {
+                        lastLegend = legend;
+                    }
                     Object result = chain.proceed();
                     if (legend != 0 && !BRIDGE_SETTING.get()) {
                         BRIDGE_SETTING.set(true);
