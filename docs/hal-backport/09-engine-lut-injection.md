@@ -216,3 +216,12 @@ tools/hal-port/engine/install_lut_slot.sh --serial 1c4e4dec --restore
 The screenshots that pin the UI: filter strip at `(1293,2284)` opens it,
 `(1218,2215)` selects *Negative* when the strip is at its origin, shutter at
 `(719,2785)`.
+
+## 6. Related observation (not investigated here)
+
+While pinning the filter UI, the 6.7 app on Aurora exposed an **Essential
+Moment -> "Leica Essential"** panel with an `M9` chip and a `Modern Vintage`
+chip, and a `Leica M3` chip in the same mode; picking them turns the live
+preview monochrome. That is an app-native look path, separate from the LUT
+slot above and from the Nezha plugin. It was observed but **not captured or
+measured** here - it belongs to the app-side workstream.
