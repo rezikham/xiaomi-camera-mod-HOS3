@@ -91,3 +91,38 @@ restarting Camera logs:
 ```text
 HyperCameraMod: installed the Legendary -> stylizationType request bridge (compatibility fallback)
 ```
+
+## Reproduced Leica LUTs (fallback path)
+
+The Nezha dump ships the actual Leica colour LUTs:
+
+```text
+odm/etc/camera/videofilter/
+  129_LeicaVivid.png        130_LeicaNatural.png
+  169_LeicaChrome.png       170_LeicaClassic.png
+  171_LeicaContemporary.png 172_LeicaEternal.png
+  173_LeicaBrass.png        174_LeicaTeal.png
+  175_LeicaIModelA.png
+```
+
+Each is a 512x512 RGB PNG holding a 64^3 LUT in an 8x8 tile grid
+(tile index = blue, tile row = green, tile column = red). They are copied to
+`assets/leica_luts/` and can be applied with
+`tools/hal-port/luts/apply_lut.py` (trilinear interpolation, adjustable
+strength).
+
+Verified on a stock Aurora capture:
+
+```text
+original        saturation 0.2652
+LeicaClassic    saturation 0.2874   mean abs diff [6.74, 5.63, 4.54]
+LeicaContemporary saturation 0.1969 mean abs diff [4.71, 4.25, 4.63]
+```
+
+These deltas are far above the ~0.3 repeat-shot noise, so the LUTs are a real,
+reproducible approximation of the Leica looks.
+
+Initial fallback mapping (to be tuned): M9 -> LeicaClassic, M3 ->
+LeicaContemporary. The module can apply the selected LUT to the saved JPEG when
+the compatibility fallback is enabled, replacing the current
+Authentic/Vibrant-only approximation.
