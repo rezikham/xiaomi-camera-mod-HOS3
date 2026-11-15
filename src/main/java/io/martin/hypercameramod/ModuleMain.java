@@ -685,6 +685,9 @@ public class ModuleMain extends XposedModule {
 
     private void applyLutToFile(java.io.File file) {
         try {
+            if (!compatFallbackEnabled()) {
+                return;
+            }
             byte legend = legendFromPrefs();
             log(Log.INFO, TAG, "LUT candidate " + file.getName() + " legend=" + legend
                     + " apk=" + (moduleApk != null) + " size=" + file.length());
@@ -786,6 +789,9 @@ public class ModuleMain extends XposedModule {
             compress.setAccessible(true);
             hook(compress).intercept(chain -> {
                 if (Boolean.TRUE.equals(IN_LUT.get())) {
+                    return chain.proceed();
+                }
+                if (!compatFallbackEnabled()) {
                     return chain.proceed();
                 }
                 try {
