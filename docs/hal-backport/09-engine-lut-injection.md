@@ -191,9 +191,7 @@ leica_look.sh off           # restore the stock slot and property
 leica_look.sh status
 ```
 
-Two traps found while wiring it:
-
-* **The camera provider caches the decoded LUT per process.** Swapping the file
+Two traps found while wiring it:* **The camera provider caches the decoded LUT per process.** Swapping the file
   with the same slot name kept rendering the previous look (M9 stayed perfectly
   monochrome). `leica_look.sh` therefore restarts `vendor.camera-provider`
   (`setprop ctl.restart vendor.camera-provider`) after every install, and the
@@ -202,6 +200,12 @@ Two traps found while wiring it:
   selected chip in view *Negative* was at `(1217,2235)` and its node reads
   `content-desc="Negative, Selected"`. Select it by reading the dump, not by a
   hard-coded coordinate.
+* **A forced `camera.feature.compat_fallback=1` overrides the module setting.**
+  The property won over the disabled switch, so the DCIM watcher kept
+  re-rendering plain captures as M9 (`filterId 66048`, saturation 0.63, module
+  log `LUT applying leica_luts/130_LeicaNatural.png`). Clear it before measuring
+  a HAL-only capture; both the watcher and the `Bitmap.compress` hook now bail
+  out unless the compatibility fallback is on.
 
 A/B with the gate supplied only by the module (`getprop` empty), same scene,
 same filter `655591`, provider restarted between captures:
@@ -214,6 +218,13 @@ same filter `655591`, provider restarted between captures:
 Both at 3072x4096 with `FilterId 655591`; the module logged
 `LUT candidate ... legend=0` and `applied` never appeared, i.e. the file the app
 saved was untouched and the colour came from the engine.
+
+Final restored state on `1c4e4dec`: `leica_look.sh off`, the zero-byte slot
+placeholder removed, `camera.debug.mivi3.output.jpeg`,
+`camera.feature.compat_fallback` and `camera.feature.lut_style` cleared, the
+module's *HAL LUT slot* switch off, 0 slot mounts, provider running. The next
+stock capture was `FilterId 66048`, saturation 0.623, with **0** module
+post-processing lines in logcat.
 
 ### Limits
 
