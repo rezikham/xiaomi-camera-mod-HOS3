@@ -78,3 +78,4 @@ Evidence conventions:
 | [03-port-bundle.md](03-port-bundle.md) | Overlay contents, build/verify/install, risks and test plan |
 | [04-evidence.md](04-evidence.md) | Commands, hashes, offsets and reproducibility |
 | [05-on-device.md](05-on-device.md) | Physical 14 Ultra install and validation log |
+| [06-app-side-processing.md](06-app-side-processing.md) | Why vendor HAL plugins cannot run inside the LSPosed app process |
