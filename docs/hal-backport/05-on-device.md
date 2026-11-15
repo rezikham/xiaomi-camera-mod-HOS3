@@ -147,6 +147,9 @@ Tested fixes and results:
 | Add Nezha `com.xiaomi.camdfx.so` | broke `camera.xiaomi.so`: `DFXEvent::putString` is not exported by Aurora's camdfx |
 | Replace `satsnapshot.json` with the Leica graph | legacy `MiaDLibrary` load is attempted, but the unpatched plugin still fails on `catchLogEncryptLog` |
 | Add an AArch64 shim for the missing logging/DFX/filesystem/libc++ symbols | `MiaDLibrary` load error disappears, but the SAT node is not in the executed node list |
+| Ship Aurora's own `libc++.so` as a private `libcxx.so` and retarget the plugin | plugin loads; `MiaDLibrary` reports no missing symbol at all |
+| Export a `connect` trampoline from the shim that forwards to `miviconnect` | plugin registers; `MiLeicaFilterPlugin::initialize()` executes |
+| Rename the plugin's `miviconnect` dynstr entry to `connect` | wrong: the GNU hash still hashes `miviconnect`, so `dlsym` misses and returns libc's `connect()` |
 
 The replacement stack is not viable: each Nezha core library pulls another
 Aurora-missing dependency. The stable state is therefore the v5a minimal
@@ -156,22 +159,83 @@ overlay, with `legendST` and M10R disabled.
 
 The `hypercam-aurora-legend` KernelSU module is **disabled**, `/odm` is stock,
 and the stock camera/provider are running. The stable v5a bundle is retained at
-`/tmp/opencode/v5a.zip`; the later v5b-v5f compatibility experiments are kept
-only as evidence. No experimental module is active.
+`/tmp/opencode/v5a.zip`; the later v5b-v5l compatibility experiments and the v6
+loader experiments are kept only as evidence. No experimental module is active.
+
+The v6 experiments added `libshim.so` (Xiaomi DFX symbols plus the `connect`
+trampoline) and `libcxx.so` (Aurora `/system/lib64/libc++.so` with a private
+SONAME). The tools that reproduce them live next to the other Aurora scripts:
+
+- `tools/hal-port/aurora/compat_shim.S`
+- `tools/hal-port/aurora/compat_shim_connect.c`
+- `tools/hal-port/aurora/build_compat_shim.sh`
+- `tools/hal-port/aurora/patch_plugin_runtime_deps.py`
 
 The live `/odm` overlay is fixed when the module is mounted: editing files in
 `/data/adb/modules/.../system/odm` while the module is running does **not**
 change `/odm` contents. Every plugin patch must be packaged into the zip and
 installed with a reboot.
 
+## Loader and registration result
+
+Once the private libc++ and the `connect` trampoline are in place, the node is
+no longer skipped and the plugin genuinely executes. The observable chain is:
+
+```text
+MiaPluginManager.cpp:65 load()Nothing registered by plugin ...   # before connect bridge
+    -> disappears
+MiLeicaFilterPlugin::initialize(CreateInfo*, MiaNodeInterface)    # executes
+    -> crash inside initialize
+```
+
+The remaining failures are ABI mismatches between the Nezha `mivifwk` build and
+Aurora's `mivifwk-aurora`, not loader problems:
+
+1. **`CreateInfo` layout.** Aurora's `MiaNode::init` builds `CreateInfo` on the
+   stack and stores ints at `+0x48`/`+0x4c`; the Nezha plugin reads a
+   `MiMetadata*` from `CreateInfo+0x48` and calls `MiMetadata::find()`. The
+   result is:
+
+   ```text
+   signal 11 SIGSEGV, fault addr 0x0000100000000049
+   #00 pthread_mutex_lock+16
+   #03 MiMetadata::find(unsigned int)
+   #05 MiLeicaFilterPlugin::initialize(...)+296
+   ```
+
+   Aurora delivers metadata through `MiaParams` (its first field is a
+   `MiMetadata*`), not through `CreateInfo`.
+
+2. **Plugin vtable signatures.** With the metadata reads skipped in
+   `initialize`, the next call is:
+
+   ```text
+   #00 getCustomFrameOrder(std::__1::shared_ptr<MiMetadata>)+8  (plugin)
+   #01 PluginWraper::needPreProcess(MiaParams)+208              (engine)
+   ```
+
+   The engine calls the slot expecting a different return convention than the
+   Nezha build implements (the fault is a store through a garbage sret pointer
+   in `x8`). The virtual interface itself has diverged between the two
+   `mivifwk` versions.
+
+Both are binary-ABI differences. They cannot be fixed by symbol shims or by
+patching one or two field loads; either the donor plugin must be built against
+Aurora's `mivifwk`, or a wrapper plugin compiled against Aurora headers must
+marshal Aurora structs into the Nezha layout and forward the algorithm calls.
+
 ## What remains
 
-The remaining blocker is two-layered: the SAT node is masked out of the executed
-graph, and Aurora's `MiaPluginModule` does not register the plugin. The last
-capture's `MiviFwkResult` listed `MfnrInstance0`, `GainMap*`, `JpegInstanceFinal`
-and `jpegrAggrInstance`, but not `LeicaFilterInstance0`. The next step is to port or patch the Aurora
-plugin registry so it registers `com.xiaomi.plugin.mileicafilter` (and then
-`legendST`), or to replace the older Aurora engine with a compatible Nezha
-engine. Until that succeeds, M3/M9 do not render even though the picker and the
-SAT pipeline accept the node.
+The plugin now loads, registers, and executes. The blocker is the
+`mivifwk` ABI version: Nezha's plugin was built against a newer framework than
+Aurora's engine provides (`CreateInfo` metadata location and plugin virtual
+signatures differ). Next options, in order:
+
+1. Obtain a `com.xiaomi.plugin.mileicafilter.so` built against an
+   Aurora-compatible `mivifwk` (for example from a firmware whose engine matches
+   `mivifwk-aurora`), then reuse the loader shim unchanged.
+2. Build a thin Aurora-native plugin that implements Aurora's plugin vtable and
+   forwards to the Nezha algorithm/params.
+3. Only if neither is possible, keep the app-side compatibility fallback and
+   treat M3/M9 as unsupported on Aurora.
 
