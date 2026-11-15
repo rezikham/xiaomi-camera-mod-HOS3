@@ -557,6 +557,7 @@ public class ModuleMain extends XposedModule {
     // Applies the reproduced Leica 64^3 LUT to the full-size bitmap right before JPEG encoding.
     // Only active when the compatibility fallback is enabled and the app requested M9/M3.
     private volatile boolean watcherStarted;
+    private static final ThreadLocal<Boolean> IN_LUT = new ThreadLocal<>();
 
     // Post-process the saved JPEG when the camera app writes it. This avoids depending on the
     // app's internal encoder, which does not use Bitmap.compress on this build.
@@ -706,6 +707,9 @@ public class ModuleMain extends XposedModule {
                     java.io.OutputStream.class);
             compress.setAccessible(true);
             hook(compress).intercept(chain -> {
+                if (Boolean.TRUE.equals(IN_LUT.get())) {
+                    return chain.proceed();
+                }
                 try {
                     android.graphics.Bitmap bm = (android.graphics.Bitmap) chain.getThisObject();
                     if (bm == null || bm.getWidth() < 2000) {
