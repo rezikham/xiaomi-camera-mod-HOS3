@@ -8,6 +8,7 @@ import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.hardware.camera2.CameraCharacteristics;
+import android.hardware.camera2.CaptureRequest;
 import android.content.res.Resources;
 import android.os.Handler;
 import android.os.Looper;
@@ -53,6 +54,10 @@ public class ModuleMain extends XposedModule {
     // 2. Original colour style
     private static final String STYLIZATION_KEY = "xiaomi.capabilities.stylizationTypeMask";
     private static final int STYLIZATION_ORIGINAL = 1 << 3;
+    private static final String LEGEND_MODE_KEY = "com.xiaomi.sessionparams.legendMode";
+    private static final String STYLIZATION_TYPE_KEY = "com.xiaomi.sessionparams.stylizationType";
+    private static final ThreadLocal<Byte> BRIDGE_LEGEND = new ThreadLocal<>();
+    private static final ThreadLocal<Boolean> BRIDGE_SETTING = ThreadLocal.withInitial(() -> false);
 
     // 3. M10R. The Leica Essential style list builds M3 (B&W) and M9 (CCD); a profile names where
     // that list and its item class live in one camera layout.
@@ -113,6 +118,7 @@ public class ModuleMain extends XposedModule {
     private volatile boolean modeListHooked;
     private volatile boolean nameStyleHooked;
     private volatile boolean stylizationHooked;
+    private volatile boolean legendBridgeHooked;
     private volatile boolean legendHooked;
     private volatile boolean assetsHooked;
     private volatile boolean styleHooked;
@@ -143,11 +149,13 @@ public class ModuleMain extends XposedModule {
         } catch (Throwable t) {
             log(Log.WARN, TAG, "cannot find the module APK: " + t);
         }
+        log(Log.INFO, TAG, "HAL capabilities: " + HalCapabilities.summary());
         installPropertyHook();
         installTabHook();
         installModeListHook(loader);
         installNameStyleHook(loader);
         installStylizationHook();
+        installLegendBridgeHook();
         installBlurRadiusHook(loader);
         installLegendHook(loader);
         installStyleHook(loader);
@@ -537,6 +545,80 @@ public class ModuleMain extends XposedModule {
 
     private volatile boolean blurRadiusHooked;
 
+    // ---- 2b. Legendary request bridge -----------------------------------------------------------
+    // The 6.7 app sends com.xiaomi.sessionparams.legendMode (M9=1, M3=2). The Aurora engine has no
+    // code to copy that key into MiMetadata tag 508, so a ported plugin would see 0 and disable
+    // itself. The port patches the plugin to read stylizationType instead; this hook makes the
+    // request carry the Legendary byte in that key. It only runs when the port's marker file is
+    // present, so a stock camera is never changed.
+    private void installLegendBridgeHook() {
+        if (legendBridgeHooked || !HalCapabilities.hasLegendBridge()) {
+            return;
+        }
+        try {
+            Class<?> builder = Class.forName("android.hardware.camera2.CaptureRequest$Builder");
+            Class<?> keyClass = Class.forName("android.hardware.camera2.CaptureRequest$Key");
+            Method set = null;
+            for (Method m : builder.getDeclaredMethods()) {
+                if (m.getName().equals("set") && m.getParameterCount() == 2
+                        && m.getParameterTypes()[0] == keyClass) {
+                    set = m;
+                }
+            }
+            if (set == null) {
+                log(Log.WARN, TAG, "CaptureRequest.Builder.set(Key, Object) not found");
+                return;
+            }
+            Object stylizationKey = keyClass.getConstructor(String.class, Class.class)
+                    .newInstance(STYLIZATION_TYPE_KEY, Byte.class);
+            Method setMethod = builder.getMethod("set", keyClass, Object.class);
+            Method build = builder.getMethod("build");
+
+            hook(set).intercept(chain -> {
+                Object key = chain.getArg(0);
+                if (!(key instanceof CaptureRequest.Key<?> requestKey)) {
+                    return chain.proceed();
+                }
+                String name = requestKey.getName();
+                if (LEGEND_MODE_KEY.equals(name)) {
+                    byte legend = chain.getArg(1) instanceof Number number
+                            ? number.byteValue() : 0;
+                    BRIDGE_LEGEND.set(legend);
+                    Object result = chain.proceed();
+                    if (legend != 0 && !BRIDGE_SETTING.get()) {
+                        BRIDGE_SETTING.set(true);
+                        try {
+                            setMethod.invoke(chain.getThisObject(), stylizationKey, legend);
+                        } catch (Throwable t) {
+                            log(Log.WARN, TAG, "cannot add stylizationType to the request: " + t);
+                        } finally {
+                            BRIDGE_SETTING.set(false);
+                        }
+                    }
+                    return result;
+                }
+                if (STYLIZATION_TYPE_KEY.equals(name) && !BRIDGE_SETTING.get()) {
+                    Byte legend = BRIDGE_LEGEND.get();
+                    if (legend != null && legend != 0) {
+                        return chain.proceed(new Object[]{key, legend});
+                    }
+                }
+                return chain.proceed();
+            });
+            hook(build).intercept(chain -> {
+                try {
+                    return chain.proceed();
+                } finally {
+                    BRIDGE_LEGEND.remove();
+                }
+            });
+            legendBridgeHooked = true;
+            log(Log.INFO, TAG, "installed the Legendary -> stylizationType request bridge");
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot install the Legendary request bridge: " + t);
+        }
+    }
+
     // ---- 3. Leica Essential CMOS (M10R) ---------------------------------------------------------
 
     // Read on every build of the list, so setprop takes effect the next time Camera starts.
@@ -628,6 +710,15 @@ public class ModuleMain extends XposedModule {
         if (legendHooked) {
             return;
         }
+        // Camera 6.8 builds the M10R item itself when the device profile is the 18 Pro Max. The
+        // 6.7 layout below cannot describe that list, and adding a second item would at best be
+        // ignored. Treat the native list as the supported path and stay out of it.
+        if (DeviceSupport.family() == DeviceSupport.XIAOMI_18_PRO_MAX
+                && classExists("r2.B", loader)) {
+            legendHooked = true;
+            log(Log.INFO, TAG, "Camera 6.8 builds the Leica Essential list; M10R is native");
+            return;
+        }
         for (LegendProfile profile : LEGEND_PROFILES) {
             try {
                 Class<?> list = Class.forName(profile.listClass(), false, loader);
@@ -651,7 +742,10 @@ public class ModuleMain extends XposedModule {
 
                 hook(build).intercept(chain -> {
                     Object result = chain.proceed();
-                    if (!m10rEnabled()) {
+                    // The picker item is only useful when the HAL can render it. On a stock
+                    // 14 Ultra/17 Ultra the class may exist, but the M10R models and the CMOS
+                    // colour transform do not.
+                    if (!m10rEnabled() || !HalCapabilities.hasM10r()) {
                         return result;
                     }
                     try {
@@ -709,10 +803,24 @@ public class ModuleMain extends XposedModule {
                         + " does not match: " + t);
             }
         }
+        if (m10rEnabled() && !HalCapabilities.hasM10r()) {
+            log(Log.INFO, TAG, "the M10R HAL resources are not present; "
+                    + "the CMOS style is not added");
+            return;
+        }
         log(Log.WARN, TAG, "the Leica Essential style list is not one this module knows; "
                 + "the CMOS style is not added");
         if (m10rEnabled() && !problems.contains(MSG_LEGEND)) {
             problems.add(MSG_LEGEND);   // only worth a notice when the CMOS entry was asked for
+        }
+    }
+
+    private static boolean classExists(String name, ClassLoader loader) {
+        try {
+            Class.forName(name, false, loader);
+            return true;
+        } catch (Throwable t) {
+            return false;
         }
     }
 
