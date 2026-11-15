@@ -122,6 +122,54 @@ the output buffer, the JPEG comes out corrupted (`mean |R-G| = |G-B| = 135`).
 `isEnabled` now loads the donor first and returns 0 when that fails, which keeps
 the capture a clean pass-through.
 
+## Milestone: the donor runs, and the style selects the look
+
+With the private `libMiPhotoFilter.so` (next section) the crash disappeared and
+the donor returns success:
+
+```text
+HCM-Legend: donor loaded vt=0x…
+HCM-Legend: isEnabled style=2
+HCM-Legend: donor initialized style=2
+HCM-Legend: img fmt=0x23 wh=0x1000/0xc00
+HCM-Legend: native in=0xb4… out=0xb4…
+HCM-Legend: donor processRequest -> 0
+```
+
+Full-resolution 3072x4096 frames, no provider restart. Three details had to be
+right:
+
+* the look byte is `this+0x26`, written by the donor's **`isEnabled` from the
+  request metadata** on every capture, and read by `initialize`/`initResource`;
+* `initialize` calls `initResource` itself, so forcing the byte *after*
+  `initialize` also needs `initResource` called again — the exported
+  `MiLeicaFilterPlugin::initResource` symbol is used for that;
+* the process mode in `CreateInfo+0x44` (we pass 1) becomes `this+0xd0`, which
+  `initResource` compares against 0/1/4 to decide whether to build the GL
+  processor.
+
+Measured on the same scene (full-resolution captures, node forced):
+
+| style | `\|R-G\|` | `\|G-B\|` | mean |
+| --- | ---: | ---: | ---: |
+| 0 (node disabled) | 1.7 | 13.6 | 47.1 |
+| 2 (M3 parameter table) | 2.8 | 17.7 | 44.6 |
+| 1 (M9 parameter table) | 9.3 | 23.0 | 52.3 |
+
+The parameter tables are clearly engaged and distinct, i.e. the engine is
+rendering the donor's M3 and M9 looks.
+
+The donor has **no monochrome stage** (`strings` shows no monopan/desaturate
+symbol anywhere in it): Nezha's M3 output only becomes the Leica Monopan look
+when the separate Monopan step runs (`libmialgo_monopan`, the same helper the
+Essential Moments app spawns). Two ways to complete M3:
+
+1. compose it with the existing strip entry — select M3 so the stock filter node
+   applies our `M3_Monopan` 64³ LUT *and* let the wrapper node add the M3
+   grading on top;
+2. add the Monopan helper as a second node/step (its spawn and format are
+   mapped in [12-essential-moments-internals.md](12-essential-moments-internals.md)).
+
 ## Where it stands after the private libc++
 
 With `hcicxx.so` in the bundle and the donor repointed at it, the whole chain
@@ -183,7 +231,7 @@ Next steps:
 With `persist.vendor.camera.hypercam.style` set to `0`, `isEnabled` returns 0,
 the node is a pass-through, and the capture path is unaffected.
 
-## Remaining blocker
+## Fixed along the way
 
 ### libc++ (solved)
 
@@ -201,10 +249,10 @@ Solved with `tools/hal-port/aurora/patch_private_libcxx.py`: the Nezha
 and the donor's `DT_NEEDED` entry is repointed to it. Both names are nine
 characters, so the patch is a byte-for-byte dynstr edit (no `patchelf` here).
 
-### Pixel ABI (open)
+### Pixel ABI (solved)
 
-See "Where it stands after the private libc++" above: the donor executes and
-faults in `candyProcess` because the translated `ImageParams` is incomplete.
+See the milestone section above: with the correct `ImageParams` layout the
+donor executes to completion.
 
 ## Device state used for the test
 

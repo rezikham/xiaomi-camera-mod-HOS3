@@ -103,13 +103,16 @@ typedef void (*donor_init_fn)(void *, void *, void *);
 typedef int (*donor_pri_fn)(void *, void *);
 typedef int (*donor_params_fn)(void *, void *);
 typedef void (*donor_destroy_fn)(void *, int);
+typedef void (*donor_void_fn)(void *);
 
 static void *g_donor;
 static donor_init_fn g_donor_init;
 static donor_pri_fn g_donor_pri;
 static donor_params_fn g_donor_enabled;
 static donor_destroy_fn g_donor_destroy;
+static donor_void_fn g_donor_reinit;
 static int g_donor_inited;
+static u32 g_style;
 
 static u32 forced_style(void) {
     char buf[16];
@@ -146,6 +149,7 @@ static int load_donor(void) {
     g_donor_pri = (donor_pri_fn)vt[5];
     g_donor_enabled = (donor_params_fn)vt[12];
     g_donor_destroy = (donor_destroy_fn)vt[11];
+    g_donor_reinit = (donor_void_fn)p_dlsym(h, "_ZN19MiLeicaFilterPlugin12initResourceEv");
     g_donor = obj;
     logi("donor loaded vt=%lx", (u64)vt, 0);
     return 1;
@@ -165,8 +169,8 @@ struct AImg {
     u8 pad1[0x08];    /* +0x20 */
     void *meta;       /* +0x28 shared_ptr<MiMetadata> */
     void *meta2;      /* +0x30 */
-    u8 pad2[0x3c];
-    void *native;     /* +0x70 native_handle* */
+    u8 pad2[0x38];
+    void *native;     /* +0x70 native_handle* (stock filter 0xc474) */
 };
 
 /* Nezha ImageParams, which the donor reads */
@@ -174,8 +178,8 @@ struct NImg {
     u32 fmt;
     u32 width;
     u32 height;
-    u8 pad0[0x28];
-    u32 usage;        /* +0x38 */
+    u8 pad0[0x2c];
+    u32 usage;        /* +0x38 (donor getImageInfo 0x11f3c) */
     u32 fmt2;         /* +0x3c */
     void *meta;       /* +0x40 */
     void *meta2;      /* +0x48 */
@@ -240,10 +244,24 @@ static int plugin_process_request(void *self, void *pri) {
         memset(iface, 0, sizeof(iface));
         u32 style = forced_style();
         g_donor_init(g_donor, ci, iface);
-        ((u8 *)g_donor)[0x25] = (u8)style;
-        ((u8 *)g_donor)[0x26] = (u8)style;
         g_donor_inited = 1;
         logi("donor initialized style=%lx", style, 0);
+    }
+    /* isEnabled rewrites the look byte from the request metadata on every
+     * capture, so force it here each time. */
+    {
+        u32 style = forced_style();
+        if (style != g_style) {
+            ((u8 *)g_donor)[0x25] = (u8)style;
+            ((u8 *)g_donor)[0x26] = (u8)style;
+            if (g_style && g_donor_reinit) {
+                /* A different look needs the parameter table reloaded: the
+                 * donor picks its .bin inside initialize()/initResource(). */
+                g_donor_reinit(g_donor);
+                logi("resource reloaded style=%lx", style, 0);
+            }
+            g_style = style;
+        }
     }
 
     struct NImg ni, no;

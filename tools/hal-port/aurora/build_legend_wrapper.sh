@@ -51,6 +51,14 @@ install -m 0644 "$NEZHA_ODM/lib64/camera/plugins/com.xiaomi.plugin.mileicafilter
   "$OUT/system/odm/lib64/com.xiaomi.plugin.mileicafilter.so"
 python3 "$HERE/patch_private_libcxx.py" "$OUT/system/odm/lib64/hcicxx.so" \
   "$OUT/system/odm/lib64/com.xiaomi.plugin.mileicafilter.so"
+
+# The donor's candyProcess enters the videoprocess API in libMiPhotoFilter,
+# which changed between Nezha and Aurora. Ship Nezha's copy privately and
+# repoint the donor (same-length SONAME).
+install -m 0644 "$NEZHA_ODM/lib64/libMiPhotoFilter.so" "$OUT/system/odm/lib64/libHcmPhotoFiltr.so"
+python3 "$HERE/patch_dynstr.py" libMiPhotoFilter.so libHcmPhotoFiltr.so \
+  "$OUT/system/odm/lib64/libHcmPhotoFiltr.so" \
+  "$OUT/system/odm/lib64/com.xiaomi.plugin.mileicafilter.so"
 for f in leica_filter_param.bin leica_filter_param_m3.bin \
          leica_filter_param_m9_preview.bin leica_filter_param_m9_snapshot.bin; do
   install -m 0644 "$NEZHA_ODM/etc/camera/$f" "$OUT/system/odm/etc/camera/$f"
