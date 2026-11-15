@@ -569,19 +569,7 @@ public class ModuleMain extends XposedModule {
                     android.os.Environment.getExternalStoragePublicDirectory(
                             android.os.Environment.DIRECTORY_DCIM), "Camera");
             log(Log.INFO, TAG, "LUT watcher dir " + dir + " exists=" + dir.isDirectory());
-            android.os.FileObserver observer = new android.os.FileObserver(
-                    dir.getAbsolutePath(),
-                    android.os.FileObserver.CLOSE_WRITE | android.os.FileObserver.MOVED_TO) {
-                @Override
-                public void onEvent(int event, String path) {
-                    if (path == null || !path.toLowerCase(java.util.Locale.ROOT).endsWith(".jpg")) {
-                        return;
-                    }
-                    java.io.File f = new java.io.File(dir, path);
-                    new Thread(() -> applyLutToFile(f), "hcm-lut").start();
-                }
-            };
-            observer.startWatching();
+
             final java.util.Set<String> processed =
                     java.util.concurrent.ConcurrentHashMap.newKeySet();
             java.io.File[] existing = dir.listFiles(
@@ -638,18 +626,22 @@ public class ModuleMain extends XposedModule {
             }
             Thread.sleep(800);
             android.graphics.Bitmap bm = android.graphics.BitmapFactory.decodeFile(file.getAbsolutePath());
+            log(Log.INFO, TAG, "LUT decoded " + (bm == null ? "null" : bm.getWidth() + "x" + bm.getHeight()));
             if (bm == null || bm.getWidth() < 2000) {
                 return;
             }
             LeicaLut lut = lutCache.get(asset);
             if (lut == null) {
                 lut = LeicaLut.loadFromApk(moduleApk, asset);
+                log(Log.INFO, TAG, "LUT load " + (lut != null));
                 if (lut == null) {
                     return;
                 }
                 lutCache.put(asset, lut);
             }
+            log(Log.INFO, TAG, "LUT applying " + asset);
             android.graphics.Bitmap out = lut.apply(bm, 1.0f);
+            log(Log.INFO, TAG, "LUT bitmap ready " + (out != null));
             if (out == null) {
                 return;
             }
@@ -739,7 +731,9 @@ public class ModuleMain extends XposedModule {
                         }
                         lutCache.put(asset, lut);
                     }
-                    android.graphics.Bitmap out = lut.apply(bm, 1.0f);
+                    log(Log.INFO, TAG, "LUT applying " + asset);
+            android.graphics.Bitmap out = lut.apply(bm, 1.0f);
+            log(Log.INFO, TAG, "LUT bitmap ready " + (out != null));
                     if (out == null) {
                         return chain.proceed();
                     }
