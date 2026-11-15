@@ -25,6 +25,7 @@ from pathlib import Path
 TARGETS = {
     "_ZN7midebug3Log18catchLogEncryptLogEjPKciS2_cS2_z",
     "_ZN7mialgo211PluginUtils25printAndroidAndOfflineLogEiPKcS2_z",
+    "_ZN8DFXEvent16setSkynetMessageENSt3__112basic_stringIcNS0_11char_traitsIcEENS0_9allocatorIcEEEE",
 }
 RET = b"\xc0\x03\x5f\xd6"
 NOP = b"\x1f\x20\x03\xd5"
@@ -54,7 +55,10 @@ def main() -> int:
     parser.add_argument("input", type=Path)
     parser.add_argument("output", nargs="?", type=Path)
     parser.add_argument("--check", action="store_true")
+    parser.add_argument("--symbol", action="append", default=[],
+                        help="additional mangled symbol to neutralise")
     args = parser.parse_args()
+    targets = TARGETS | set(args.symbol)
 
     data = bytearray(args.input.read_bytes())
     secs = parse(data)
@@ -95,7 +99,7 @@ def main() -> int:
         r_offset, r_info, r_addend = struct.unpack_from("<QQq", data, offset)
         sym_index = r_info >> 32
         name = symbol_names.get(sym_index, "")
-        if name not in TARGETS:
+        if name not in targets:
             continue
         if (r_info & 0xFFFFFFFF) != 1026:  # R_AARCH64_JUMP_SLOT
             continue

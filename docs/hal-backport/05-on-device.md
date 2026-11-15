@@ -143,6 +143,8 @@ Tested fixes and results:
 | Rewrite the missing dynsym entries to a local `ret` | symbol table showed `T`, but `dlopen` still reported `cannot locate` |
 | Patch the `catchLogEncryptLog` PLT relocation/stub to no-op | `MiaDLibrary` error disappeared, but registration still failed |
 | Replace Aurora `libcom.xiaomi.debug.so` with Nezha's | provider crash loop: missing `libcom.xiaomi.threadpool.so`, then `libabnormal_img_dectect.so`, then `libcamera.xiaomi.catchlog.so`, then `camlog::send_message_to_mqs` |
+| Patch `miexifmgr` offline globals and `catchLogEncryptLog` | progressed to `DFXEvent::setSkynetMessage`; the DFX relocation has no matching PLT stub |
+| Add Nezha `com.xiaomi.camdfx.so` | broke `camera.xiaomi.so`: `DFXEvent::putString` is not exported by Aurora's camdfx |
 
 The replacement stack is not viable: each Nezha core library pulls another
 Aurora-missing dependency. The stable state is therefore the v5a minimal
@@ -151,8 +153,14 @@ overlay, with `legendST` and M10R disabled.
 ### Current device state
 
 The `hypercam-aurora-legend` KernelSU module is **disabled**, `/odm` is stock,
-and the stock camera/provider are running. The v5a bundle is retained at
-`/tmp/opencode/v5a.zip` for further work; no experimental module is active.
+and the stock camera/provider are running. The stable v5a bundle is retained at
+`/tmp/opencode/v5a.zip`; the later v5b-v5f compatibility experiments are kept
+only as evidence. No experimental module is active.
+
+The live `/odm` overlay is fixed when the module is mounted: editing files in
+`/data/adb/modules/.../system/odm` while the module is running does **not**
+change `/odm` contents. Every plugin patch must be packaged into the zip and
+installed with a reboot.
 
 ## What remains
 
