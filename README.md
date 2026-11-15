@@ -159,6 +159,13 @@ For HAL analysis, `tools/dump-hal.sh` collects the camera HAL libraries, plugins
 tools/dump-hal.sh -o hal-dump
 ```
 
+Without a computer, `tools/hcm-hal.sh` runs on the phone and writes the same set as one tar, with the OS build in the file name:
+
+```sh
+su -c "sh /sdcard/Download/hcm-hal.sh"
+# → /sdcard/Download/hal-<codename>-<model>-<os>-<timestamp>.tar
+```
+
 ## Changelog
 
 The changes in each release are in [`CHANGELOG.md`](CHANGELOG.md). The current stable release is 1.0.0.
