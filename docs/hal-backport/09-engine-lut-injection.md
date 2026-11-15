@@ -160,6 +160,11 @@ only the LUT file changed:
 filter id and the request payload are unchanged - the only variable is the LUT
 file, which proves the HAL applies it.
 
+The module's own DCIM watcher post-processes saved JPEGs, so the pulled files
+were verified against the on-device hashes *after* the test
+(`af11abb3…` base, `6c526e63…` m3, `9a107b00…` scripted); they match, i.e. the
+numbers above are the raw HAL outputs and not the watcher's work.
+
 Restored state: with the property cleared the next capture was
 `FilterId 66048`, no `applySettingsForMIVIRender` line, saturation `0.598`, i.e.
 the stock pipeline is back.
