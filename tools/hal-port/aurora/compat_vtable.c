@@ -175,23 +175,29 @@ static int find_plugin(struct dl_phdr_info *info, unsigned long size, void *data
     if (!name || !name[0]) {
         return 0;
     }
-    static const char needle[] = "com.xiaomi.plugin.filter.so";
-    for (const char *p = name; *p; ++p) {
-        const char *a = p;
-        const char *b = needle;
-        while (*a && *b && *a == *b) {
-            ++a;
-            ++b;
-        }
-        if (!*b) {
-            g_plugin_base = info->dlpi_addr;
-            return 1;
+    static const char *needles[] = {
+        "com.xiaomi.plugin.mileicafilter.so",
+        "com.xiaomi.plugin.filter.so",
+    };
+    for (unsigned n = 0; n < 2; ++n) {
+        const char *needle = needles[n];
+        for (const char *p = name; *p; ++p) {
+            const char *a = p;
+            const char *b = needle;
+            while (*a && *b && *a == *b) {
+                ++a;
+                ++b;
+            }
+            if (!*b) {
+                g_plugin_base = info->dlpi_addr;
+                return 1;
+            }
         }
     }
     return 0;
 }
 
-__attribute__((constructor)) static void plug_plugin_vtable(void) {
+void shim_apply_vtable_patch(void) {
     dl_iterate_phdr(find_plugin, 0);
     __android_log_print(4, "HyperCamVt", "plugin base=%p", (void *)g_plugin_base);
     if (!g_plugin_base) {
@@ -231,10 +237,16 @@ __attribute__((constructor)) static void plug_plugin_vtable(void) {
     slots[10] = g_plugin_base + FN_DTOR_D1;
     slots[11] = g_plugin_base + FN_DTOR_D0;
 
+#ifndef SHIM_KEEP_PLUGIN_NAME
     /* Provider vtable: slot 5 is getPluginName(). Register as the stock filter
      * so the existing "com.xiaomi.plugin.filter" node resolves to this donor. */
     u64 *provider = (u64 *)(g_plugin_base + 0x20960 + 0x10);
     provider[5] = (u64)&shim_provider_name;
+#endif
 
     __android_log_print(4, "HyperCamVt", "vtable remapped at %p", (void *)vtable);
+}
+
+__attribute__((constructor)) static void shim_ctor(void) {
+    shim_apply_vtable_patch();
 }

@@ -18,18 +18,24 @@
 extern void *dlopen(const char *path, int flags);
 extern void *dlsym(void *handle, const char *symbol);
 extern int __android_log_print(int prio, const char *tag, const char *fmt, ...);
+extern void shim_apply_vtable_patch(void);
 
 typedef int (*mivi_connect_fn)(void *provider_manager);
 
 int connect(void *provider_manager) {
     static mivi_connect_fn real;
 
+    shim_apply_vtable_patch();
     __android_log_print(4, "HyperCamCt", "connect called pm=%p", provider_manager);
     if (!real) {
         /* RTLD_NOW matches how the engine loaded the plugin. The library is
          * already mapped, so this only bumps its refcount. */
         void *handle = dlopen(
-            "/odm/lib64/camera/plugins/com.xiaomi.plugin.filter.so", 2);
+            "/odm/lib64/camera/plugins/com.xiaomi.plugin.mileicafilter.so", 2);
+        if (!handle) {
+            handle = dlopen(
+                "/odm/lib64/camera/plugins/com.xiaomi.plugin.filter.so", 2);
+        }
         if (!handle) {
             return 0;
         }
