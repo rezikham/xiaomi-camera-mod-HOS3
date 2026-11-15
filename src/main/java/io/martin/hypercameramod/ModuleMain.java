@@ -139,6 +139,7 @@ public class ModuleMain extends XposedModule {
         install("onPackageReady", param.getPackageName(), param.getClassLoader());
         if (CAMERA_PACKAGE.equals(param.getPackageName())) {
             scheduleNotice();
+            installLutFileWatcher();
         }
     }
 
@@ -160,6 +161,7 @@ public class ModuleMain extends XposedModule {
         installStylizationHook();
         installLegendBridgeHook();
         installLutFallbackHook(loader);
+        installLutFileWatcher();
         installBlurRadiusHook(loader);
         installLegendHook(loader);
         installStyleHook(loader);
@@ -554,6 +556,100 @@ public class ModuleMain extends XposedModule {
 
     // Applies the reproduced Leica 64^3 LUT to the full-size bitmap right before JPEG encoding.
     // Only active when the compatibility fallback is enabled and the app requested M9/M3.
+    private volatile boolean watcherStarted;
+
+    // Post-process the saved JPEG when the camera app writes it. This avoids depending on the
+    // app's internal encoder, which does not use Bitmap.compress on this build.
+    private void installLutFileWatcher() {
+        if (watcherStarted || !compatFallbackEnabled()) {
+            return;
+        }
+        try {
+            java.io.File dir = new java.io.File(
+                    android.os.Environment.getExternalStoragePublicDirectory(
+                            android.os.Environment.DIRECTORY_DCIM), "Camera");
+            log(Log.INFO, TAG, "LUT watcher dir " + dir + " exists=" + dir.isDirectory());
+            android.os.FileObserver observer = new android.os.FileObserver(
+                    dir.getAbsolutePath(),
+                    android.os.FileObserver.CLOSE_WRITE | android.os.FileObserver.MOVED_TO) {
+                @Override
+                public void onEvent(int event, String path) {
+                    if (path == null || !path.toLowerCase(java.util.Locale.ROOT).endsWith(".jpg")) {
+                        return;
+                    }
+                    java.io.File f = new java.io.File(dir, path);
+                    new Thread(() -> applyLutToFile(f), "hcm-lut").start();
+                }
+            };
+            observer.startWatching();
+            watcherStarted = true;
+            log(Log.INFO, TAG, "watching DCIM/Camera for LUT post-processing");
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot watch DCIM/Camera: " + t);
+        }
+    }
+
+    private void applyLutToFile(java.io.File file) {
+        try {
+            if (!compatFallbackEnabled()) {
+                return;
+            }
+            byte legend = legendFromPrefs();
+            String asset = legend == 1 ? "leica_luts/130_LeicaNatural.png"
+                    : legend == 2 ? "leica_luts/M3_Monopan.png" : null;
+            if (asset == null || moduleApk == null) {
+                return;
+            }
+            Thread.sleep(800);
+            android.graphics.Bitmap bm = android.graphics.BitmapFactory.decodeFile(file.getAbsolutePath());
+            if (bm == null || bm.getWidth() < 2000) {
+                return;
+            }
+            LeicaLut lut = lutCache.get(asset);
+            if (lut == null) {
+                lut = LeicaLut.loadFromApk(moduleApk, asset);
+                if (lut == null) {
+                    return;
+                }
+                lutCache.put(asset, lut);
+            }
+            android.graphics.Bitmap out = lut.apply(bm, 1.0f);
+            if (out == null) {
+                return;
+            }
+            try (java.io.FileOutputStream fos = new java.io.FileOutputStream(file)) {
+                out.compress(android.graphics.Bitmap.CompressFormat.JPEG, 95, fos);
+            }
+            out.recycle();
+            bm.recycle();
+            log(Log.INFO, TAG, "applied Leica LUT to " + file.getName());
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "LUT file post-process failed: " + t);
+        }
+    }
+
+    // Fallback for builds that never send com.xiaomi.sessionparams.legendMode: read the style the
+    // app has stored for the rear camera. M9 = 1, M3 = 2.
+    private static byte legendFromPrefs() {
+        try {
+            Class<?> at = Class.forName("android.app.ActivityThread");
+            Object app = at.getMethod("currentApplication").invoke(null);
+            if (app instanceof android.content.Context) {
+                android.content.SharedPreferences p = ((android.content.Context) app)
+                        .getSharedPreferences("camera_settings_simple_mode_local_0", 0);
+                String v = p.getString("pref_legendary_mode_key", "");
+                if ("M9".equalsIgnoreCase(v)) {
+                    return 1;
+                }
+                if ("M3".equalsIgnoreCase(v)) {
+                    return 2;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return 0;
+    }
+
     private void installLutFallbackHook(ClassLoader loader) {
         if (lutHooked || !compatFallbackEnabled()) {
             return;
@@ -570,6 +666,9 @@ public class ModuleMain extends XposedModule {
                         return chain.proceed();
                     }
                     byte legend = lastLegend;
+                    if (legend == 0) {
+                        legend = legendFromPrefs();
+                    }
                     String asset = legend == 1 ? "leica_luts/130_LeicaNatural.png"
                             : legend == 2 ? "leica_luts/M3_Monopan.png" : null;
                     if (asset == null) {
@@ -608,6 +707,10 @@ public class ModuleMain extends XposedModule {
     }
 
     private boolean compatFallbackEnabled() {
+        // Explicit property wins; used for testing and for managed deployments.
+        if (propertyOn("camera.feature.compat_fallback")) {
+            return true;
+        }
         try {
             android.content.SharedPreferences p = getRemotePreferences("hypercameramod");
             if (p != null && p.contains(COMPAT_FALLBACK_KEY)) {
