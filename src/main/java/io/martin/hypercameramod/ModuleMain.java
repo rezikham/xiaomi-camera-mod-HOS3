@@ -3,7 +3,9 @@ package io.martin.hypercameramod;
 import android.app.Application;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
@@ -184,6 +186,7 @@ public class ModuleMain extends XposedModule {
         installLegendHook(loader);
         installStyleHook(loader);
         installLeicaLooksEntries(loader);
+        installFilterStripEntries(loader);
         if (!problems.isEmpty() && stage.equals("onPackageLoaded")) {
             // onPackageReady tries once more; report only what is still wrong after it
             problems.clear();
@@ -1351,10 +1354,10 @@ public class ModuleMain extends XposedModule {
             return;
         }
         try {
-            Class<?> enums = Class.forName("p532p3.d", false, loader);
+            Class<?> enums = Class.forName("p3.d", false, loader);
             Class<?> looks = Class.forName("E9.h", false, loader);
             Class<?> config = Class.forName("E9.h$a", false, loader);
-            Class<?> item = Class.forName("p320j3.b", false, loader);
+            Class<?> item = Class.forName("j3.b", false, loader);
             Method back = looks.getDeclaredMethod("c");
             Method build = looks.getDeclaredMethod("b", enums, int.class, config);
             Object[] values = enums.getEnumConstants();
@@ -1435,6 +1438,162 @@ public class ModuleMain extends XposedModule {
         }
     }
 
+    // ---- 1d. M3/M9 entries in the FILM strip -------------------------------------------------
+    // The strip is built from Ii.i0.d() and handed out per category by EffectController.q(int);
+    // appending there adds two chips without touching any stock filter.
+    private static final int STRIP_ICON_BASE = 0x7e040000;
+    private volatile boolean stripEntriesHooked;
+
+    private void installFilterStripEntries(ClassLoader loader) {
+        if (stripEntriesHooked || loader == null || !looksEntriesEnabled()) {
+            return;
+        }
+        try {
+            Class<?> item = Class.forName("j3.b", false, loader);
+            Constructor<?> make = item.getDeclaredConstructor(int.class, int.class, int.class,
+                    int.class, int.class, int.class, String.class);
+            make.setAccessible(true);
+            Field ordinalField = field(item, "b");
+            Field nameField = field(item, "c");
+            Field iconField = field(item, "e");
+            Field nameIconField = field(item, "f");
+            Field samplesField = field(item, "g");
+            Field labelsField = field(item, "h");
+            Field descField = field(item, "i");
+            Field orderField = field(item, "k");
+            Field cloudField = field(item, "l");
+            installStripIconHooks();
+            Method list = Class.forName("Ii.i0", false, loader).getDeclaredMethod("d");
+            hook(list).intercept(chain -> {
+                Object result = chain.proceed();
+                addStripEntries(result, make, ordinalField, nameField, iconField, nameIconField,
+                        samplesField, labelsField, descField, orderField, cloudField);
+                return result;
+            });
+            try {
+                Method category = Class.forName("com.xiaomi.camera.effect.EffectController",
+                        false, loader).getDeclaredMethod("q", int.class);
+                hook(category).intercept(chain -> {
+                    Object result = chain.proceed();
+                    Object cat = chain.getArg(0);
+                    if (cat instanceof Integer c && (c == 2 || c == 10)) {
+                        addStripEntries(result, make, ordinalField, nameField, iconField,
+                                nameIconField, samplesField, labelsField, descField, orderField,
+                                cloudField);
+                    }
+                    return result;
+                });
+            } catch (Throwable t) {
+                log(Log.WARN, TAG, "strip: no EffectController.q: " + t);
+            }
+            stripEntriesHooked = true;
+            log(Log.INFO, TAG, "installed M3/M9 filter-strip entries");
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot install M3/M9 filter-strip entries: " + t);
+        }
+    }
+
+    private void addStripEntries(Object result, Constructor<?> make, Field ordinalField,
+                                 Field nameField, Field iconField, Field nameIconField,
+                                 Field samplesField, Field labelsField, Field descField,
+                                 Field orderField, Field cloudField) {
+        if (!(result instanceof java.util.List<?> list)) {
+            return;
+        }
+        try {
+            @SuppressWarnings("unchecked")
+            java.util.List<Object> target = (java.util.List<Object>) list;
+            boolean hasM3 = false;
+            boolean hasM9 = false;
+            for (Object o : target) {
+                int ord = ordinalField.getInt(o);
+                hasM3 |= ord == LOOK_M3;
+                hasM9 |= ord == LOOK_M9;
+            }
+            if (hasM3 && hasM9) {
+                return;
+            }
+            Object proto = target.isEmpty() ? null : target.get(0);
+            int icon = proto == null ? 0 : iconField.getInt(proto);
+            int nameIcon = proto == null ? 0 : nameIconField.getInt(proto);
+            ArrayList<?> samples = proto == null ? null : (ArrayList<?>) samplesField.get(proto);
+            ArrayList<?> labels = proto == null ? null : (ArrayList<?>) labelsField.get(proto);
+            int desc = proto == null ? 0 : descField.getInt(proto);
+            int order = proto == null ? 100 : Math.max(100, orderField.getInt(proto) + 90);
+            // The strip shows the highest order first, so M3 gets the larger value.
+            if (!hasM3) {
+                target.add(stripItem(make, LOOK_M3, LOOK_TEXT_BASE | 1, STRIP_ICON_BASE | 1,
+                        icon, nameIcon, samples, labels, desc, order + 1, ordinalField,
+                        samplesField, labelsField, descField, cloudField));
+            }
+            if (!hasM9) {
+                target.add(stripItem(make, LOOK_M9, LOOK_TEXT_BASE | 2, STRIP_ICON_BASE | 2,
+                        icon, nameIcon, samples, labels, desc, order, ordinalField,
+                        samplesField, labelsField, descField, cloudField));
+            }
+            log(Log.INFO, TAG, "strip: M3/M9 entries added (" + target.size() + " items)");
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "strip: cannot add M3/M9: " + t);
+        }
+    }
+
+    private Object stripItem(Constructor<?> make, int ordinal, int nameRes, int nameIconRes,
+                             int icon, int fallbackNameIcon, ArrayList<?> samples,
+                             ArrayList<?> labels, int desc, int order, Field ordinalField,
+                             Field samplesField, Field labelsField, Field descField,
+                             Field cloudField) throws ReflectiveOperationException {
+        Object item = make.newInstance(0, ordinal, nameRes, icon, nameIconRes, order, "NORMAL");
+        samplesField.set(item, samples);
+        labelsField.set(item, labels);
+        descField.setInt(item, desc);
+        cloudField.setInt(item, 0);
+        return item;
+    }
+
+    private void installStripIconHooks() {
+        try {
+            hook(ImageView.class.getDeclaredMethod("setImageResource", int.class)).intercept(chain -> {
+                int id = (Integer) chain.getArg(0);
+                if ((id & 0xFFFF0000) != STRIP_ICON_BASE) {
+                    return chain.proceed();
+                }
+                ImageView view = (ImageView) chain.getThisObject();
+                view.setImageDrawable(stripLabel(view.getResources(), id & 0xFFFF));
+                return null;
+            });
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "strip: no ImageView hook: " + t);
+        }
+        try {
+            hook(Resources.class.getDeclaredMethod("getDrawable", int.class,
+                    Resources.Theme.class)).intercept(chain -> {
+                int id = (Integer) chain.getArg(0);
+                if ((id & 0xFFFF0000) != STRIP_ICON_BASE) {
+                    return chain.proceed();
+                }
+                return stripLabel(null, id & 0xFFFF);
+            });
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "strip: no getDrawable hook: " + t);
+        }
+    }
+
+    private static Drawable stripLabel(Resources res, int which) {
+        String text = which == 1 ? "M3" : "M9";
+        float density = res == null ? 2.75f : res.getDisplayMetrics().density;
+        int size = Math.round(36 * density);
+        Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(bitmap);
+        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        paint.setColor(Color.WHITE);
+        paint.setTextSize(size * 0.42f);
+        paint.setTextAlign(Paint.Align.CENTER);
+        paint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        Paint.FontMetrics metrics = paint.getFontMetrics();
+        canvas.drawText(text, size / 2f, size / 2f - (metrics.ascent + metrics.descent) / 2f, paint);
+        return new BitmapDrawable(res, bitmap);
+    }
+
     private static Field configField(Class<?> config, String name) throws NoSuchFieldException {
         Field f = config.getDeclaredField(name);
         f.setAccessible(true);
@@ -1454,6 +1613,13 @@ public class ModuleMain extends XposedModule {
                 }
                 return (id & 0xFFFF) == 1 ? "M3" : "M9";
             });
+            hook(Resources.class.getDeclaredMethod("getString", int.class)).intercept(chain -> {
+                int id = (Integer) chain.getArg(0);
+                if ((id & 0xFFFF0000) != LOOK_TEXT_BASE) {
+                    return chain.proceed();
+                }
+                return (id & 0xFFFF) == 1 ? "M3" : "M9";
+            });
             lookTextHooked = true;
         } catch (Throwable t) {
             log(Log.WARN, TAG, "cannot hook Resources.getText (look labels): " + t);
@@ -1465,7 +1631,7 @@ public class ModuleMain extends XposedModule {
     // camera's own bean, so the candy script keeps the stock shape.
     private void installLookLutHooks(ClassLoader loader) {
         try {
-            Class<?> bean = Class.forName("p532p3.b", false, loader);
+            Class<?> bean = Class.forName("p3.b", false, loader);
             Method resolve = Class.forName("Di.k", false, loader)
                     .getDeclaredMethod("d", int.class, int.class);
             Constructor<?> make = bean.getDeclaredConstructor(String.class, int.class, int.class,
