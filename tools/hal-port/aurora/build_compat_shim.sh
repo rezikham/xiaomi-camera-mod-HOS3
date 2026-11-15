@@ -15,10 +15,13 @@ OUT="${1:-$HERE/libshim.so}"
 
 clang --target=aarch64-linux-android21 -fPIC \
   -c "$HERE/compat_shim_connect.c" -o "$HERE/compat_shim_connect.o"
+clang --target=aarch64-linux-android21 -fPIC \
+  -c "$HERE/compat_vtable.c" -o "$HERE/compat_vtable.o"
 
 clang --target=aarch64-linux-android21 -fPIC -shared -nostdlib \
   -Wl,-soname,libshim.so \
-  -o "$OUT" "$HERE/compat_shim.S" "$HERE/compat_shim_connect.o"
+  -o "$OUT" "$HERE/compat_shim.S" \
+  "$HERE/compat_shim_connect.o" "$HERE/compat_vtable.o"
 
-rm -f "$HERE/compat_shim_connect.o"
+rm -f "$HERE/compat_shim_connect.o" "$HERE/compat_vtable.o"
 echo "built $OUT"

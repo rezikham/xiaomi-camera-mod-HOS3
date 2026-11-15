@@ -239,3 +239,58 @@ signatures differ). Next options, in order:
 3. Only if neither is possible, keep the app-side compatibility fallback and
    treat M3/M9 as unsupported on Aurora.
 
+
+## mivifwk ABI bridge (working path)
+
+The donor plugin is built against a newer `mivifwk` than Aurora's engine. The
+differences that block execution are structural, not symbol-level:
+
+| Interface | Nezha/Madrid | Aurora |
+| --- | --- | --- |
+| `MiaParams.metadata` | `+0x18` | `+0x00` |
+| `CreateInfo.metadata` | `+0x48` (`MiMetadata*`) | absent (metadata travels in `MiaParams`) |
+| plugin vtable `processRequest` | slot 5 | slot 2 |
+| plugin vtable `isEnabled` | slot 12 | slot 8 |
+| plugin vtable `flushRequest` | slot 10 | slot 6 |
+| plugin vtable `destroy` | slot 11 | slot 7 |
+
+`tools/hal-port/aurora/compat_vtable.c` runs as a `libshim.so` constructor. It
+finds the donor module with `dl_iterate_phdr`, `mprotect`s the `.data.rel.ro`
+page and rewrites the vtable into Aurora's order. It also wraps
+`isEnabled`/`processRequest` with logging and mirrors the style byte into the
+two fields the plugin's `initResource` reads (`this+0x25`, `this+0x26`).
+`persist.vendor.camera.hypercam.style` (1 = M9, 2 = M3) forces a style for
+testing; the vendor property is used because the provider's SELinux domain
+cannot read `persist.sys.*`.
+
+`tools/hal-port/aurora/patch_plugin_framework_abi.py` patches the two
+`MiMetadata::find()` loads in `isEnabled` from `+0x18` to `+0x00`, and turns the
+metadata block in `initialize` into a branch (Aurora's `CreateInfo` has no
+metadata pointer).
+
+### Execution evidence
+
+```text
+HyperCamVt: isEnabled r=1 style=1/1 forced=1
+HyperCamVt: processRequest self=0xb4000070a4263650 info=0x6c6955c230
+```
+
+No tombstone, and the capture completes:
+
+```text
+ChiX: OnProcessCaptureResult() sat_snapshot ... capture done
+```
+
+Earlier stages (before the vtable bridge) crashed exactly as predicted:
+`initialize+296` on `MiMetadata::find`, then `getCustomFrameOrder+8`, then
+`processRequest+124` when `postProcess` still pointed at the donor's slot 5.
+
+### Known remaining issue
+
+With the forced style the pipeline produces a 1440x1080 JPEG instead of
+4096x3072, and `processRequest` is not called on every capture (the app's
+quick-shot path skips it). The node is now wired as `FilterInstance0` with
+`MovieEffectInstance0 -> FilterInstance0 -> WatermarkInstance0`; the output port
+format/size negotiation still needs to match what the donor expects, and the
+M9/M3 parameter selection inside `initResource` must be verified against the
+shipped `leica_filter_param_m9_*.bin` / `_m3.bin` files.
