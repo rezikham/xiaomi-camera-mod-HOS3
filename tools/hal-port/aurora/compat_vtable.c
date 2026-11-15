@@ -46,6 +46,8 @@ extern int dl_iterate_phdr(
 extern int mprotect(void *addr, unsigned long len, int prot);
 extern int __android_log_print(int prio, const char *tag, const char *fmt, ...);
 extern int __system_property_get(const char *name, char *value);
+extern void *malloc(unsigned long size);
+extern void *_Znwm(unsigned long size) __asm__("_Znwm");
 
 #define PROT_READ 1
 #define PROT_WRITE 2
@@ -65,8 +67,41 @@ extern int __system_property_get(const char *name, char *value);
 #define FN_NOOP 0x11eecUL
 
 static u64 g_plugin_base;
+
+/* libc++ long-string layout on this platform is {cap, size, data}; the least
+ * significant bit of cap is set for the long representation. */
+typedef struct {
+    unsigned long cap;
+    unsigned long size;
+    void *data;
+} cxx_string;
+
+/* The engine resolves a node by its NodeName and then looks the name up in the
+ * plugin registry. To take over the existing filter node we must register the
+ * donor under "com.xiaomi.plugin.filter" instead of its own name. */
+static const char kFilterName[] = "com.xiaomi.plugin.filter";
+
+cxx_string shim_provider_name(void *self) {
+    (void)self;
+    /* The caller takes ownership of the returned string and frees it, so this
+     * must allocate a fresh buffer on every call. */
+    unsigned long n = sizeof(kFilterName);
+    char *p = (char *)_Znwm(32);
+    for (unsigned long i = 0; i < n; ++i) {
+        p[i] = kFilterName[i];
+    }
+    cxx_string s;
+    s.cap = 32 | 1;
+    s.size = n - 1;
+    s.data = p;
+    return s;
+}
 static u64 g_fn_is_enabled;
 static u64 g_fn_process_request;
+static u64 g_fn_init;
+static u64 g_fn_v2;
+static u64 g_fn_flush;
+static u64 g_fn_preprocess;
 
 int shim_is_enabled(void *self, void *params) {
     int (*fn)(void *, void *) = (void *)g_fn_is_enabled;
@@ -93,6 +128,39 @@ int shim_is_enabled(void *self, void *params) {
     return r;
 }
 
+int shim_init(void *self, void *create, void *iface) {
+    __android_log_print(4, "HyperCamVt", "initialize");
+    int (*fn)(void *, void *, void *) = (void *)g_fn_init;
+    int r = fn(self, create, iface);
+    __android_log_print(4, "HyperCamVt", "initialize -> %d", r);
+    return r;
+}
+
+int shim_slot1(void *self, void *info) {
+    __android_log_print(4, "HyperCamVt", "preProcess self=%p info=%p", self, info);
+    int (*fn)(void *, void *) = (void *)g_fn_preprocess;
+    int r = fn(self, info);
+    __android_log_print(4, "HyperCamVt", "preProcess -> %d", r);
+    return r;
+}
+
+int shim_slot5(void *self) {
+    __android_log_print(4, "HyperCamVt", "slot5(postProcess)");
+    return 0;
+}
+
+int shim_v2(void *self, void *info) {
+    __android_log_print(4, "HyperCamVt", "processRequestV2");
+    int (*fn)(void *, void *) = (void *)g_fn_v2;
+    return fn(self, info);
+}
+
+int shim_flush(void *self, void *info) {
+    __android_log_print(4, "HyperCamVt", "flushRequest");
+    int (*fn)(void *, void *) = (void *)g_fn_flush;
+    return fn(self, info);
+}
+
 int shim_process_request(void *self, void *info) {
     int (*fn)(void *, void *) = (void *)g_fn_process_request;
     int r = fn(self, info);
@@ -107,7 +175,7 @@ static int find_plugin(struct dl_phdr_info *info, unsigned long size, void *data
     if (!name || !name[0]) {
         return 0;
     }
-    static const char needle[] = "com.xiaomi.plugin.mileicafilter.so";
+    static const char needle[] = "com.xiaomi.plugin.filter.so";
     for (const char *p = name; *p; ++p) {
         const char *a = p;
         const char *b = needle;
@@ -145,7 +213,16 @@ __attribute__((constructor)) static void plug_plugin_vtable(void) {
     slots[1] = g_plugin_base + FN_PREPROCESS;
     g_fn_is_enabled = g_plugin_base + FN_IS_ENABLED;
     g_fn_process_request = g_plugin_base + FN_PROCESS_REQUEST;
+    g_fn_init = g_plugin_base + FN_INITIALIZE;
+    g_fn_v2 = g_plugin_base + FN_PROCESS_REQUEST_V2;
+    g_fn_flush = g_plugin_base + FN_FLUSH;
+    g_fn_preprocess = g_plugin_base + FN_PREPROCESS;
+    slots[0] = (u64)&shim_init;
+    slots[1] = (u64)&shim_slot1;
     slots[2] = (u64)&shim_process_request;
+    slots[3] = (u64)&shim_v2;
+    slots[5] = (u64)&shim_slot5;
+    slots[6] = (u64)&shim_flush;
     slots[3] = g_plugin_base + FN_PROCESS_REQUEST_V2;
     slots[5] = g_plugin_base + FN_NOOP;
     slots[6] = g_plugin_base + FN_FLUSH;
@@ -153,6 +230,11 @@ __attribute__((constructor)) static void plug_plugin_vtable(void) {
     slots[8] = (u64)&shim_is_enabled;
     slots[10] = g_plugin_base + FN_DTOR_D1;
     slots[11] = g_plugin_base + FN_DTOR_D0;
+
+    /* Provider vtable: slot 5 is getPluginName(). Register as the stock filter
+     * so the existing "com.xiaomi.plugin.filter" node resolves to this donor. */
+    u64 *provider = (u64 *)(g_plugin_base + 0x20960 + 0x10);
+    provider[5] = (u64)&shim_provider_name;
 
     __android_log_print(4, "HyperCamVt", "vtable remapped at %p", (void *)vtable);
 }

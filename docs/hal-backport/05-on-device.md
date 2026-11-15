@@ -294,3 +294,44 @@ quick-shot path skips it). The node is now wired as `FilterInstance0` with
 format/size negotiation still needs to match what the donor expects, and the
 M9/M3 parameter selection inside `initResource` must be verified against the
 shipped `leica_filter_param_m9_*.bin` / `_m3.bin` files.
+
+### Node dispatch is by NodeName, not NodeInstance
+
+Renaming `FilterInstance0` to the donor plugin name was wrong: the engine keys
+the node behaviour on `NodeName`. With an unknown name the node follows the
+generic plugin path (`initialize` then `postProcess()` with no arguments). The
+filter path is only taken for `NodeName == "com.xiaomi.plugin.filter"`.
+
+The working arrangement is therefore to keep the stock graph untouched and
+make the donor **register under the stock name**:
+
+- `compat_vtable.c` patches the provider vtable's `getPluginName()` slot to
+  return `"com.xiaomi.plugin.filter"` (allocation per call; the caller frees the
+  returned long string).
+- The donor is installed as
+  `/odm/lib64/camera/plugins/com.xiaomi.plugin.filter.so`, replacing the stock
+  filter plugin.
+- The stock `satsnapshot.json` is used unchanged.
+
+With that, the engine logs:
+
+```text
+HyperCamCt: connect called pm=... ; miviconnect -> 1
+HyperCamVt: initialize -> 0
+HyperCamVt: isEnabled r=1 style=1/1 forced=1
+HyperCamVt: preProcess self=... info=... -> 0
+```
+
+### Remaining failure at the buffer stage
+
+When `isEnabled` returns 1, the app saves only its quick-shot fallback
+(`combine parallel task data to small jpeg`, 1440x1080). With
+`persist.vendor.camera.hypercam.style=0` the same graph produces a full
+4096x3072 JPEG, so the regression is tied to the node becoming active.
+
+`processRequest` is still never called; only `initialize`, `isEnabled` and
+`preProcess` are. The next target is the `PreProcessInfo`/buffer handoff: the
+donor's `preProcess` returns 0 but does not appear to request/set its output
+buffers through `MiaNodeInterface`, so the offline stage never materialises the
+full-size image. That is the next ABI surface to map (image map, output buffer
+callbacks, and the `ProcessRequestInfo` metadata at `+0x48`).
