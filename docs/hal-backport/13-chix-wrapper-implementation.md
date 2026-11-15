@@ -154,11 +154,31 @@ which is not a pointer. Aurora's `ImageParams` body differs from the Nezha one
 the donor expects, so the wrapper forwards a wrong handle and `candyProcess`
 builds a bogus `GraphicBuffer`.
 
-Next step before touching the algorithm: dump the first `0xC0` bytes of the
-Aurora input/output `ImageParams` from `plugin_process_request` and identify the
-real `native_handle*` word (it will be a `0xb4…`/`0x7…` pointer), then fix
-`translate()`. The rest of the five-field translation (`fmt`, `width`,
-`height`, `usage`) already lines up with the observed `fmt=0x23`, `4096x3072`.
+The `native` word is now correct — the struct padding had put it at `+0x74`
+instead of `+0x70`; the stock filter reads it with
+`ldr x1, [x8, #0x70]` at `0xc474`, and the Nezha `usage` field is `+0x38`
+(donor `getImageInfo` at `0x11f3c`). After the fix:
+
+```text
+HCM-Legend: native in=0xb4000070afd9fcc0 out=0xb4000070afdb6d30
+```
+
+but `candyProcess` still faults with `SEGV_ACCERR` ("execute non-executable
+memory"). The faulting address (`0x726dbdb9d8`) sits in the same heap region as
+the Aurora `ImageParams` we were handed (`ai=0x72606efcbc`), so the donor is
+reaching a call target through a structure the wrapper has not translated.
+The likely candidate is the `videoprocess`/GL side — which the design page
+already flagged as the biggest unknown: Aurora's `libMiPhotoFilter` is older
+than Nezha's, and `candyProcess+428` is where the donor enters it.
+
+Next steps:
+
+1. Map which field the call at `candyProcess+428` loads, then decide whether it
+   can be supplied from the Aurora `ImageParams`/`MiaNodeInterface` or needs a
+   Nezha-shaped static (the videoprocess singleton).
+2. If it is the videoprocess interface, compare Aurora's `libMiPhotoFilter.so`
+   exports with the donor's expectations; the fallback is to ship Nezha's own
+   `libMiPhotoFilter.so` under a private SONAME, as was done for libc++.
 
 With `persist.vendor.camera.hypercam.style` set to `0`, `isEnabled` returns 0,
 the node is a pass-through, and the capture path is unaffected.
