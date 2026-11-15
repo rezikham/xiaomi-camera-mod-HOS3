@@ -153,6 +153,12 @@ A Gradle project. It needs the Android SDK (compileSdk 37, build-tools 37.0.0); 
 
 Release builds are signed with the debug key.
 
+For HAL analysis, `tools/dump-hal.sh` collects the camera HAL libraries, plugins, configs and Camera APK from every connected phone (it uses `su` when available):
+
+```bash
+tools/dump-hal.sh -o hal-dump
+```
+
 ## Changelog
 
 The changes in each release are in [`CHANGELOG.md`](CHANGELOG.md). The current stable release is 1.0.0.
