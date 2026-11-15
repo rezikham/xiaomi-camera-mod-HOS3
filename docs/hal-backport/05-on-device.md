@@ -335,3 +335,23 @@ donor's `preProcess` returns 0 but does not appear to request/set its output
 buffers through `MiaNodeInterface`, so the offline stage never materialises the
 full-size image. That is the next ABI surface to map (image map, output buffer
 callbacks, and the `ProcessRequestInfo` metadata at `+0x48`).
+
+### Donor graph order (from the Nezha dump)
+
+The donor's own `satsnapshot.json` puts the mileica node **upstream of the
+stock filter**, not in its place:
+
+```text
+SuperMoonInstance0 -> LeicaFilterInstance0 (mileicafilter)
+                   -> FilterInstance0 (com.xiaomi.plugin.filter)
+                   -> MovieEffectInstance0 -> WatermarkInstance0
+```
+
+The current Aurora experiment instead replaced `FilterInstance0` with the donor
+(or appended it after the filter), which is the wrong relative position. The
+next test is to keep the stock `FilterInstance0` node name and insert the donor
+between the node that feeds the filter and the filter itself, while still
+registering the donor under its own name (`com.xiaomi.plugin.mileicafilter`).
+
+This also means the vtable registration as `com.xiaomi.plugin.filter` is only a
+diagnostic; the production bundle should keep the two plugins distinct.
