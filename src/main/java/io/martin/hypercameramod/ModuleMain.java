@@ -561,7 +561,7 @@ public class ModuleMain extends XposedModule {
     // Post-process the saved JPEG when the camera app writes it. This avoids depending on the
     // app's internal encoder, which does not use Bitmap.compress on this build.
     private void installLutFileWatcher() {
-        if (watcherStarted || !compatFallbackEnabled()) {
+        if (watcherStarted) {
             return;
         }
         try {
@@ -596,9 +596,12 @@ public class ModuleMain extends XposedModule {
                     try {
                         java.io.File[] files = dir.listFiles(
                                 (d, n) -> n.toLowerCase(java.util.Locale.ROOT).endsWith(".jpg"));
+                        log(Log.INFO, TAG, "LUT poll n=" + (files == null ? -1 : files.length)
+                                + " readable=" + dir.canRead());
                         if (files != null) {
                             for (java.io.File f : files) {
                                 if (processed.add(f.getAbsolutePath())) {
+                                    log(Log.INFO, TAG, "LUT saw new file " + f.getName());
                                     long size = f.length();
                                     Thread.sleep(1500);
                                     if (f.length() == size && size > 200000) {
@@ -621,17 +624,16 @@ public class ModuleMain extends XposedModule {
 
     private void applyLutToFile(java.io.File file) {
         try {
-            if (!compatFallbackEnabled()) {
-                return;
-            }
             byte legend = legendFromPrefs();
+            log(Log.INFO, TAG, "LUT candidate " + file.getName() + " legend=" + legend
+                    + " apk=" + (moduleApk != null) + " size=" + file.length());
+            legend = legendFromPrefs();
             String asset = legend == 1 ? "leica_luts/130_LeicaNatural.png"
                     : legend == 2 ? "leica_luts/M3_Monopan.png" : null;
             if (asset == null || moduleApk == null) {
                 return;
             }
-            if (file.length() < 500_000L
-                    || System.currentTimeMillis() - file.lastModified() < 3000L) {
+            if (file.length() < 500_000L) {
                 return;
             }
             Thread.sleep(800);
@@ -672,6 +674,18 @@ public class ModuleMain extends XposedModule {
     // app has stored for the rear camera. M9 = 1, M3 = 2.
     private static byte legendFromPrefs() {
         try {
+            Class<?> sp = Class.forName("android.os.SystemProperties");
+            String forced = (String) sp.getMethod("get", String.class, String.class)
+                    .invoke(null, "camera.feature.lut_style", "");
+            if ("M9".equalsIgnoreCase(forced)) {
+                return 1;
+            }
+            if ("M3".equalsIgnoreCase(forced)) {
+                return 2;
+            }
+        } catch (Throwable ignored) {
+        }
+        try {
             Class<?> at = Class.forName("android.app.ActivityThread");
             Object app = at.getMethod("currentApplication").invoke(null);
             if (app instanceof android.content.Context) {
@@ -691,7 +705,7 @@ public class ModuleMain extends XposedModule {
     }
 
     private void installLutFallbackHook(ClassLoader loader) {
-        if (lutHooked || !compatFallbackEnabled()) {
+        if (lutHooked) {
             return;
         }
         try {
