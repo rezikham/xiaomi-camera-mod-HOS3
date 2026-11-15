@@ -465,3 +465,32 @@ the donor issue a buffer request in `preProcess` cannot unblock scheduling.
 The remaining question is how Aurora decides which nodes enter the offline
 `postProcess` set. The donor is initialized and preProcessed but never reaches
 `processRequest`, while other offline nodes (Mfnr, gainmap, JPEG) do run.
+
+### Aurora drives the filter node through postProcess(), not processRequest()
+
+Verified stock capture (`takePicture`=1, camera foreground) with the engine's
+`MiaNode::postProcess()` and `MiaNode::processRequest(...)` hooked by name:
+
+```text
+processRequest ... plugin=com.xiaomi.plugin.anchor.so   (8x)
+postProcess    ... plugin=com.xiaomi.plugin.ainr.so
+postProcess    ... plugin=com.xiaomi.plugin.anchor.so
+postProcess    ... plugin=com.xiaomi.plugin.arcsofttfsll.so
+postProcess    ... plugin=com.xiaomi.plugin.offlinepostproc.so (many)
+postProcess    ... plugin=com.xiaomi.plugin.depurple.so
+postProcess    ... plugin=com.xiaomi.plugin.edof.so
+postProcess    ... plugin=com.xiaomi.plugin.filter.so    <-- stock filter
+postProcess    ... plugin=com.xiaomi.plugin.gainmap.so
+postProcess    ... plugin=com.xiaomi.plugin.gainmapPostProc.so
+```
+
+So Aurora runs the filter node through its **no-argument `postProcess()`**
+virtual (slot 5). The Nezha plugin has no such entry point: its slot 5 is
+`processRequest(ProcessRequestInfo*)`, and Nezha's engine calls
+`processRequest` instead. The two frameworks have different plugin lifecycles,
+which is why the donor node is initialized and enabled but never processes: the
+engine calls an entry the donor does not implement.
+
+This also explains why the output-buffer callbacks never fire and why the
+vendor graph (mileica upstream of the filter) does not help. Running the Nezha
+plugin binary on Aurora cannot work without an Aurora-`postProcess` adapter.
