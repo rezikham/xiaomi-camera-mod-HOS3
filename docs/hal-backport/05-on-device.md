@@ -146,6 +146,7 @@ Tested fixes and results:
 | Patch `miexifmgr` offline globals and `catchLogEncryptLog` | progressed to `DFXEvent::setSkynetMessage`; the DFX relocation has no matching PLT stub |
 | Add Nezha `com.xiaomi.camdfx.so` | broke `camera.xiaomi.so`: `DFXEvent::putString` is not exported by Aurora's camdfx |
 | Replace `satsnapshot.json` with the Leica graph | legacy `MiaDLibrary` load is attempted, but the unpatched plugin still fails on `catchLogEncryptLog` |
+| Add an AArch64 shim for the missing logging/DFX/filesystem symbols | `MiaDLibrary` load error disappears; only `MiaPluginModule` registration remains |
 
 The replacement stack is not viable: each Nezha core library pulls another
 Aurora-missing dependency. The stable state is therefore the v5a minimal
