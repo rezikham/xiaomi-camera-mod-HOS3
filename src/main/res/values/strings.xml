@@ -32,6 +32,10 @@
     <string name="pref_hal_lut_slot_summary">Hand the look to the stock filter node instead of post-processing the photo. Requires the LUT file installed in /data/vendor/camera (tools/hal-port/engine/leica_look.sh) and the Negative filter selected. Restart Camera and the camera provider after changing this or the LUT.</string>
     <string name="pref_hal_lut_slot_key">hal_lut_slot_enabled</string>
 
+    <string name="pref_looks_entries_title">M3 and M9 as their own Looks entries</string>
+    <string name="pref_looks_entries_summary">Add M3 and M9 chips to the Leica Looks panel. They render the module LUTs (lut_m3.png / lut_m9.png in /data/vendor/camera) through the stock filter node; every stock filter and look stays untouched. Install the two files with tools/hal-port/engine/leica_look.sh look-m3 / look-m9, then restart Camera.</string>
+    <string name="pref_looks_entries_key">looks_entries_enabled</string>
+
     <string name="menu_force_stop_camera">Force Stop Camera</string>
     <string name="menu_hide_launcher">Hide launcher icon</string>
     <string name="pref_hide_launcher_title">Hide App Icon from Launcher</string>

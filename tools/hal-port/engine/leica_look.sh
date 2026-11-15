@@ -38,15 +38,25 @@ usage() {
 
 look_asset() {
     case "$1" in
-        m3) echo "$REPO/assets/leica_luts/M3_Monopan.png" ;;
-        m9) echo "$REPO/assets/leica_luts/130_LeicaNatural.png" ;;
+        m3|look-m3) echo "$REPO/assets/leica_luts/M3_Monopan.png" ;;
+        m9|look-m9) echo "$REPO/assets/leica_luts/130_LeicaNatural.png" ;;
         *)   return 1 ;;
+    esac
+}
+
+# The filter slot the look is bound to. The plain m3/m9 actions reuse the stock Negative
+# filter's slot; look-m3/look-m9 use the dedicated names of the module's own Looks entries.
+look_name() {
+    case "$1" in
+        look-m3) echo "lut_m3" ;;
+        look-m9) echo "lut_m9" ;;
+        *)       echo "lut_nc" ;;
     esac
 }
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        m3|m9|off|status) ACTION="$1"; shift ;;
+        m3|m9|look-m3|look-m9|off|status) ACTION="$1"; shift ;;
         --serial)   SERIAL="$2"; shift 2 ;;
         --no-restart) RESTART=0; shift ;;
         --no-gate)  NO_GATE=1; shift ;;
@@ -81,10 +91,11 @@ status() {
 }
 
 case "$ACTION" in
-    m3|m9)
+    m3|m9|look-m3|look-m9)
         LUT="$(look_asset "$ACTION")"
+        NAME="$(look_name "$ACTION")"
         [ -f "$LUT" ] || { echo "LUT not found: $LUT" >&2; exit 1; }
-        echo "== look       : $ACTION ($(basename "$LUT"))"
+        echo "== look       : $ACTION ($(basename "$LUT")) -> ${NAME}.png"
         if [ "${NO_GATE:-0}" = 1 ]; then
             "$SLOT_SCRIPT" --serial "$SERIAL" --lut "$LUT" --name "$NAME" --no-prop | sed -n '1,4p'
             echo "== gate       : left to the module's 'HAL LUT slot' setting"

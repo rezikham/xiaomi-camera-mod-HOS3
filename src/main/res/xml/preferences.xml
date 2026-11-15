@@ -36,6 +36,12 @@
         android:defaultValue="false" />
 
     <SwitchPreferenceCompat
+        android:key="@string/pref_looks_entries_key"
+        android:title="@string/pref_looks_entries_title"
+        android:summary="@string/pref_looks_entries_summary"
+        android:defaultValue="true" />
+
+    <SwitchPreferenceCompat
         android:key="@string/pref_extra_filters_key"
         android:title="@string/pref_extra_filters_title"
         android:summary="@string/pref_extra_filters_summary"

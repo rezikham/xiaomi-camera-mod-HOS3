@@ -20,6 +20,7 @@ import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -173,6 +174,7 @@ public class ModuleMain extends XposedModule {
         installBlurRadiusHook(loader);
         installLegendHook(loader);
         installStyleHook(loader);
+        installLeicaLooksEntries(loader);
         if (!problems.isEmpty() && stage.equals("onPackageLoaded")) {
             // onPackageReady tries once more; report only what is still wrong after it
             problems.clear();
@@ -1229,6 +1231,220 @@ public class ModuleMain extends XposedModule {
         field.setAccessible(true);
         return field;
     }
+
+    // ---- 1c. M3/M9 as separate Leica Looks entries -------------------------------------------
+    // The Looks panel is a static table (E9.h) from a filter enum value to a display config, and
+    // c()/d() turn it into the back/front lists. Adding two items there leaves every stock filter
+    // and every stock look untouched: the enum values we borrow are hidden film entries on this
+    // build, and their look name - which MIVIRenderTag puts into "lutNames" and MIVILutSaver
+    // writes out - is redirected to our own files in Di.k.d.
+    private static final int LOOK_TEXT_BASE = 0x7e030000;   // made-up ids for the chip labels
+    private static final int LOOK_M3 = 85;                  // enum entry N_V_250, hidden here
+    private static final int LOOK_M9 = 86;                  // enum entry N_H_400, hidden here
+    private static final String LOOKS_ENTRIES_KEY = "looks_entries_enabled";
+    private static final java.util.Map<String, android.graphics.Bitmap> LOOK_BITMAPS =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private volatile boolean looksEntriesHooked;
+    private volatile boolean lookTextHooked;
+
+    private boolean looksEntriesEnabled() {
+        try {
+            android.content.SharedPreferences p = getRemotePreferences("hypercameramod");
+            if (p != null) {
+                return p.getBoolean(LOOKS_ENTRIES_KEY, true);
+            }
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot read " + LOOKS_ENTRIES_KEY + ": " + t);
+        }
+        return false;
+    }
+
+    private void installLeicaLooksEntries(ClassLoader loader) {
+        if (looksEntriesHooked || loader == null || !looksEntriesEnabled()) {
+            return;
+        }
+        try {
+            Class<?> enums = Class.forName("p532p3.d", false, loader);
+            Class<?> looks = Class.forName("E9.h", false, loader);
+            Class<?> config = Class.forName("E9.h$a", false, loader);
+            Class<?> item = Class.forName("p320j3.b", false, loader);
+            Method back = looks.getDeclaredMethod("c");
+            Method build = looks.getDeclaredMethod("b", enums, int.class, config);
+            Object[] values = enums.getEnumConstants();
+            if (values == null || values.length <= LOOK_M9) {
+                log(Log.WARN, TAG, "looks: filter enum has only "
+                        + (values == null ? 0 : values.length) + " entries, M3/M9 skipped");
+                return;
+            }
+            Object base = null;
+            for (Field f : looks.getDeclaredFields()) {
+                if (!java.lang.reflect.Modifier.isStatic(f.getModifiers())
+                        || f.getType().isPrimitive()) {
+                    continue;
+                }
+                f.setAccessible(true);
+                Object value = f.get(null);
+                if (value instanceof java.util.Map<?, ?> map && !map.isEmpty()) {
+                    for (java.util.Map.Entry<?, ?> e : map.entrySet()) {
+                        String n = e.getKey() instanceof Enum<?> en ? en.name() : "";
+                        if (n.contains("BW") || n.contains("MONO")) {
+                            base = e.getValue();
+                            break;
+                        }
+                    }
+                    if (base == null) {
+                        base = map.values().iterator().next();
+                    }
+                    break;
+                }
+            }
+            if (base == null) {
+                log(Log.WARN, TAG, "looks: no config table found, M3/M9 skipped");
+                return;
+            }
+            final Object baseCfg = base;
+            Constructor<?> makeConfig = config.getDeclaredConstructor(int.class, int.class,
+                    int.class, int.class, int.class, int.class, int.class, java.util.ArrayList.class,
+                    int.class, java.util.ArrayList.class, java.util.ArrayList.class);
+            makeConfig.setAccessible(true);
+            Field samples = configField(config, "j");
+            Field labels = configField(config, "k");
+            Field icon = configField(config, "e");
+            int monochromeIcon = icon.getInt(baseCfg);
+            if (monochromeIcon == 0) {
+                monochromeIcon = currentApplication().getResources().getIdentifier(
+                        "master_filter_color_monochrome_mm", "drawable", CAMERA_PACKAGE);
+            }
+            installLookTextHook();
+            final int foIcon = monochromeIcon;
+            hook(back).intercept(chain -> {
+                Object result = chain.proceed();
+                if (!(result instanceof java.util.List<?> list)) {
+                    return result;
+                }
+                try {
+                    @SuppressWarnings("unchecked")
+                    java.util.List<Object> target = (java.util.List<Object>) list;
+                    String[] names = {"M3", "M9"};
+                    int[] ordinals = {LOOK_M3, LOOK_M9};
+                    for (int i = 0; i < ordinals.length; i++) {
+                        Object cfg = makeConfig.newInstance(13 + i, -1, -1,
+                                LOOK_TEXT_BASE | (i + 1), foIcon, foIcon, 0, null, -1,
+                                samples.get(baseCfg), labels.get(baseCfg));
+                        target.add(build.invoke(null, values[ordinals[i]], 10, cfg));
+                        log(Log.INFO, TAG, "looks: added " + names[i] + " entry (ordinal "
+                                + ordinals[i] + ")");
+                    }
+                } catch (Throwable t) {
+                    log(Log.WARN, TAG, "looks: cannot add M3/M9 entries: " + t);
+                }
+                return result;
+            });
+            installLookLutHooks(loader);
+            looksEntriesHooked = true;
+            log(Log.INFO, TAG, "installed M3/M9 Looks entries");
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot install M3/M9 Looks entries: " + t);
+        }
+    }
+
+    private static Field configField(Class<?> config, String name) throws NoSuchFieldException {
+        Field f = config.getDeclaredField(name);
+        f.setAccessible(true);
+        return f;
+    }
+
+    // The chip label: a made-up string id answered from here, so no camera resource is needed.
+    private void installLookTextHook() {
+        if (lookTextHooked) {
+            return;
+        }
+        try {
+            hook(Resources.class.getDeclaredMethod("getText", int.class)).intercept(chain -> {
+                int id = (Integer) chain.getArg(0);
+                if ((id & 0xFFFF0000) != LOOK_TEXT_BASE) {
+                    return chain.proceed();
+                }
+                return (id & 0xFFFF) == 1 ? "M3" : "M9";
+            });
+            lookTextHooked = true;
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot hook Resources.getText (look labels): " + t);
+        }
+    }
+
+    // Di.k.d(filterId, degree) is what the render tag and the LUT saver ask for the look. For our
+    // two ordinals it answers a bean with our own name; everything else is copied from the
+    // camera's own bean, so the candy script keeps the stock shape.
+    private void installLookLutHooks(ClassLoader loader) {
+        try {
+            Class<?> bean = Class.forName("p532p3.b", false, loader);
+            Method resolve = Class.forName("Di.k", false, loader)
+                    .getDeclaredMethod("d", int.class, int.class);
+            Constructor<?> make = bean.getDeclaredConstructor(String.class, int.class, int.class,
+                    float[].class, int.class);
+            make.setAccessible(true);
+            Field idField = field(bean, "i");
+            Field degreeField = field(bean, "k");
+            Field paramsField = field(bean, "l");
+            Field nameField = field(bean, "j");
+            hook(resolve).intercept(chain -> {
+                Object result = chain.proceed();
+                int id = (Integer) chain.getArg(0);
+                int ordinal = id & 0xFFFF;
+                String name = ordinal == LOOK_M3 ? "lut_m3"
+                        : ordinal == LOOK_M9 ? "lut_m9" : null;
+                if (name == null || result == null) {
+                    return result;
+                }
+                return make.newInstance(name, idField.getInt(result), degreeField.getInt(result),
+                        (float[]) paramsField.get(result), 0);
+            });
+            hook(bean.getDeclaredMethod("a", android.content.Context.class)).intercept(chain -> {
+                Object result = chain.proceed();
+                try {
+                    Object self = chain.getThisObject();
+                    android.graphics.Bitmap bm = lookBitmap((String) nameField.get(self));
+                    if (bm != null) {
+                        return bm;
+                    }
+                } catch (Throwable ignored) {
+                }
+                return result;
+            });
+            log(Log.INFO, TAG, "installed M3/M9 look names (lut_m3, lut_m9)");
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot install M3/M9 look names: " + t);
+        }
+    }
+
+    private static android.graphics.Bitmap lookBitmap(String name) {
+        String asset = "lut_m3".equals(name) ? "leica_luts/M3_Monopan.png"
+                : "lut_m9".equals(name) ? "leica_luts/130_LeicaNatural.png" : null;
+        if (asset == null || moduleApk == null) {
+            return null;
+        }
+        android.graphics.Bitmap cached = LOOK_BITMAPS.get(asset);
+        if (cached != null) {
+            return cached;
+        }
+        try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(moduleApk)) {
+            java.util.zip.ZipEntry entry = zip.getEntry(asset);
+            if (entry == null) {
+                return null;
+            }
+            try (java.io.InputStream in = zip.getInputStream(entry)) {
+                android.graphics.Bitmap bm = android.graphics.BitmapFactory.decodeStream(in);
+                if (bm != null) {
+                    LOOK_BITMAPS.put(asset, bm);
+                }
+                return bm;
+            }
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
 
     private void installStyleHook(ClassLoader loader) {
         if (styleHooked) {
