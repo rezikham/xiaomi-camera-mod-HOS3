@@ -419,3 +419,29 @@ callbacks, so the node has no output and is not scheduled for `postProcess`.
 The next step is to map `MiaNodeInterface` (`requestOutputBuffer`,
 `setResultBuffer`, `setOutputFormat`) and have the shim issue the output request
 during `preProcess`.
+
+### MiaNodeInterface layout (mapped from MiaNode::init)
+
+`MiaNode::init` builds the interface passed as `x2` to `initialize` as eight
+pointers:
+
+| index | callback | engine symbol |
+| --- | --- | --- |
+| 0 | node handle | the `MiaNode` object |
+| 1 | `setResultMetadata` | `MiaNode::setResultMetadata(void*, uint32_t, long, std::string&)` |
+| 2 | `setOutputFormat` | `MiaNode::setOutputFormat(void*, MiaFrameInfo)` |
+| 3 | `setResultBuffer` | `MiaNode::setResultBuffer(void*, uint32_t)` |
+| 4 | `setMessageToMihal` | `MiaNode::setMessageToMihal(..., shared_ptr<MiMetadata>, MiaResultCbType)` |
+| 5 | `requestOutputBuffer` | `MiaNode::requestOutputBuffer(void*, uint32_t, uint32_t, void*)` |
+| 6 | `releaseableUnneedBuffer` | `MiaNode::releaseableUnneedBuffer(void*, int, int, PluginReleaseBuffer)` |
+| 7 | `preRequestOutputBuffer` | `MiaNode::preRequestOutputBuffer(void*, uint32_t, uint32_t)` |
+
+The donor's `initialize` copies `0x70` bytes from this interface into
+`this+0xd8`, so the stored table is at `plugin+0xd8` (handle at `+0xd8`,
+callbacks at `+0xe0 ... +0x110`).
+
+No Aurora plugin examined so far issues an output-buffer request from a
+`preProcess` entry point in a way that can be copied directly (the gainmap
+plugin's calls resolve through its own stored interface and different argument
+registers). Mapping the exact `requestOutputBuffer` argument tuple and the
+node-scheduling condition remains the open item.
