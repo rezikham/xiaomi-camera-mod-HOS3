@@ -7,6 +7,8 @@ android {
     compileSdk = 37
     buildToolsVersion = "37.0.0"
 
+    ndkVersion = "27.0.12077973"
+
     // Version from CI: -PversionName=1.0.0 -PversionCode=100 (first run)
     // Stable: versionName=1.0.0, versionCode=100+run_number
     // CI: versionName=1.0.0-<versionCode>, versionCode=100+run_number
@@ -37,6 +39,13 @@ android {
 
     lint {
         checkReleaseBuilds = false
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/jni/mount_hide/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     packaging {
