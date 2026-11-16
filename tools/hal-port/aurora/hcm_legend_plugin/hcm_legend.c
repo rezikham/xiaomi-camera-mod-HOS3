@@ -15,6 +15,14 @@
 typedef unsigned char u8;
 typedef unsigned int u32;
 typedef unsigned long u64;
+typedef unsigned long size_t;
+
+#ifndef NULL
+#define NULL ((void *)0)
+#endif
+
+#define EEXIST 17
+#define O_CREAT 0x40
 
 typedef void *(*dlopen_fn)(const char *, int);
 typedef void *(*dlsym_fn)(void *, const char *);
@@ -31,11 +39,56 @@ extern void *dlsym(void *, const char *);
 extern char *dlerror(void);
 extern int open(const char *, int, ...);
 extern long read(int, void *, unsigned long);
+extern long write(int, const void *, unsigned long);
 extern int close(int);
+extern int mkdir(const char *, unsigned int);
+extern int mount(const char *, const char *, const char *, unsigned long, const void *);
+extern int umount2(const char *, int);
+extern int unshare(int);
+extern long syscall(long, ...);
+extern int errno;
+extern char *strcpy(char *, const char *);
+extern size_t strlen(const char *);
 
 #define RTLD_NOW 2
 #define RTLD_GLOBAL 0x100
 #define RTLD_LOCAL 0
+
+#define O_RDONLY  0
+#define O_WRONLY  1
+#define O_RDWR    0x2
+#define O_CLOEXEC 0x80000
+
+#define CLONE_NEWNS 0x00020000
+#define MS_BIND 0x1000
+#define MS_REC 0x4000
+#define MS_PRIVATE 0x20000
+
+/* SUSFS procfs interface candidates (kernel module exposes one of these). */
+static const char *g_susfs_paths[] = {
+    "/proc/susfs/rules",
+    "/proc/susfs/hide",
+    "/proc/susfs/command",
+    "/proc/susfs/whiteout",
+    "/proc/susfs/add_rule",
+    NULL,
+};
+
+/* Paths to hide via the SUSFS backend (module trees under /data/adb/modules). */
+static const char *g_susfs_hide_targets[] = {
+    "/data/adb/modules",
+    "/data/adb/modules_update",
+    "/data/adb/modules_compat",
+    NULL,
+};
+
+/* Wrapper-level init guard: prevents double initialization of the donor. */
+static volatile int g_inited = 0;
+
+/* Track mounts we created so shutdown can unwind them. */
+#define GC_MAX_MOUNTS 16
+static char *g_mount_list[GC_MAX_MOUNTS];
+static int g_mount_count;
 
 static dlopen_fn p_dlopen;
 static dlsym_fn p_dlsym;
@@ -117,7 +170,6 @@ static donor_void_fn g_donor_reinit;
 static int g_donor_inited;
 static u32 g_style;
 
-typedef struct { u64 cap; u64 size; char *data; } hcm_string;
 typedef hcm_string (*meta_find_fn)(void *, const char *);
 
 static meta_find_fn p_find;
@@ -158,6 +210,84 @@ static u32 forced_style(void) {
     p_prop("persist.vendor.camera.hypercam.style", buf);
     if (buf[0] == '1') return 1;
     if (buf[0] == '2') return 2;
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* SUSFS backend (third mount-hiding option, between NoMount and bind) */
+/* ------------------------------------------------------------------ */
+
+/* Write a single hide rule to the first SUSFS procfs node that exists.
+ * Returns 0 on first success, -1 if none of the candidate nodes exist. */
+static int susfs_hide_path(const char *vpath) {
+    if (!vpath) return -1;
+    size_t vlen = strlen(vpath);
+    if (vlen == 0 || vlen > 4000) return -1;
+
+    for (int i = 0; g_susfs_paths[i]; i++) {
+        const char *proc = g_susfs_paths[i];
+        int fd = open(proc, O_WRONLY | O_CLOEXEC);
+        if (fd < 0) continue; /* try the next candidate path */
+        long n = write(fd, vpath, vlen);
+        int saved = errno;
+        close(fd);
+        errno = saved;
+        if (n >= 0) {
+            logi("susfs hide via %s -> %s", (u64)proc, (u64)vpath);
+            return 0;
+        }
+        logi("susfs write %s failed errno=%d", (u64)proc, (u64)(long)saved);
+    }
+    return -1;
+}
+
+/* Hide all configured /data/adb/module* trees through SUSFS. */
+static void susfs_hide_all(void) {
+    for (int i = 0; g_susfs_hide_targets[i]; i++) {
+        (void)susfs_hide_path(g_susfs_hide_targets[i]);
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* Style derivation from the camera render payload                    */
+/* ------------------------------------------------------------------ */
+
+/* Read the M3/M9 look from the camera's render payload
+ * (com.xiaomi.mivi2.render "lutNames":["lut_m3"] or ["lut_m9"]).
+ *
+ * Parsing the actual payload from kernel/userspace render memory is complex
+ * without device access, so this is a placeholder: it confirms we are in the
+ * camera process by scanning /proc/self/cmdline for "camera", logs what it
+ * finds, and returns 0 (unknown). The real implementation should open the
+ * render-payload FD/expose it via a property and parse the lutNames array.
+ * TODO(device): replace with real render-payload parsing once the FD/property
+ * contract is known on the target build. */
+static u32 style_from_render_payload(void) {
+    int fd = open("/proc/self/cmdline", O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return 0;
+    char buf[128];
+    long n = read(fd, buf, sizeof(buf) - 1);
+    int saved = errno;
+    close(fd);
+    errno = saved;
+    if (n > 0) {
+        buf[n] = 0;
+        for (long i = 0; i < n; i++) {
+            if (buf[i] == '\0') buf[i] = ' ';
+        }
+        int is_camera = 0;
+        for (long i = 0; i + 6 <= n; i++) {
+            if (buf[i] == 'c' && buf[i+1] == 'a' && buf[i+2] == 'm'
+                    && buf[i+3] == 'e' && buf[i+4] == 'r' && buf[i+5] == 'a') {
+                is_camera = 1;
+                break;
+            }
+        }
+        logi("render payload cmdline=%s is_camera=%d", (u64)(long)buf, (u64)is_camera);
+        if (!is_camera) return 0;
+    }
+    /* TODO: parse "lutNames":[...] from the real render payload here. */
+    logi("render payload parse: not implemented, returning 0 (unknown)", 0, 0);
     return 0;
 }
 
@@ -346,13 +476,39 @@ static int plugin_enabled(void *self, void *params) {
     return 1;
 }
 
+/* Shutdown/cleanup: unmount every bind-hide we created, release the donor,
+ * and reset the init guard so a later re-initialization starts clean. */
+static void hcm_shutdown(void);
+
 static int plugin_destroy(void *self) {
     (void)self;
     if (g_donor && g_donor_destroy) {
         g_donor_destroy(g_donor, 1);
         g_donor = 0;
     }
+    hcm_shutdown();
     return 0;
+}
+
+/* Shutdown/cleanup: unmount every bind-hide we created, release the donor,
+ * and reset the init guard so a later re-initialization starts clean. */
+static void hcm_shutdown(void) {
+    for (int i = 0; i < g_mount_count; i++) {
+        if (g_mount_list[i]) {
+            umount2(g_mount_list[i], 0);
+            free(g_mount_list[i]);
+            g_mount_list[i] = 0;
+        }
+    }
+    g_mount_count = 0;
+    if (g_donor && g_donor_destroy) {
+        g_donor_destroy(g_donor, 1);
+        g_donor = 0;
+    }
+    g_donor_inited = 0;
+    g_style = 0;
+    g_inited = 0;
+    logi("hcm shutdown complete", 0, 0);
 }
 
 static int ret0(void) { return 0; }
@@ -421,9 +577,57 @@ int connect(void *pm) {
 /* ------------------------------------------------------------------ */
 
 __attribute__((constructor)) static void hcm_init(void) {
+    if (g_inited) return;
     p_dlopen = (dlopen_fn)dlsym((void *)0, "dlopen");
     p_dlsym = (dlsym_fn)dlsym((void *)0, "dlsym");
     p_log = (log_fn)dlsym((void *)0, "__android_log_print");
     p_prop = (prop_get_fn)dlsym((void *)0, "__system_property_get");
     if (p_log) p_log(4, "HCM-Legend", "wrapper loaded", 0, 0);
+
+    /* Third backend: SUSFS procfs hide rules for /data/adb/modules trees. */
+    susfs_hide_all();
+
+    /* Fallback: bind-mount empty files over the module paths in a private
+     * namespace, logging errno on failure so device debugging is possible. */
+    {
+        const char *staging = "/data/local/tmp/.hcm_susfs_staging";
+        if (mkdir(staging, 0755) < 0 && errno != EEXIST) {
+            staging = NULL;
+        }
+        if (staging) {
+            if (unshare(CLONE_NEWNS) == 0) {
+                mount("", "/", "none", MS_PRIVATE | MS_REC, NULL);
+            }
+            for (int i = 0; g_susfs_hide_targets[i]; i++) {
+                const char *target = g_susfs_hide_targets[i];
+                char src[512];
+                int src_len = 0;
+                while (staging[src_len]) { src[src_len] = staging[src_len]; src_len++; }
+                const char *t = target;
+                while (*t && src_len < (int)sizeof(src) - 1) {
+                    src[src_len++] = (*t == '/') ? '_' : *t;
+                    t++;
+                }
+                src[src_len] = 0;
+                int fd = open(src, O_CREAT | O_RDWR | O_CLOEXEC, 0644);
+                if (fd >= 0) close(fd);
+                if (mount(src, target, "none", MS_BIND | MS_PRIVATE, NULL) < 0) {
+                    int saved = errno;
+                    logi("bind-mount hide %s failed errno=%d", (u64)(long)target, (u64)(long)saved);
+                } else {
+                    if (g_mount_count < GC_MAX_MOUNTS) {
+                        char *copy = malloc(strlen(target) + 1);
+                        if (copy) {
+                            strcpy(copy, target);
+                            g_mount_list[g_mount_count++] = copy;
+                        }
+                    }
+                    logi("bind-mount hide %s active", (u64)(long)target, 0);
+                }
+            }
+        }
+    }
+
+    g_inited = 1;
+    logi("hcm init done inited=%d", (u64)g_inited, 0);
 }
