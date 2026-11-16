@@ -145,7 +145,6 @@ public class ModuleMain extends XposedModule {
     private volatile boolean assetsHooked;
     private volatile boolean styleHooked;
     private volatile boolean textHooked;
-    private volatile boolean mountHideInited;
     // -1 = not read yet, 0 = off, 1 = on. Read once per Camera process.
     private volatile int originalPortraitState = -1;
 
@@ -174,12 +173,6 @@ public class ModuleMain extends XposedModule {
             log(Log.WARN, TAG, "cannot find the module APK: " + t);
         }
         log(Log.INFO, TAG, "HAL capabilities: " + HalCapabilities.summary());
-        // Hide the module's own mount entries from this process's mount
-        // namespace so Duck-Detector's Mount detector does not see them.
-        if (!mountHideInited) {
-            MountHide.init();
-            mountHideInited = true;
-        }
         installPropertyHook();
         installTabHook();
         installModeListHook(loader);

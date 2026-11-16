@@ -12,9 +12,3 @@
     public <init>();
 }
 
-# Keep MountHide (JNI entry points Java_com_codex..._nativeInit etc. depend on
-# the class/method names).
--keep class io.martin.hypercameramod.MountHide { *; }
--keepclassmembers class io.martin.hypercameramod.MountHide {
-    native <methods>;
-}
