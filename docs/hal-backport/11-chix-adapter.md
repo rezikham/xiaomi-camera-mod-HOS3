@@ -1,73 +1,141 @@
-# The ChiX adapter: how Aurora actually drives an offline plugin
+# The ChiX wrapper plugin: Aurora-native host for the Nezha Legendary algorithm
 
-This page answers the question that blocked the last iteration of the
-`mileicafilter` port: **can an Aurora-side adapter run the Nezha Legendary
-algorithm, and what exactly does it have to do?**
-
-The short answer is **yes, but not through `postProcess()`**. Aurora's
-`MiaNode::postProcess()` is a no-argument, return-ignored teardown hook. The
-pixel work for an offline node happens in the plugin's
-`processRequest(ProcessRequestInfo*)`, and Aurora *does* call that entry for
-nodes whose `NodeMask` has bit 0 clear. The stock `com.xiaomi.plugin.filter`
-node is one of those nodes, which is why the LUT injection in
-[09](09-engine-lut-injection.md) works while the donor never ran: the earlier
-vtable-only shim put a no-op in slot 5 and the node never reached the
-`processRequest` call that carries buffers.
-
-The recommended implementation is therefore an **Aurora-native wrapper plugin**
-that implements Aurora's fifteen-slot plugin vtable, `dlopen`s the donor
-privately, and forwards `processRequest(ProcessRequestInfo*)` after translating
-the two `ImageParams` structs. The donor's `ProcessRequestInfo` layout is
-already identical to Aurora's for the fields that matter, and the donor's GL
-path needs only five fields from `ImageParams`. No further binary patch of the
-donor is required.
+This document is the design record for the ChiX wrapper plugin: an Aurora-native
+Chi plugin that implements Aurora's plugin vtable, `dlopen`s the Nezha
+`mileicafilter.so` donor privately, and forwards `processRequest(ProcessRequestInfo*)`
+calls to it after translating `ImageParams`.
 
 Evidence labels follow [README.md](README.md): `[observed]` is read from the
-extracted firmware, `[inferred]` is a conclusion that has not been executed,
-`[unknown]` is not established.
+extracted firmware, extracted plugin, device logcat, or on-device measurement;
+`[inferred]` is a conclusion from observed data that has not been executed;
+`[unknown]` is not established by the available evidence.
 
-## 0. Binaries analysed
+## 1. Overview
 
-| Binary | Path (dump) | SHA-256 (prefix) |
-| --- | --- | --- |
-| Aurora engine | `extracted_aurora/odm/lib64/libmialgoengine.so` (834 440 B) | `9c42efa9f507…` |
-| Aurora filter plugin | `extracted_aurora/…/plugins/com.xiaomi.plugin.filter.so` | `64b3e5ddaef8…` |
-| Aurora provider | `extracted_aurora/odm/bin/hw/vendor.qti.camera.provider-service_64` | `0a93b99067b7…` |
-| Nezha engine | `extracted_nezha/odm/lib64/libmialgoengine.so` (1 939 520 B) | `9933ccf38227…` |
-| Nezha donor | `extracted_nezha/…/plugins/com.xiaomi.plugin.mileicafilter.so` | `43dec6bf21bb…` |
-| Aurora pipeline | `extracted_aurora/odm/etc/camera/xiaomi/satsnapshot.json` | — |
+The ChiX wrapper (`com.xiaomi.plugin.hcmlegend`, source at
+`tools/hal-port/aurora/hcm_legend_plugin/hcm_legend.c`) is a new, Aurora-native
+plugin `.so` installed at
+`/odm/lib64/camera/plugins/com.xiaomi.plugin.hcmlegend.so`. It does not patch
+the donor plugin and does not register the donor with Aurora's engine. Instead:
 
-All disassembly below uses link-time addresses (`llvm-objdump -d`), and
-Ghidra decompilation with image base `0x100000` (so a Ghidra address
-`0x18c2e0` is file offset `0x8c2e0`).
+* the wrapper implements Aurora's own 15-slot plugin vtable (slot 2 =
+  `processRequest(ProcessRequestInfo*)`, slot 5 = no-op `postProcess()`);
+* on first request it allocates a `MiLeicaFilterPlugin` object (`0x150` bytes)
+  from the donor and runs its exported constructor;
+* it translates Aurora's `ImageParams` into the Nezha layout and calls the
+  donor's slot-5 `processRequest` directly;
+* the donor runs its M3/M9 look (from the shipped `leica_filter_param_*.bin`
+  tables) and writes into the output buffer.
 
-## 1. Aurora's plugin ABI and lifecycle
+### What is working (verified on device)
 
-### 1.1 The vtable
+* Wrapper loads: `HCM-Legend: wrapper loaded`, `provider table ready`,
+  `connect registered` `[observed]`.
+* Provider create → wrapper object → donor initialize → `isEnabled` style=1/2
+  → donor `processRequest` returns `0` (SUCCESS) `[observed]`.
+* Style selection works: style=1 (M9 params) and style=2 (M3 params) produce
+  measurably different full-resolution outputs `[observed]`.
+* Full-resolution 3072x4096 frames rendered by the donor `[observed]`.
+* `post-fs-data.sh` stages `lut_m3.png`/`lut_m9.png` and sets
+  `camera.debug.mivi3.output.jpeg=true` `[observed]`.
 
-Aurora's `PluginWraper` vtable is 15 virtuals (`_ZTV12FilterPlugin`,
-`0x1d008`, 136 B; the object's vptr is `vtable+0x10 = 0x1d018`). Slots are
-numbered from the vptr, so slot *n* is `[vptr + 8n]`.
+### What is blocked (requires phone testing)
 
-| slot | Aurora entry | stock filter (`0x1d018` vptr) | called by |
-| ---: | --- | --- | --- |
-| 0 | `initialize(CreateInfo*, MiaNodeInterface)` | `0xc08c` | `MiaNode::init` @ `0x8a7ec` |
-| 1 | `preProcess(PreProcessInfo)` | `0xd4dc` (return 0) | session pre-process (observed via shim) |
-| 2 | `processRequest(ProcessRequestInfo*)` | **`0xc218`** (LUT code) | `MiaNode::processRequest` V2 overload @ `0x8fab4` |
-| 3 | `processRequest(ProcessRequestInfoV2*)` | `0xd4d0` (return 0) | `MiaNode::processRequest` V1 overload @ `0x94200` |
+* `candyProcess` crashes with `SEGV_ACCERR` ("execute non-executable memory") at
+  `candyProcess+428`; the fault address sits in the same heap region as
+  Aurora's `ImageParams` `[observed]`. Root cause unknown — needs tombstone
+  analysis plus dumping `ImageParams` fields on device `[next steps]`.
+* Private `libMiPhotoFilter.so` was shipped (as `libHcmPhotoFiltr.so`) and
+  `processRequest` returned `0`, but `candyProcess` still faults `[observed]`.
+
+## 2. Architecture
+
+```
+Aurora engine (libmialgoengine.so)
+  |
+  |-- MiaNode::processRequest (V1 overload, slot 2)  --+
+  |                                                    v
+  |------------------------------------> wrapper plugin (com.xiaomi.plugin.hcmlegend.so)
+                                           implements Aurora 15-slot vtable
+                                           |
+                                           |-- translate() -> Nezha-shaped ImageParams
+                                           |-- calls donor slot-5 processRequest
+                                           v
+                                    donor .so (com.xiaomi.plugin.mileicafilter.so)
+                                    dlopened RTLD_LOCAL, never registered
+                                           |
+                                           |-- candyProcess -> videoprocess (GL/EGL)
+                                           v
+                                    output buffer filled (M3/M9 look)
+```
+
+The wrapper is an **Aurora-native** plugin: it is compiled against the project's
+own description of Aurora's ABI, owns the donor object, and marshals Aurora
+structs into the Nezha layout. The donor file is never registered with
+`MPluginModule` and never patched.
+
+### RTLD_LOCAL vs RTLD_GLOBAL
+
+The wrapper loads three libraries:
+
+* `libhcm_shim.so` (`/odm/lib64/libhcm_shim.so`) with `RTLD_NOW | RTLD_GLOBAL`:
+  resolves the two Aurora-missing symbols `midebug::Log::catchLogEncryptLog` and
+  `mialgo2::PluginUtils::printAndroidAndOfflineLog`, exactly as the existing
+  `compat_shim.S` does `[observed]`.
+* The donor (`/odm/lib64/com.xiaomi.plugin.mileicafilter.so`) with
+  `RTLD_NOW | RTLD_LOCAL`: keeps its `ParamManager`, `ParamUtil`,
+  `ParamTrigger`, and `MiLeicaFilterPlugin` symbols from colliding with anything
+  else `[inferred]`.
+* The donor's `DT_NEEDED` closure needs `libcameraopt_stub.so` and
+  `libcom.xiaomi.cam.miexifmgr.so`, both shipped in the bundle `[observed]`.
+
+The shim/DT_NEEDED approach was needed because `dlopen` of the shim with
+`RTLD_GLOBAL` alone was not enough: the donor is opened `RTLD_LOCAL`, and its
+undefined symbols were still resolved only from the global scope
+`[observed]` (13-chix-wrapper-implementation.md §3).
+
+### Private SONAMEs
+
+Two libraries are shipped under renamed SONAMEs so Aurora's older system
+libraries do not satisfy the donor's dependencies:
+
+| shipped name | source SONAME | patch | purpose |
+|---|---|---|---|
+| `hcicxx.so` | `libc++.so` (Nezha) | `patch_private_libcxx.py`, `libc++.so`→`hcicxx.so` | donor needs `std::__1::__fs::filesystem`, absent from Aurora's system `libc++.so` |
+| `libHcmPhotoFiltr.so` | `libMiPhotoFilter.so` (Nezha) | `patch_dynstr.py`, `libMiPhotoFilter.so`→`libHcmPhotoFiltr.so` | donor's `candyProcess` enters videoprocess; Aurora's `libMiPhotoFilter.so` is older |
+
+Both names are the same length as the originals, so the patch is a byte-for-byte
+dynstr edit (no `patchelf`) `[observed]`. The wrapper's link line also declares
+`NEEDED libc.so libdl.so liblog.so libcom.xiaomi.pluginutils.so libhcm_shim.so
+com.xiaomi.plugin.mileicafilter.so` so all three land in one link group
+`[observed]`.
+
+## 3. ABI mapping
+
+### 3.1 Aurora plugin vtable (15 slots)
+
+`_ZTV12FilterPlugin` = `0x1d008` in `com.xiaomi.plugin.filter.so` (136 B;
+vptr at `vtable+0x10 = 0x1d018`). Slot *n* is `[vptr + 8n]`.
+
+| slot | Aurora entry | stock filter target | called by |
+|---:|---|---|---|
+| 0 | `initialize(CreateInfo*, MiaNodeInterface)` | `0xc08c` | `MiaNode::init` @ `0x8a2cc` |
+| 1 | `preProcess(PreProcessInfo)` | `0xd4dc` (return 0) | session pre-process |
+| 2 | `processRequest(ProcessRequestInfo*)` | `0xc218` (LUT code) | `MiaNode::processRequest` V2 @ `0x8e968` |
+| 3 | `processRequest(ProcessRequestInfoV2*)` | `0xd4d0` (return 0) | `MiaNode::processRequest` V1 @ `0x93880` |
 | 4 | `customizeOutBufferFormats(…)` | `0xd4e8` (ret) | `Pipeline::getOutputImage` @ `0x83190` |
-| 5 | **`postProcess()`** | `0xd4dc` (return 0) | `MiaNode::postProcess` @ `0x8c2fc` |
+| 5 | `postProcess()` | `0xd4dc` (return 0) | `MiaNode::postProcess` @ `0x8c2e0` |
 | 6 | `flushRequest(FlushRequestInfo*)` | `0xd4c4` | `MiaNode::flush` @ `0x94b90` |
-| 7 | `destroy()` | `0xd3cc` | `MiaNode::deInit` @ `0x8c278` |
-| 8 | `isEnabled(MiaParams)` | **`0xc194`** | `PluginWraper::needPreProcess` @ `0x8cb6c`, `MiaNode::isEnable` @ `0x8cd9c` |
-| 9 | auxiliary (called after flush) | `0xd4e8` | `MiaNode::flush` @ `0x94ba0` |
+| 7 | `destroy()` | `0xd3cc` | `MiaNode::deInit` @ `0x8c254` |
+| 8 | `isEnabled(MiaParams)` | `0xc194` | `needPreProcess` @ `0x8cb6c`, `MiaNode::isEnable` @ `0x8cd00` |
+| 9 | auxiliary | `0xd4e8` | `MiaNode::flush` @ `0x94ba0` |
 | 10 | `~D1` | `0xbf50` | — |
 | 11 | `~D0` | `0xc060` | `MiaNode::deInit` @ `0x8c28c` |
-| 12 | out/info helper (`ImageParams`→`MiaFrameInfo`) | `0xd4f0` |  `DepurplePlugin::processRequestV2` @ `+0x60` |
+| 12 | out/info helper (`ImageParams`→`MiaFrameInfo`) | `0xd4f0` | `DepurplePlugin::processRequestV2` @ `+0x60` |
 | 13 | "skip pre-process" flag (return 0) | `0xd4dc` | `needPreProcess` @ `0x8cb6c` |
 | 14 | "supports pre-process" flag (return 1) | `0xd574` | `needPreProcess` @ `0x8cb6c` |
 
-`[observed]` `needPreProcess` is:
+`needPreProcess` (engine, `@ 0x8cb6c`):
 
 ```c
 int PluginWraper::needPreProcess(MiaParams& p) {
@@ -77,581 +145,374 @@ int PluginWraper::needPreProcess(MiaParams& p) {
 }
 ```
 
-This is the correct explanation of the `getCustomFrameOrder+8` crash recorded in
-[05](05-on-device.md): in the Nezha order slot 13/14 are different functions,
-and slot 8 is `getCustomFrameOrder(shared_ptr<MiMetadata>)`, which writes a
-vector through an sret register the engine never set.
+`postProcess()` at `0x8c2e0` is a no-argument, return-ignored teardown hook;
+the pixel path is slot 2 `[observed]` (correction to the earlier claim in
+05-on-device.md that Aurora drove the filter node through `postProcess()`).
 
-### 1.2 `postProcess()` receives nothing
+### 3.2 Donor vtable (21 slots)
 
-`MiaNode::postProcess()` at `0x8c2e0` (48 B) is exactly:
+`_ZTV19MiLeicaFilterPlugin` = `0x208a8` in `com.xiaomi.plugin.mileicafilter.so`
+(184 B; vptr `0x208b8`). The engine never walks this table; the wrapper reads
+slots directly by index.
 
-```c
-undefined8 MiaNode::postProcess() {
-    PluginWraper *p = *(PluginWraper **)(this + 0x50);   // plugin instance
-    if (p) (**(code **)(*(long *)p + 0x28))();           // slot 5, no args
-    return 0;                                            // return ignored
-}
-```
-
-`[observed]` There is no image, no metadata, no return channel. The engine also
-never calls `requestOutputBuffer`/`setResultBuffer`/`setOutputFormat` for these
-nodes (`[observed]`, [05](05-on-device.md)), because output buffers are
-allocated by the engine from the pipeline links and handed to the plugin in
-`ProcessRequestInfo` instead.
-
-`[observed]` Among the plugins inspected, the only one that does real work in
-slot 5 is `DepurplePlugin::postProcess()` at `0x7a0c` (60 B), and all it does is
-`QAltekDepurple::decInit()` — a teardown of state built in `preProcess`.
-Slot 5 is not a processing entry.
-
-### 1.3 `processRequest` is the pixel path
-
-There are **two** `MiaNode::processRequest` overloads, and they call the plugin
-ABI in opposite directions:
-
-| engine function | signature | plugin call |
-| --- | --- | --- |
-| `0x93880` | `(map&, int&, int&, sp<Pipeline>&)` | `[vptr+0x18]` = slot 3 (`ProcessRequestInfoV2*`) |
-| `0x8e968` | `(map&, map&&, int&, int&, sp<Pipeline>&, int)` | `[vptr+0x10]` = slot 2 (`ProcessRequestInfo*`) |
-
-`[observed]` `SigframeNode::processTask` (`0x9b0e8`) and
-`OtherNode::processTask` (`0x9caf0`) choose between them with a single bit:
-
-```c
-if (((this[8] & 1) == 0) || local_308 != 0)
-    MiaNode::processRequest(..., /* 6-arg V2 overload */);  // plugin slot 2
-else
-    MiaNode::processRequest(..., /* 4-arg V1 overload */);  // plugin slot 3
-```
-
-`this[8]` is copied in `MiaNode::init` from `NodeItem+0x30`
-(`0x8a35c: ldr w8,[x20,#0x30]; str w8,[x19,#8]`), which is the parsed
-`NodeMask` property. `MiaNodeFactory::CreateNodeInstance` (`0x9e440`) uses the
-same field to pick the node class: bit 9 → plain `MiaNode`, bit 1 →
-`ConcurrencyNode`, bit 4 → `SigframeNode`, else `OtherNode`.
-
-Consequences `[observed]`:
-
-* `FilterInstance0` in `satsnapshot.json`/`leicasnapshot.json` has **no
-  `NodeMask` property**. `[inferred]` The parsed node is zero-initialised, so
-  the value is 0 → `OtherNode`, and the `processRequest` selection takes the
-  first branch → **plugin slot 2**.
-* That is precisely `FilterPlugin::processRequest(PRI*)` at `0xc218`, the
-  `candyProcess`/`CubeLutEffect` path that [09](09-engine-lut-injection.md)
-  verified on the device. The pixel work is *not* in `postProcess` and not in
-  the slot-3 stub.
-* Nodes with odd `NodeMask` (e.g. `AnchorInstance0` = 49) use slot 3, the "V2"
-  plugin API. This is why the on-device trace logged `processRequest` for
-  `anchor` but the donor (`NodeMask` 0) was expected on the other path.
-
-### 1.4 Where the buffers come from
-
-`[observed]` The engine builds the request from the pipeline images
-(`buildBufferParams`, `MiaNode::getOutputBuffer` @ `0x8cfcc`) and passes a
-pointer to a stack structure as `x1`. Its layout, recovered from the stock
-filter's own code (which is known-good on the device), is:
-
-```c
-struct ProcessRequestInfo {       // Aurora and Nezha agree here
-    void *input;                  // +0x00  container
-    ...
-    void *output;                 // +0x18  container
-    ...
-    uint32_t frameIndex;          // +0x48
-};
-// container->[0x28] is ImageParams*
-```
-
-`FilterPlugin::processRequest` reads `*(long*)info` and `*(long*)(info+0x18)`,
-takes `[container+0x28]`, and builds an `android::GraphicBuffer` from it, then
-an `EGLClientBuffer` (`0xc464`–`0xc4f0`). The donor's `processRequest` does the
-same thing at `0xdb3c`–`0xdb94`. **The container and the request layout are
-shared between the two frameworks; only the `ImageParams` body differs.**
-
-## 2. Why a `postProcess` adapter cannot work
-
-A shim that only overrides slot 5 has no access to:
-
-* the input/output `ImageParams` (not passed, not stored by the engine),
-* the request metadata (`MiMetadata`),
-* the output buffer or its format.
-
-The `MiaNodeInterface` that `initialize` receives does contain buffer callbacks,
-but `[observed]` Aurora never invokes them (zero calls during a verified stock
-capture, [05](05-on-device.md)). The donor stores the interface at
-`this+0xd8` and — checked by scanning every load in that range — never calls it
-either. So there is nothing to "synthesize" from a `postProcess` call.
-
-A `postProcess` adapter is feasible only if it **also** implements slot 2 and
-remembers the last `ProcessRequestInfo`; at that point it is a processRequest
-adapter with an empty slot 5, which is exactly the wrapper in section 5.
-
-## 3. What the donor actually needs
-
-### 3.1 Vtable and entry points
-
-`_ZTV19MiLeicaFilterPlugin` = `0x208a8` (184 B, 21 slots; vptr `0x208b8`).
-
-| Nezha slot | function | address | notes |
-| ---: | --- | --- | --- |
-| 0 | `initialize(CreateInfo*, MiaNodeInterface)` | `0xc620` | copies 14 qwords of the interface to `this+0xd8`; reads `CreateInfo+0x44` (processMode) and `CreateInfo+0x48` (`MiMetadata*`) |
-| 1 | `preProcess(PreProcessInfo)` | `0xd990` | logging only |
-| 2 | `needPreProcess(MiaParams)` | `0x11d10` | Nezha copy of the engine helper |
-| 5 | `processRequest(ProcessRequestInfo*)` | **`0xdafc`** | the algorithm driver |
-| 6 | `processRequest(ProcessRequestInfoV2*)` | `0x10f28` | **log-only stub, returns 0** |
-| 10 | `flushRequest` | `0x11094` | |
-| 11 | `destroy` | `0x11200` | |
-| 12 | `isEnabled(MiaParams)` | `0xd714` | reads `[MiaParams+0x18]` (metadata), stores style at `this+0x26` |
-| 13 | `reset` | `0x11534` | |
-| 16/17 | `~D1` / `~D0` | `0xc4f0` / `0xc598` | |
-| 18 | `getImageInfo(ImageParams*, MiaFrameInfo*)` | `0x11f20` | copies the plane/stride fields |
+| Nezha slot | function | address | wrapper use |
+|---:|---|---|---|
+| 0 | `initialize(CreateInfo*, MiaNodeInterface)` | `0xc620` | called by wrapper on first request |
+| 1 | `preProcess(PreProcessInfo)` | `0xd990` | not called |
+| 2 | `needPreProcess(MiaParams)` | `0x11d10` | not called |
+| 5 | `processRequest(ProcessRequestInfo*)` | `0xdafc` | **the algorithm driver — forwarded to** |
+| 6 | `processRequest(ProcessRequestInfoV2*)` | `0x10f28` | log-only stub, returns 0 (not called) |
+| 10 | `flushRequest` | `0x11094` | not called |
+| 11 | `destroy` | `0x11200` | called by wrapper on destroy |
+| 12 | `isEnabled(MiaParams)` | `0xd714` | reads `[MiaParams+0x18]` metadata, stores style at `this+0x26` |
+| 13 | `reset` | `0x11534` | not called |
+| 16/17 | `~D1` / `~D0` | `0xc4f0` / `0xc598` | not called |
+| 18 | `getImageInfo(ImageParams*, MiaFrameInfo*)` | `0x11f20` | not called |
 | 19/20 | flags | `0x11f08` | return 0 |
 
-Other exported helpers:
+Other exported helpers used by the wrapper:
 
 | function | address | use |
-| --- | --- | --- |
-| ctor `MiLeicaFilterPlugin::MiLeicaFilterPlugin()` | `0xc2d4` | object is `0x150` bytes (factory `0x12028`) |
-| `initResource()` | `0xcc54` | allocates `param_lut_t` (0x3993 B), loads the `.bin`, selects M3/M9 |
-| `releaseResource()` | `0x113c0` | |
-| `getInitProperties()` | `0x11708` | |
-| `candyProcess(FilterFrameParam*, FilterFrameParam*, VideoFormat, param_lut_t*, param_shading_float_t*)` | `0x10180` | the actual GL/videoprocess call |
-| `fillMetaDataInfo(ImageParams&)` | `0xeae4` | AWB/AEC EXIF tags |
+|---|---|---|
+| ctor `MiLeicaFilterPlugin::MiLeicaFilterPlugin()` | `0xc2d4` | object is `0x150` bytes |
+| `initResource()` | `0xcc54` | allocates `param_lut_t`, loads `.bin`, selects M3/M9; exported symbol used for style switch |
+| `candyProcess(...)` | `0x10180` | the actual GL/videoprocess call (faults at `+428`) |
 | `getPluginName()` | `0xc5c8` | `"com.xiaomi.plugin.mileicafilter"` |
 
-`[observed]` `processRequest` reads exactly three fields of
-`ProcessRequestInfo`:
+### 3.3 Slot-by-slot mapping table
 
-```text
-info+0x00              -> container; [container+0x28] = ImageParams*  (input)
-info+0x18              -> container; [container+0x28] = ImageParams*  (output)
-info+0x48  (u32)       -> this+0x14 (frame index / EXIF)
-```
+| Aurora slot | Wrapper implementation | Donor slot used | Notes |
+|---:|---|---|---|
+| 0 | `plugin_initialize` — no-op (deferred to first request) | — | donor `initialize` is called from slot 2 |
+| 1 | `ret0` | 1 | logging-only in donor |
+| 2 | `plugin_process_request` — translate + forward | 5 | **the pixel path** |
+| 3 | `ret0` | 6 | donor V2 stub returns 0 |
+| 4 | `noop` | 4 | not in donor's meaningful set |
+| 5 | `ret0` (postProcess, no-op) | 5 (donor's own meaning differs) | engine calls slot 5; wrapper keeps it a teardown no-op |
+| 6 | `ret0` | 10 | flush |
+| 7 | `plugin_destroy` | 11 | destroy donor |
+| 8 | `plugin_enabled` — style gate | 12 | donor `isEnabled` sets style byte |
+| 9 | `noop` | — | auxiliary |
+| 10/11 | `noop` | 16/17 | destructors |
+| 12 | `ret0` | 18 | image-info helper |
+| 13 | `ret0` | 13 | skip-pre-process flag |
+| 14 | `ret1` | 19/20 | supports-pre-process flag |
 
-It then calls its own slot 18 on both `ImageParams` (`0xdb78`, `0xdb94`) and
-`candyProcess` with the two EGL client buffers (`0xe3f4`–`0xe400`). Output is
-written **into the output buffer**; success is `w0 == 0`, and on a bypass path
-it does `miCopyBuffer(out, in)` (`0xe554` region).
+The wrapper calls the donor directly by vtable index rather than registering the
+donor's vtable with Aurora `[observed]`.
 
-### 3.2 `ImageParams` fields the donor touches
+## 4. ImageParams translation
 
-| Nezha offset | meaning | read by |
-| ---: | --- | --- |
-| `+0x00` | format | `GraphicBuffer`, slot 18 |
-| `+0x04` | width | `GraphicBuffer`, slot 18 |
-| `+0x08` | height | `GraphicBuffer`, slot 18 |
-| `+0x18` | (frame/video format) | slot 18 → `MiaFrameInfo+0x58` |
-| `+0x34` | (scanline?) | slot 18 → `+0x5c` |
-| `+0x38` | usage (GraphicBuffer arg 9) | `0xe2c8`, slot 18 → `+0xc` |
-| `+0x3c` | (format?) | slot 18 → `+0x10` |
-| `+0x40`/`+0x48` | `shared_ptr<MiMetadata>` | `fillMetaDataInfo` |
-| `+0x70` | plane count | slot 18 |
-| `+0x74 + 4i` | plane strides | slot 18 |
-| `+0x80 + 8i` | plane pointers | slot 18 |
-| `+0x98 + 8i` | plane second pointer | slot 18 |
-| `+0xb0` | `native_handle*` | `GraphicBuffer` @ `0xe2d4` |
-
-`[inferred]` Because the GL path only constructs `GraphicBuffer` from
-`+0x00/+0x04/+0x08/+0x38/+0xb0` and the `FilterFrameParam` from the EGL buffer
-plus the `+0x04` pair and `+0x38`, the plane arrays are not needed for
-processing; they feed slot 18's `MiaFrameInfo` and the dump path.
-
-### 3.3 Parameter files and state
-
-`[observed]` `initResource` selects a `ParamUtil` by `this+0x70`, computed from
-`this+0x26` (style) and `this+0xd0` (processMode, 0 = preview, 1 = snapshot):
-
-| style (`this+0x26`) | processMode 0 | processMode 1 |
-| ---: | --- | --- |
-| 0 | no look (`this+0x70 = 0`) | no look |
-| 1 (M9) | mode 2 → `leica_filter_param_m9_preview.bin` | mode 1 → `leica_filter_param_m9_snapshot.bin` |
-| 2 (M3) | mode 3 → `leica_filter_param_m3.bin` | mode 3 → `leica_filter_param_m3.bin` |
-
-Files used by the donor (`[observed]` string table):
-
-```text
-/odm/etc/camera/leica_filter_param.bin
-/odm/etc/camera/leica_filter_param_m3.bin
-/odm/etc/camera/leica_filter_param_m9_preview.bin
-/odm/etc/camera/leica_filter_param_m9_snapshot.bin
-```
-
-All four are already in the port bundle ([03](03-port-bundle.md)).
-
-The lazy-init contract is convenient: `processRequest` itself does
+The container/request layout is shared between Aurora and Nezha `[observed]`:
 
 ```c
-if (this[0x22] == 0) { releaseResource(this); initResource(this); }
+struct ProcessRequestInfo {   // Aurora and Nezha agree here
+    void *input;              // +0x00  container; [container+0x28] = ImageParams*
+    void *output;             // +0x18  container; [container+0x28] = ImageParams*
+    uint32_t frameIndex;      // +0x48
+};
 ```
 
-so the adapter does not need to call `initResource` explicitly — set the style
-first and the first request initialises everything.
+Only the `ImageParams` body differs. Aurora (from the stock filter at
+`0xc464`–`0xc497`, slot 12 at `0xd4f0`) vs Nezha (donor `getImageInfo` at
+`0x11f20`/`0x11f3c`):
 
-## 4. ABI delta that matters
+| field | Aurora offset | Nezha offset | read by |
+|---|---|---|---|
+| format | `+0x00` | `+0x00` | `GraphicBuffer`, slot 18 |
+| width | `+0x04` | `+0x04` | `GraphicBuffer`, slot 18 |
+| height | `+0x08` | `+0x08` | `GraphicBuffer`, slot 18 |
+| usage | `+0x1c` | `+0x38` | `0xe2c8`, slot 18 → `+0xc` |
+| metadata `shared_ptr` (hi) | `+0x28` | `+0x40` | `fillMetaDataInfo` |
+| metadata `shared_ptr` (lo) | `+0x30` | `+0x48` | `fillMetaDataInfo` |
+| plane count | `+0x48` | `+0x70` | slot 18 |
+| native handle `native_handle*` | `+0x70` | `+0xb0` | `GraphicBuffer` @ `0xe2d4` |
 
-Everything below is the delta between the Nezha plugin and Aurora's engine.
-The container/request layout is **not** in the table because it matches.
-
-| Item | Aurora | Nezha/Madrid | adapter action |
-| --- | --- | --- | --- |
-| `MiaParams.metadata` | `+0x00` | `+0x18` | wrapper reads Aurora's `+0x00`; donor `isEnabled` is not called (or gets a synthesized `MiaParams`) |
-| `CreateInfo` | no metadata pointer; ints at `+0x48/+0x4c` ([05](05-on-device.md)) | `processMode` at `+0x44`, metadata at `+0x48` | wrapper builds its own `CreateInfo` (`+0x44` = 1 snapshot / 0 preview, `+0x48` = request metadata) |
-| `ImageParams` metadata | `+0x28/+0x30` | `+0x40/+0x48` | copy |
-| `ImageParams` usage | `+0x1c` | `+0x38` | copy |
-| `ImageParams` native handle | `+0x70` | `+0xb0` | copy |
-| `ImageParams` plane count | `+0x48` | `+0x70` | copy (0 if unused) |
-| `ImageParams` plane strides | `+0x4c + 4i` | `+0x74 + 4i` | copy |
-| `ImageParams` plane pointers | `+0x58 + 8i` | `+0x80 + 8i` | copy |
-| plugin vtable | 15 slots | 21 slots | irrelevant: the wrapper calls the donor directly, no vtable rewrite |
-| provider vtable | 6 slots; slot 4 = `create`, slot 5 = `getPluginName` | same | wrapper mimics stock |
-
-`[observed]` The Aurora `ImageParams` offsets are taken from the stock
-`FilterPlugin` itself: `0xc464`–`0xc497` reads `+0x70` (native handle),
-`+0x00/+0x04/+0x08/+0x1c` for `GraphicBuffer`, `+0x28/+0x30` for the metadata
-`shared_ptr`, and `0xd4f0` (slot 12) maps `+0x1c/+0x20/+0x48/+0x4c/+0x58` into
-`MiaFrameInfo`.
-
-## 5. Recommended design: an Aurora-native wrapper plugin
-
-### 5.1 Why a wrapper, not a patched donor
-
-The previous attempts patched the donor's vtable and metadata offsets and
-installed it as `com.xiaomi.plugin.filter`. That fights two problems at once:
-
-1. the vtable orders differ (21 vs 15 slots), and
-2. the donor's `ImageParams` body differs, which only shows up after the
-   lifecycle problem is solved.
-
-A wrapper removes both: it is compiled against **our** description of Aurora's
-ABI, and it owns the donor object. The donor file is never registered with
-`MPluginModule` and never patched.
-
-### 5.2 What the wrapper is
-
-```text
-/odm/lib64/camera/plugins/com.xiaomi.plugin.hcmlegend.so   <- new, our code
-/odm/lib64/hcm/legend_algo.so                              <- copy of donor, private
-/odm/lib64/libhcm_shim.so                                  <- existing shim symbols
-/odm/etc/camera/leica_filter_param_*.bin                   <- existing bundle
-```
-
-The wrapper is modelled on the stock provider/factory at the byte level, since
-Aurora's mivifwk headers are not public:
-
-`[observed]` `connect(ProviderManager*)` in the stock filter (`0xb020`):
-
-```c
-int connect(ProviderManager *pm) {
-    void *p = operator new(8);                  // stateless Provider
-    *(void **)p = &our_provider_vtable[0];      // vptr = table+0x10
-    ProviderManager::add(pm, p);
-    return 1;
-}
-```
-
-The provider vtable is 6 slots (`_ZTV20FilterPluginProvider` = `0x1d090`,
-64 B):
-
-| provider slot | stock target | wrapper implementation |
-| ---: | --- | --- |
-| 0 | `Provider::~Provider` | no-op destructor |
-| 1 | deleting destructor | no-op |
-| 2 | interface version | return `PLUMA_INTERFACE_VERSION` |
-| 3 | provider type | return `PluginWraperProvider` type string |
-| 4 | `create()` — `0xd5d4` | allocate wrapper object, set vptr |
-| 5 | `getPluginName()` — `0xd614` | return `"com.xiaomi.plugin.hcmlegend"` |
-
-`[observed]` The engine's registry (`MPluginModule::getPluginWraperByPluginName`
-@ `0x4489c`) walks a vector of providers, calls provider slot 5 for the name and
-compares it byte-for-byte, then calls provider slot 4 to create the instance.
-The `NodeName` in the pipeline JSON is the key. There is **no hard-coded name
-table**: the string `com.xiaomi.plugin.filter` appears in no Aurora binary
-(`[observed]`, grep over `odm/lib64` and the provider).
-
-### 5.3 Wrapper vtable
-
-Implement Aurora's 15 slots (the exact stock filter values are a safe model):
-
-| slot | wrapper behaviour |
-| ---: | --- |
-| 0 | create the donor object (deferred init), remember `MiaNodeInterface` |
-| 1 | no-op (return 0) |
-| 2 | **translate and forward to donor `processRequest`** |
-| 3 | no-op (return 0) |
-| 4 | no-op (`ret`) |
-| 5 | no-op (return 0) — this is the "postProcess" everybody was looking for |
-| 6 | no-op (return 0) |
-| 7 | destroy donor (`destroy`/`D1`) |
-| 8 | read Aurora `MiaParams+0x00` metadata; return 1 for style 1/2 |
-| 9 | no-op |
-| 10/11 | destructors |
-| 12 | no-op |
-| 13 | return 0 |
-| 14 | return 1 |
-
-### 5.4 Forwarding a request
-
-```c
-int wrapper_processRequest(Wrapper *w, AuroraPRI *info) {
-    // 0. first call: donor initialize with the request metadata
-    if (!w->inited) {
-        CreateInfo ci = {0};
-        ci.procMode = w->snapshot ? 1 : 0;    // +0x44
-        ci.metadata = aurora_image_metadata(info); // +0x48
-        w->donor->initialize(&ci, &w->iface); // 14 qwords, may be zero
-        w->inited = 1;
-    }
-
-    // 1. Aurora image params for input and output
-    AImageParams *ai = *(AImageParams **)(*(char **)info + 0x28);
-    AImageParams *ao = *(AImageParams **)(*(char **)((char *)info + 0x18) + 0x28);
-
-    // 2. Nezha-shaped copies (stack or pool)
-    NImageParams ni = {0}, no = {0};
-    translate(ai, &ni);
-    translate(ao, &no);
-
-    // 3. Nezha-shaped containers + ProcessRequestInfo
-    struct { char pad[0x28]; NImageParams *p; } ci_in  = {{0}, &ni};
-    struct { char pad[0x28]; NImageParams *p; } ci_out = {{0}, &no};
-    NezhaPRI pri = {0};
-    pri.input  = &ci_in;        // +0x00
-    pri.output = &ci_out;       // +0x18
-    pri.frame  = w->frame++;    // +0x48
-
-    // 4. forward
-    return w->donor->processRequest(&pri);   // 0 = success
-}
-```
-
-`translate()` maps the five fields that the GL path uses:
+Wrapper `struct AImg` (Aurora) → `struct NImg` (Nezha) `translate()`:
 
 ```c
 dst->fmt    = src->fmt;        // +0x00
 dst->width  = src->width;      // +0x04
 dst->height = src->height;     // +0x08
-dst->usage  = src->usage;      // Nezha +0x38  <- Aurora +0x1c
-dst->handle = src->native;     // Nezha +0xb0  <- Aurora +0x70
-dst->meta   = src->meta;       // Nezha +0x40/+0x48 <- Aurora +0x28/+0x30
+dst->usage  = src->usage;      // Nezha +0x38 <- Aurora +0x1c
+dst->fmt2   = 0;               // +0x3c; not used by GL path
+dst->meta   = src->meta;       // Nezha +0x40 <- Aurora +0x28
+dst->meta2  = src->meta2;      // Nezha +0x48 <- Aurora +0x30
+dst->native = src->native;     // Nezha +0xb0 <- Aurora +0x70
 dst->planes = 0;               // +0x70; not used by the GL path
 ```
 
-The wrapper does not need to touch the donor's metadata path at all if it
-initialises on the first request and sets the style itself:
+`[inferred]` The plane arrays (`+0x74/+4i` strides, `+0x80/+8i` pointers,
+`+0x98/+8i` second pointer) are not needed for the GL path; they feed slot 18's
+`MiaFrameInfo` and the dump path.
 
-```c
-uint8_t style = read_style(info);      // stylizationType, 1=M9, 2=M3
-w->donor->this->style25 = w->donor->this->style26 = style;
+The donor's `candyProcess` builds `GraphicBuffer` from `+0x00/+0x04/+0x08/
++0x38/+0xb0` `[observed]`. After the handle-offset fix (`+0x74` → `+0x70`), the
+translated handle read correctly:
+
+```
+native in=0xb4000070afd9fcc0 out=0xb4000070afdb6d30   [observed]
 ```
 
-The donor's `initResource` then chooses M9/M3 from the shipped `.bin` files.
+but `candyProcess` still faults at `+428` `[observed]` — see section 8.
 
-### 5.5 Loading the donor privately
+## 5. Provider registration
 
-Because the wrapper is a normal plugin `.so`, it can `dlopen` the donor at a
-path that the plugin scanner does not visit:
+### 5.1 `connect()` hooking
+
+The wrapper exports `connect(ProviderManager*)`, modelled on the stock filter's
+`connect` (`0xb020`) `[observed]`:
 
 ```c
-dlopen("/odm/lib64/hcm/libhcm_shim.so", RTLD_NOW | RTLD_GLOBAL); // symbols
-void *h = dlopen("/odm/lib64/hcm/legend_algo.so", RTLD_NOW | RTLD_LOCAL);
+int connect(void *pm) {
+    void *p = malloc(8);                 // stateless Provider object
+    *(void **)p = g_provider_vtable;     // vptr = table+0x10
+    ProviderManager::add(pm, p);         // mialgo2::ProviderManager::add
+    return 1;
+}
 ```
 
-* `RTLD_GLOBAL` on the shim resolves the two Aurora-missing symbols
-  (`midebug::Log::catchLogEncryptLog`,
-  `mialgo2::PluginUtils::printAndroidAndOfflineLog`) exactly as the existing
-  `compat_shim.S` does.
-* `RTLD_LOCAL` on the donor keeps its `ParamManager`, `ParamUtil`,
-  `ParamTrigger` and `MiLeicaFilterPlugin` symbols from colliding with
-  anything else.
-* The donor's `DT_NEEDED` closure needs `libcameraopt_stub.so` and
-  `libcom.xiaomi.cam.miexifmgr.so`, which the bundle already ships.
+`ProviderManager::add` is imported as `_ZN7mialgo215ProviderManager3addEPNS_8ProviderE`
+`[observed]`. The engine's registry
+(`MPluginModule::getPluginWraperByPluginName` @ `0x4489c`) walks the provider
+vector, calls provider slot 5 for the name and compares byte-for-byte, then
+calls provider slot 4 to create the instance. The `NodeName` in the pipeline JSON
+is the key; there is no hard-coded name table: `com.xiaomi.plugin.filter`
+appears in no Aurora binary `[observed]`.
 
-The donor object is created by allocating `0x150` bytes and calling the exported
-constructor `MiLeicaFilterPlugin::MiLeicaFilterPlugin()` (`0xc2d4`). It does not
-need PLUMA registration.
+### 5.2 Provider vtable (6 slots)
 
-### 5.6 Pipeline insertion
+`_ZTV20FilterPluginProvider` = `0x1d090` (64 B). The wrapper clones slots 0–5
+from the stock symbol (weak, exported) and overrides slots 4 and 5:
 
-The wrapper node must be an offline node with **no `NodeMask`**, so the engine
-selects `OtherNode` and plugin slot 2. Place it in the same Gralloc chain as
-the stock filter `[observed]`:
+| provider slot | stock target | wrapper implementation |
+|---:|---|---|
+| 0 | `Provider::~Provider` | cloned (no-op destructor) |
+| 1 | deleting destructor | cloned |
+| 2 | interface version | cloned (`PLUMA_INTERFACE_VERSION`) |
+| 3 | provider type | cloned (`PluginWraperProvider` type string) |
+| 4 | `create()` (`0xd5d4`) | `provider_create` — allocates wrapper object, sets vptr |
+| 5 | `getPluginName()` (`0xd614`) | `provider_name` — returns allocated `std::string` |
+
+### 5.3 `getPluginName()` returns `std::string` by value
+
+`ProviderManager` compares the name returned by provider slot 5 **and then frees
+the string** `[observed]`. The stock implementation (`0xd614`) builds the libc++
+long form:
 
 ```text
+mov  x8, <sret pointer>   ; caller-provided return object
+new(0x20); copy name
+str  #0x21, [x8]          ; libc++ long form: capacity | 1
+str  #0x18, [x8, #8]      ; size
+str  ptr,  [x8, #0x10]    ; data
+```
+
+Returning a `char*` leaves the `std::string` uninitialised, so the registry
+lookup misses (`error not found pluginName: …`) and the later destruction aborts
+with `Scudo ERROR: invalid chunk state` `[observed]`. Returning a static buffer
+also aborts, because the caller frees it.
+
+The wrapper therefore builds the libc++ long form itself:
+
+```c
+typedef struct { u64 cap; u64 size; char *data; } hcm_string;
+/* cap = length | 1, data = malloc(len + 1) */
+```
+
+`com.xiaomi.plugin.hcmlegend` is 26 bytes, longer than the 22-byte short-string
+threshold, so the long form is required `[observed]`.
+
+## 6. Pipeline insertion
+
+The wrapper node is an **offline node with no `NodeMask`**, so the engine
+selects `OtherNode` and the V1 plugin API (slot 2) `[observed]`. An odd `NodeMask`
+would route to the stub V2 API (slot 3) `[observed]`.
+
+It is inserted immediately **before** the stock filter node, in the same Gralloc
+chain:
+
+```
 MovieEffectInstance0 (Gralloc)
   -> LegendFilterInstance0  ("com.xiaomi.plugin.hcmlegend", no NodeMask)
-  -> FilterInstance0        (stock LUT filter, if the payload is also set)
+  -> FilterInstance0        (stock LUT filter, pass-through when no look)
   -> WatermarkInstance0
 ```
 
-The node entry is therefore:
+Node entry:
 
 ```json
 { "NodeName": "com.xiaomi.plugin.hcmlegend",
   "NodeInstance": "LegendFilterInstance0" }
 ```
 
-and the two links carry `BufferType: "Gralloc"`, copying the stock filter links.
-Do not set `NodeMask`; an odd mask would route the node to the (stub) V2 API.
+The patcher (`patch_legend_snapshot.py`) moves the upstream link's `DstPort` to
+`LegendFilterInstance0` and adds a new `LegendFilterInstance0 → FilterInstance0`
+link, both `BufferType: "Gralloc"`. It runs on `leicasnapshot.json`,
+`satsnapshot.json`, `normalsnapshot.json`, and `superhdsnapshot.json`
+`[observed]`.
 
-## 6. Node dispatch: verified claims and corrections
+`[inferred]` Photo mode on this build uses `normalsnapshot.json` (the SAT graph
+is selected for ordinary Leica captures); patching only `leicasnapshot.json`/
+`satsnapshot.json` yields a node that is never created (13-chix-wrapper-
+implementation.md §4).
 
-| Claim in earlier pages | Status |
-| --- | --- |
-| "NodeName selects the plugin" | `[observed]` yes: `NodeName` is the provider registry key and the `.so` basename. |
-| "unknown NodeName picks a generic path" | `[observed]` partly: an unregistered name makes `getPluginWraperByPluginName` return null, `MiaNode::init` logs `not found pluginName` and the node is dropped. A registered name behaves like any other node; there is no special-cased name. |
-| "NodeName `com.xiaomi.plugin.filter` is special" | `[observed]` no. The special behaviour is the *stock plugin's* implementation: slot 2 = LUT code, slot 5 = no-op, slot 8 reads `com.xiaomi.mivi2.renderType`, slots 13/14 = pre-process flags. The engine only knows the name as a registry key. |
-| "Aurora drives the filter node through `postProcess()`, not `processRequest()`" | `[observed]` **incomplete.** Aurora calls both: `MiaNode::postProcess` (slot 5, no args, no-op for the stock filter) and `MiaNode::processRequest` (slot 2 for `NodeMask` bit 0 = 0). The LUT is applied in slot 2; flagging slot 5 is why the donor was never called. |
-| "the engine never calls `MiaNodeInterface` output callbacks" | `[observed]` correct; buffers come from the pipeline via `ProcessRequestInfo`. |
-| "Nezha plugin uses slot 5 for `processRequest`" | `[observed]` correct for the donor vtable (slot 5 = `0xdafc`), but the fix is not "move it to Aurora slot 5"; it is "call it from the wrapper with the V1 request". |
+The wrapper is an **additional** node: when `isEnabled` returns 0 it is a clean
+pass-through and the stock filter keeps working `[observed]`.
 
-`[observed]` `MiaNodeFactory::CreateNodeInstance` and the `NodeMask` parser
-(`MJsonUtils::parseJson2Struct` @ `0x4f7cc`, `"NodeMask"` at rodata `0x2622d`)
-show that the JSON value is used for both the node class and the plugin API
-selection. `[inferred]` A missing property stays zero because the parser only
-writes when the property is found.
+## 7. Verification results
 
-## 7. Chi metadata path for a plugin that reads M3/M9 style
+Measured on the device (Xiaomi 14 Ultra `aurorapro`, Android 16, HyperOS
+`OS3.0.304.0.WNAMIXM`, KernelSU 3.2.5) `[observed]`:
 
-`[observed]` Aurora delivers metadata two ways:
+Logcat chain:
 
-* to `isEnabled(MiaParams)`: a `MiaParams` **by value** whose first qword is
-  the `MiMetadata *` (stock filter `0xc194`: `MiMetadata::find(*(char**)
-  param_2)`);
-* to `ProcessRequestInfo` → `ImageParams+0x28/+0x30`: a
-  `shared_ptr<MiMetadata>` (stock filter `0xc6cc`–`0xc6d4`: `ldp x21, x8,
-  [x10, #0x28]`).
-
-`[observed]` The donor reads the same tags by name, so a wrapper can use
-`MiMetadata::find(const char*)` directly:
-
-| key | source | use |
-| --- | --- | --- |
-| `com.xiaomi.sessionparams.stylizationType` | app request, written by the module bridge | 1 = M9, 2 = M3; the selector the bundle already patches the donor to use |
-| `com.xiaomi.sessionparams.legendMode` | older Nezha key | not set by the Aurora app |
-| `com.xiaomi.mivi2.renderType` | app render payload gate | stock filter `isEnabled`; not needed for the donor |
-| `com.xiaomi.mivi2.render` | JSON `{lutNames, renderType, …}` | stock filter `processRequest`; unrelated to the `.bin` look |
-
-`[observed]` `MiMetadata::find` exists in Aurora's
-`libcom.xiaomi.metadatautils.so` in both the `char const*` and `uint32_t`
-overloads, so no tag-number map is needed for the wrapper.
-
-## 8. Remaining risks and unknowns
-
-| Risk | Why it matters | Mitigation |
-| --- | --- | --- |
-| `ImageParams` translation is inferred | a wrong stride/usage gives striped or black output | log the five source fields once per capture and compare against the stock filter's `input: %dx%d,sw=…` line at `0xc30c` |
-| videoprocess ABI | the donor is built against Nezha's `libMiPhotoFilter.so` (1.33 MB); Aurora's is 1.08 MB and lacks the newer `createFilter(VideoFormat,VideoFormat,VideoFormat,bool)` overload. The donor imports only the two-argument overload, which Aurora exports, but the returned `VideoFilterInterface` vtable may still differ | first run with Aurora's lib; if it crashes, ship Nezha's `libMiPhotoFilter.so` under a private SONAME and a patched `DT_NEEDED` (tooling exists) |
-| GL/EGL thread context | `candyProcess` creates GL work; it must run on the engine's algorithm thread | the wrapper is called on that same thread as the stock filter, so it inherits the working environment |
-| output-buffer negotiation | the engine must give the new node a Gralloc output at the right size | copy `FilterInstance0`'s link/format and keep the node in the same position |
-| first-request init | donor `initialize` reads `CreateInfo+0x48` metadata | defer it to the first `processRequest`, where a real `MiMetadata` is available; do not call it at node init |
-| early-exit/scheduling of the previous donor node | the old build logged `initialize`/`isEnabled`/`preProcess` but no `processRequest`; root cause not proven | the wrapper can log every slot; also compare `NodeMask`/link position with the stock filter |
-| SELinux | new `.so` under `hal_camera_default` | Magisk file contexts; check `avc: denied` |
-
-`[unknown]` Why the previous in-place donor (correct slot 2, correct name) did
-not reach `processTask`. Candidates: the node was pruned after `preProcess`
-because its output format negotiation did not produce a Gralloc buffer, or the
-node was not in the pruned executed set. The wrapper experiments will answer
-this because they can log without touching the provider.
-
-## 9. Implementation plan
-
-1. **Write `tools/hal-port/aurora/hcm_legend_plugin/`**
-   * `wrapper.c`/`wrapper.cpp`: provider (`connect`, 6-slot table), wrapper
-     object (15-slot table), donor loader, `translate()`, style read.
-   * `shim.c`: the symbols the donor needs that Aurora lacks; reuse
-     `compat_shim.S` and `compat_shim_connect.c` where possible.
-   * `build.sh`: NDK clang, `-fPIC -shared -Wl,-z,max-page-size=16384`,
-     `DT_SONAME=com.xiaomi.plugin.hcmlegend.so`.
-2. **Bundle changes** in `tools/hal-port/aurora/build_bundle.sh`:
-   * ship the donor as `/odm/lib64/hcm/legend_algo.so`;
-   * ship the wrapper as `/odm/lib64/camera/plugins/com.xiaomi.plugin.hcmlegend.so`;
-   * keep `libcameraopt_stub.so` and `libcom.xiaomi.cam.miexifmgr.so`;
-   * drop the donor binary patches (`patch_plugin.py`,
-     `patch_plugin_framework_abi.py`) for this path — the wrapper does not need
-     them.
-3. **Pipeline patch**: add `LegendFilterInstance0` with no `NodeMask` and the
-   two Gralloc links (model on `patch_leicasnapshot.py`); do it for
-   `satsnapshot.json` first (the graph the device actually uses).
-4. **Static verification**: the wrapper exports `connect`, has no
-   `DT_NEEDED` on the donor (it is loaded with `dlopen`), and its provider
-   table has the stock shape.
-5. **Device test (user)**: log wrapper slot calls and the five translated fields
-   for one capture; then compare full-res JPEG with the working LUT-slot
-   capture. A correct run shows `LegendFilter processRequest`, the donor's
-   `param_lut` line, and a 4096x3072 JPEG.
-6. **Fallback**: if the videoprocess ABI is the blocker, keep the LUT-slot
-   approximation from [09](09-engine-lut-injection.md) as the shipped feature.
-
-## 10. Verdict
-
-* **Feasibility: high for the lifecycle, medium for the pixel ABI.**
-  `[observed]` The engine's V1 request is structurally the same object the donor
-  consumes; only `ImageParams` (five fields for the GL path) and the metadata
-  location differ, and both are writable from a wrapper.
-* **A `postProcess` adapter is not viable** in the literal sense: slot 5 is a
-  no-argument teardown hook and carries no pixels. A wrapper that implements
-  slot 2 is required.
-* **No further donor binary patch is needed** if the wrapper sets the style and
-  supplies the metadata at first request.
-* **The single biggest unknown is not the ChiX ABI but `libMiPhotoFilter`**:
-  the donor's `candyProcess` calls into Aurora's older videoprocess
-  implementation. That is a runtime test, not a static blocker.
-
-## Appendix: key addresses
-
-Aurora `libmialgoengine.so`:
-
-```text
-0x4489c  MPluginModule::getPluginWraperByPluginName   provider slot5 name, slot4 create
-0x4f7cc  MJsonUtils::parseJson2Struct                 NodeMask parser
-0x6b270  MiaOfflineSession::postProcess()             per-node postProcess loop
-0x8a2cc  MiaNode::init(NodeItem, MiaCreateParams*)    plugin lookup, initialize
-0x8c254  MiaNode::deInit                              destroy + D0
-0x8c2e0  MiaNode::postProcess()                       slot 5, no args, return ignored
-0x8c310  MiaNode::preProcess(PostMiaPreProcParams*)
-0x8cb6c  PluginWraper::needPreProcess(MiaParams)      slots 14/13/8
-0x8cd00  MiaNode::isEnable(MiaParams)
-0x8cfcc  MiaNode::getOutputBuffer
-0x8e968  MiaNode::processRequest (V2 overload)        plugin slot 2
-0x93880  MiaNode::processRequest (V1 overload)        plugin slot 3
-0x94b48  MiaNode::flush(bool)                         slots 6/9
-0x9b0e8  SigframeNode::processTask                    NodeMask bit0 switch
-0x9caf0  OtherNode::processTask                       NodeMask bit0 switch
-0x9e440  MiaNodeFactory::CreateNodeInstance           NodeMask class select
-0xb2384  PipelinePruner::checkNodeEnable              node vtable+0x20
+```
+HCM-Legend: wrapper loaded
+HCM-Legend: provider table ready
+HCM-Legend: connect registered
+HCM-Legend: provider create -> 0x...
+HCM-Legend: plugin initialize
+HCM-Legend: isEnabled style=2
+HCM-Legend: donor loaded vt=0x...
+HCM-Legend: donor initialized style=2
+HCM-Legend: img fmt=0x23 wh=0x1000/0xc00
+HCM-Legend: native in=0xb4000070afd9fcc0 out=0xb4000070afdb6d30
+HCM-Legend: donor processRequest -> 0
 ```
 
-Aurora `com.xiaomi.plugin.filter.so`:
+Full-resolution 3072x4096 frames rendered by the donor, no provider restart.
 
-```text
-0x1d008  _ZTV12FilterPlugin (15 slots)
-0x1d090  _ZTV20FilterPluginProvider (6 slots)
-0xb020   connect(ProviderManager*)
-0xc08c   initialize          (slot 0)
-0xc194   isEnabled           (slot 8)
-0xc218   processRequest      (slot 2, LUT code)
-0xd4d0   processRequestV2    (slot 3, stub)
-0xd4dc   "return 0" stub     (slot 5 = postProcess, slot 1, slot 13)
-0xd4f0   ImageParams→MiaFrameInfo helper (slot 12)
-0xd574   "return 1" stub     (slot 14)
-0xd5d4   provider create
-0xd614   provider getPluginName ("com.xiaomi.plugin.filter")
+### Saturation measurements (same scene, full-resolution captures, node forced)
+
+| style | `\|R-G\|` | `\|G-B\|` | mean | interpretation |
+|---:|---:|---:|---:|---|
+| 0 (node disabled / pass-through) | 1.7 | 13.6 | 47.1 | baseline |
+| 2 (M3 parameter table) | 2.8 | 17.7 | 44.6 | M3 look engaged |
+| 1 (M9 parameter table) | 9.3 | 23.0 | 52.3 | M9 look engaged |
+
+The parameter tables are clearly engaged and distinct `[observed]`.
+
+The donor has no monochrome stage (`strings` shows no monopan/desaturate symbol)
+`[observed]`: Nezha's M3 output only becomes the Leica Monopan look when the
+separate Monopan step runs (`libmialgo_monopan`) `[inferred]`.
+
+### Force switch
+
+`persist.vendor.camera.hypercam.style` (1 = M9, 2 = M3, 0 = off) drives the
+wrapper; with `0`, `isEnabled` returns 0 and the node is a pass-through
+`[observed]`. The wrapper also reads `lut_m3`/`lut_m9` from
+`com.xiaomi.mivi2.render` metadata and falls back to `/data/vendor/camera/hcm_style`
+then the vendor property `[observed]` (source).
+
+## 8. Blocked items
+
+### candyProcess SEGV_ACCERR
+
+`candyProcess` (donor @ `0x10180`) crashes with `SEGV_ACCERR` ("execute
+non-executable memory") at `candyProcess+428` `[observed]`.
+
+Full stack trace `[observed]`:
+
+```
+#00 libc++.so
+#01 com.xiaomi.plugin.mileicafilter.so
+      MiLeicaFilterPlugin::candyProcess(FilterFrameParam*, FilterFrameParam*,
+                                        VideoFormat, param_lut_t*,
+                                        param_shading_float_t*)+428
+#02 MiLeicaFilterPlugin::processRequest(ProcessRequestInfo*)+2308
+#03 com.xiaomi.plugin.hcmlegend.so plugin_process_request+720
+#04 libmialgoengine.so MiaNode::processRequest(...)+4428
 ```
 
-Nezha `com.xiaomi.plugin.mileicafilter.so`:
+The fault address (`0x726dbdb9d8`) sits in the same heap region as Aurora's
+`ImageParams` (`ai=0x72606efcbc`) `[observed]`, so the donor is reaching a call
+target through a structure the wrapper has not translated `[inferred]`.
+
+The likely candidate is the videoprocess/GL side: Aurora's `libMiPhotoFilter.so`
+is older than Nezha's, and `candyProcess+428` is where the donor enters it
+`[inferred]` (13-chix-wrapper-implementation.md §"Where it stands").
+
+Private `libMiPhotoFilter.so` was shipped (as `libHcmPhotoFiltr.so`) and
+`processRequest` returned `0`, but `candyProcess` still faults `[observed]`.
+
+### Next debugging steps (requires phone)
+
+1. Pull a tombstone for the `candyProcess+428` fault and map which field the
+   call at that offset loads; decide whether it can be supplied from the Aurora
+   `ImageParams`/`MiaNodeInterface` or needs a Nezha-shaped static (the
+   videoprocess singleton) `[next steps]`.
+2. Compare Aurora's `libMiPhotoFilter.so` exports with the donor's expectations;
+   the fallback is to ship Nezha's own `libMiPhotoFilter.so` under a private
+   SONAME, as was done for libc++ `[next steps]`.
+3. Dump the Aurora `ImageParams` fields (`+0x00/+0x04/+0x08/+0x1c/+0x70`) per
+   capture and compare against the stock filter's `input: %dx%d,sw=…` line at
+   `0xc30c` `[next steps]`.
+
+## 9. Build & install
+
+### Build
+
+`tools/hal-port/aurora/build_legend_wrapper.sh [OUT_DIR]`
+
+Builds `com.xiaomi.plugin.hcmlegend.so` (NDK clang, `-fPIC -O2 -shared
+-nostdlib`, soname `com.xiaomi.plugin.hcmlegend.so`) plus `libhcm_shim.so`, and
+packages a KernelSU module with `system/odm/...` layout:
+
+* `/system/odm/lib64/camera/plugins/com.xiaomi.plugin.hcmlegend.so` — wrapper
+* `/system/odm/lib64/com.xiaomi.plugin.mileicafilter.so` — donor (private)
+* `/system/odm/lib64/libhcm_shim.so` — midebug/DFX shim symbols
+* `/system/odm/lib64/hcicxx.so` — private Nezha `libc++.so` (SONAME-rewritten)
+* `/system/odm/lib64/libHcmPhotoFiltr.so` — private Nezha `libMiPhotoFilter.so`
+* `/system/odm/lib64/libcameraopt_stub.so`, `libcom.xiaomi.cam.miexifmgr.so`,
+  `libmetatagwrapper.so` — donor dependency closure
+* `/system/odm/etc/camera/leica_filter_param_*.bin` — M3/M9 parameter tables
+* `/system/odm/etc/camera/xiaomi/{normal,leica,sat,superhd}snapshot.json` —
+  with `LegendFilterInstance0` inserted
+* `/system/odm/files/lut_m3.png`, `/system/odm/files/lut_m9.png` — staged by
+  `post-fs-data.sh` to `/data/vendor/camera/`
+* `sepolicy.rule` (magiskpolicy syntax, no colon):
 
 ```text
-0x208a8  _ZTV19MiLeicaFilterPlugin (21 slots, vptr 0x208b8)
-0xc2d4   constructor (object 0x150 B)
-0xc620   initialize
-0xcc54   initResource
-0xd714   isEnabled
-0xd990   preProcess
-0xdafc   processRequest(ProcessRequestInfo*)   <- the algorithm driver
-0xeae4   fillMetaDataInfo
-0x10180  candyProcess
-0x10f28  processRequest(ProcessRequestInfoV2*)  <- log-only stub
-0x11200  destroy
-0x11f20  getImageInfo (slot 18)
+allow hal_camera_default system_file file { open read getattr map execute }
+allow hal_camera_default system_file dir { open read getattr search }
 ```
+
+### Install
+
+1. Run `build_legend_wrapper.sh`, then `package_module.py <bundle>` to produce
+   the zip.
+2. `ksud module install <zip>` (KernelSU) — or Magisk. `/odm` is read-only
+   EROFS, so files must arrive via a module overlay `[observed]`.
+3. Reboot (module staged in `/data/adb/modules_update`; camera provider reads
+   pipeline JSON at startup) `[observed]`.
+4. `post-fs-data.sh` copies `lut_m3.png`/`lut_m9.png` to `/data/vendor/camera/`
+   and sets `camera.debug.mivi3.output.jpeg=true` `[observed]`.
+5. Select M3/M9 (`persist.vendor.camera.hypercam.style = 2` / `1`) or let the
+   `com.xiaomi.mivi2.render` payload drive the look `[observed]`.
+
+KernelSU labels module files `system_file`; `hal_camera_default` cannot read
+`system_file` under `/odm`, so the `sepolicy.rule` above is required
+`[observed]`. `chcon` on the overlay fails (read-only file system).
+
+## 10. Next steps (prioritized, requires the phone)
+
+1. **Tombstone analysis** for `candyProcess+428` (`SEGV_ACCERR`,
+   "execute non-executable memory"); map the call target and the fault address
+   `0x726dbdb9d8` relative to the heap region holding Aurora's `ImageParams`
+   (`ai=0x72606efcbc`).
+2. **Dump `ImageParams` fields** per capture (`+0x00/+0x04/+0x08/+0x1c/+0x70`)
+   and compare against the stock filter's `input: %dx%d,sw=…` line at `0xc30c`;
+   verify the translated `native` handle and `usage`.
+3. **Compare `libMiPhotoFilter.so`** exports (Aurora vs Nezha) at the
+   `candyProcess+428` entry; if the videoprocess ABI differs, ship Nezha's own
+   `libMiPhotoFilter.so` under a private SONAME (same-length dynstr edit, as
+   with `libc++.so`→`hcicxx.so`).
+4. **Verify style selection end-to-end**: confirm `isEnabled` style=1/2 and the
+   M3/M9 saturation deltas on a clean reboot with only this module active.
+5. **Complete M3**: add the Monopan helper (`libmialgo_monopan`, spawned by the
+   Essential Moments app) as a second node/step so M3 output becomes the
+   monochrome Leica look `[inferred]`.
+6. **Confirm pipeline insertion** in `normalsnapshot.json` (the graph the device
+   actually uses for Photo mode) and that `LegendFilterInstance0` has no
+   `NodeMask` `[inferred]`.
