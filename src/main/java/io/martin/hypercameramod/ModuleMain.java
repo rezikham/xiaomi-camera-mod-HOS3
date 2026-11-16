@@ -1655,6 +1655,7 @@ public class ModuleMain extends XposedModule {
                 }
                 log(Log.INFO, TAG, "look resolve: id=" + id + " ordinal=" + ordinal
                         + " name=" + name);
+                writeLegendStyle(ordinal == LOOK_M3 ? 2 : 1);
                 return make.newInstance(name, idField.getInt(result), degreeField.getInt(result),
                         (float[]) paramsField.get(result), 0);
             });
@@ -1673,6 +1674,56 @@ public class ModuleMain extends XposedModule {
             log(Log.INFO, TAG, "installed M3/M9 look names (lut_m3, lut_m9)");
         } catch (Throwable t) {
             log(Log.WARN, TAG, "cannot install M3/M9 look names: " + t);
+        }
+    }
+
+    // The HAL wrapper node (LegendFilterInstance0) reads this to pick the parameter table: the
+    // look registry is the last thing that runs before the request is handed to the engine.
+    private void writeLegendStyle(int style) {
+        try {
+            java.io.File dir = new java.io.File("/data/vendor/camera");
+            if (!dir.isDirectory()) {
+                return;
+            }
+            try (java.io.FileOutputStream out =
+                         new java.io.FileOutputStream(new java.io.File(dir, "hcm_style"))) {
+                out.write(String.valueOf(style).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
+            ensureLookFile(style == 2 ? "lut_m3" : "lut_m9");
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot write hcm_style: " + t);
+        }
+    }
+
+    // The engine loads the look from /data/vendor/camera/<name>.png. The module owns those two
+    // names, so it writes its own LUTs there, next to the files the camera saves for the stock
+    // filters; nothing stock is touched.
+    private void ensureLookFile(String name) {
+        String asset = "lut_m3".equals(name) ? "leica_luts/M3_Monopan.png"
+                : "leica_luts/130_LeicaNatural.png";
+        if (moduleApk == null) {
+            return;
+        }
+        try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(moduleApk)) {
+            java.util.zip.ZipEntry entry = zip.getEntry(asset);
+            if (entry == null) {
+                return;
+            }
+            java.io.File target = new java.io.File("/data/vendor/camera", name + ".png");
+            if (target.length() == entry.getSize()) {
+                return;
+            }
+            try (java.io.InputStream in = zip.getInputStream(entry);
+                 java.io.FileOutputStream out = new java.io.FileOutputStream(target)) {
+                byte[] buf = new byte[16384];
+                int n;
+                while ((n = in.read(buf)) > 0) {
+                    out.write(buf, 0, n);
+                }
+            }
+            log(Log.INFO, TAG, "wrote " + target + " (" + target.length() + " bytes)");
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot write " + name + ": " + t);
         }
     }
 

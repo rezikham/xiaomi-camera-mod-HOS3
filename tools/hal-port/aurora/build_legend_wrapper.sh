@@ -26,7 +26,7 @@ trap 'rm -rf "$TMP"' EXIT
 clang --target=aarch64-linux-android21 -fPIC -O2 -c "$SRC" -o "$TMP/hcm_legend.o"
 LIBS="${ANDROID_LIBS:-/tmp/opencode/android-libs}"
 LINK_LIBS=""
-[ -d "$LIBS" ] && LINK_LIBS="-L$LIBS -Wl,--no-as-needed -lc -ldl -llog -l:libcom.xiaomi.pluginutils.so -l:libhcm_shim.so -l:com.xiaomi.plugin.mileicafilter.so"
+[ -d "$LIBS" ] && LINK_LIBS="-L$LIBS -Wl,--no-as-needed -lc -ldl -llog -l:libcom.xiaomi.pluginutils.so -l:libhcm_shim.so -l:com.xiaomi.plugin.mileicafilter.so -l:libcom.xiaomi.metadatautils.so"
 clang --target=aarch64-linux-android21 -fPIC -shared -nostdlib \
   -Wl,-soname,com.xiaomi.plugin.hcmlegend.so $LINK_LIBS \
   -o "$TMP/com.xiaomi.plugin.hcmlegend.so" "$TMP/hcm_legend.o"
@@ -78,6 +78,26 @@ cat > "$OUT/sepolicy.rule" <<'RULE'
 allow hal_camera_default system_file file { open read getattr map execute }
 allow hal_camera_default system_file dir { open read getattr search }
 RULE
+
+mkdir -p "$OUT/files"
+install -m 0644 "$ROOT/assets/leica_luts/M3_Monopan.png" "$OUT/files/lut_m3.png"
+install -m 0644 "$ROOT/assets/leica_luts/130_LeicaNatural.png" "$OUT/files/lut_m9.png"
+cat > "$OUT/post-fs-data.sh" <<'SH'
+#!/system/bin/sh
+# Stage the two look files where the engine reads them and turn the gate on, so
+# nothing has to be installed by hand after a reboot.
+MODDIR=${0%/*}
+DST=/data/vendor/camera
+[ -d "$DST" ] || exit 0
+for n in lut_m3 lut_m9; do
+    cp -f "$MODDIR/files/$n.png" "$DST/$n.png"
+    chown root:camera "$DST/$n.png"
+    chmod 0644 "$DST/$n.png"
+    restorecon "$DST/$n.png" 2>/dev/null
+done
+setprop camera.debug.mivi3.output.jpeg true
+SH
+chmod 0755 "$OUT/post-fs-data.sh"
 
 cat > "$OUT/module.prop" <<'PROP'
 id=hcm-legend-wrapper

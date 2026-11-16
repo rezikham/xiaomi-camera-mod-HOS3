@@ -29,6 +29,9 @@ extern int dlclose(void *);
 extern void *dlopen(const char *, int);
 extern void *dlsym(void *, const char *);
 extern char *dlerror(void);
+extern int open(const char *, int, ...);
+extern long read(int, void *, unsigned long);
+extern int close(int);
 
 #define RTLD_NOW 2
 #define RTLD_GLOBAL 0x100
@@ -114,18 +117,59 @@ static donor_void_fn g_donor_reinit;
 static int g_donor_inited;
 static u32 g_style;
 
+typedef struct { u64 cap; u64 size; char *data; } hcm_string;
+typedef hcm_string (*meta_find_fn)(void *, const char *);
+
+static meta_find_fn p_find;
+
+/* The app asks the engine for a look by putting its name into the render payload
+ * ("lutNames":["lut_m3"]). That is what this node keys on, so the selection the user made
+ * drives it: 2 = M3, 1 = M9, 0 = not our look. Falls back to the vendor property. */
+static u32 style_from_meta(void *meta) {
+    if (!meta || !p_find) return 0;
+    hcm_string s = p_find(meta, "com.xiaomi.mivi2.render");
+    if (!s.data || s.size == 0) return 0;
+    for (u64 i = 0; i + 6 <= s.size; i++) {
+        if (s.data[i] != 'l' || s.data[i + 1] != 'u' || s.data[i + 2] != 't'
+                || s.data[i + 3] != '_') {
+            continue;
+        }
+        if (s.data[i + 4] == 'm' && s.data[i + 5] == '3') return 2;
+        if (s.data[i + 4] == 'm' && s.data[i + 5] == '9') return 1;
+    }
+    return 0;
+}
+
 static u32 forced_style(void) {
+    int fd = open("/data/vendor/camera/hcm_style", 0);
+    if (fd >= 0) {
+        char buf[4];
+        long n = read(fd, buf, sizeof(buf));
+        close(fd);
+        if (n > 0) {
+            if (buf[0] == '1') return 1;
+            if (buf[0] == '2') return 2;
+            if (buf[0] == '0') return 0;
+        }
+    }
     char buf[16];
     if (!p_prop) return 0;
     buf[0] = 0;
     p_prop("persist.vendor.camera.hypercam.style", buf);
-    if (buf[0] == '1') return 1;   /* M9 */
-    if (buf[0] == '2') return 2;   /* M3 */
+    if (buf[0] == '1') return 1;
+    if (buf[0] == '2') return 2;
     return 0;
 }
 
 static int load_donor(void) {
     if (g_donor) return 1;
+    if (!p_find) {
+        void *mu = p_dlopen("/odm/lib64/libcom.xiaomi.metadatautils.so", RTLD_NOW | RTLD_LOCAL);
+        if (mu) {
+            p_find = (meta_find_fn)p_dlsym(mu, "_ZNK10MiMetadata4findEPKc");
+        }
+        logi("metadata find=%lx", (u64)p_find, 0);
+    }
     void *shim = p_dlopen("/odm/lib64/hcm/libhcm_shim.so", RTLD_NOW | RTLD_GLOBAL);
     if (!shim) {
         if (p_log) p_log(4, "HCM-Legend", "shim dlopen failed: %s", dlerror());
@@ -250,7 +294,8 @@ static int plugin_process_request(void *self, void *pri) {
     /* isEnabled rewrites the look byte from the request metadata on every
      * capture, so force it here each time. */
     {
-        u32 style = forced_style();
+        u32 style = style_from_meta(ai->meta);
+        if (!style) style = forced_style();
         if (style != g_style) {
             ((u8 *)g_donor)[0x25] = (u8)style;
             ((u8 *)g_donor)[0x26] = (u8)style;
@@ -288,11 +333,16 @@ static int plugin_process_request(void *self, void *pri) {
 }
 
 static int plugin_enabled(void *self, void *params) {
-    (void)self; (void)params;
-    u32 style = forced_style();
+    (void)self;
+    void *m0 = params ? *(void **)params : 0;
+    void *m18 = params ? *(void **)((u8 *)params + 0x18) : 0;
+    u32 style = style_from_meta(m0);
+    if (!style) style = style_from_meta(m18);
+    if (!style) style = forced_style();
+    logi("isEnabled m0=%lx m18=%lx find=%lx style=%lx",
+         (u64)m0, ((u64)m18 << 8) | (u64)style);
     if (!style) return 0;
     if (!load_donor()) return 0;
-    logi("isEnabled style=%lx", style, 0);
     return 1;
 }
 
