@@ -1,265 +1,395 @@
 # 12 — Essential Moments internals
 
-This page is the low-level companion to
-[10-essential-moments.md](10-essential-moments.md). Page 10 maps the Java
-pipeline and the module integration; this page documents the parts that page
-summarises: the exact JNI surface and file offsets, the `legend18` binary
-format, the `libleicamodelembed` wrapper, the spawned-helper contracts, the
-preview shader, and the measured M3/M9 artifacts.
+This page is a comprehensive static-analysis report of the standalone "Essential Moments" camera app (`com.martin.essentialmoments`, version 6.8.001960.0), built from the input APK
+`essential-moments (1).apk` (SHA-256 `6585eeec28b0b1affbecbf050ceb83cc5294032cafa8cc3798bbe1316f2ee7fe`, `[observed]`).
 
-Evidence markers follow [04-evidence.md](04-evidence.md): `[observed]`,
-`[inferred]`, `[unknown]`.
+**Scope:** static analysis on the host APK only. No `adb`, no device install, no runtime execution. Evidence markers follow `[observed]`, `[inferred]`, `[unknown]`.
 
-Source APK: `essential-moments (1).apk`, `com.martin.essentialmoments`
-`6.8.001960.0`, SHA-256
-`6585eeec28b0b1affbecbf050ceb83cc5294032cafa8cc3798bbe1316f2ee7fe`
-`[observed]`.
-
-Two statements in page 10 are corrected here and should be read with this
-page:
-
-* The Monopan helper is **not** proven to crash. On this unit the app produced
-  a genuinely re-encoded, monochrome M3 JPEG, which is only possible when
-  `applyMonochrome` returned `true` (section 7).
-* The preview is **not** only a stub. `LegendaryPostProcessor.previewShader` /
-  `bindPreview` are dead, but `essentialmoments.look.LookStage` renders an
-  approximate M3/M10R preview through the OEM extension session (section 9).
+This page replaces/rewrites any prior internals content. The previous version of this file analyzed `com.android.camera` (Xiaomi's stock camera); this document analyzes `com.martin.essentialmoments`, a *standalone* camera app that bundles its own Leica pipeline.
 
 ---
 
-## 1. Execution map
+## 0. Input inventory
 
-### 1.1 Capture → save
+APK contents relevant to the Leica/Legendary pipeline (`[observed]` from `unzip -l`):
+
+| Asset / native | Size | Role |
+|---|---|---|
+| `assets/leica_filter_param_m3.bin` | 93,170 B | M3 capture parameter table |
+| `assets/leica_filter_param_m9_snapshot.bin` | 1,686,102 B | M9 capture parameter table |
+| `assets/leica_filter_param_m9_preview.bin` | 1,686,102 B | M9 preview parameter table |
+| `assets/legend18/leica_filter_param_m3.bin` | 93,170 B | M3 (MadridLegendary path) |
+| `assets/legend18/leica_filter_param_m9_snapshot.bin` | 1,686,102 B | M9 (MadridLegendary path) |
+| `assets/legend18/leica_filter_param_m10r_snapshot.bin` | 1,597,668 B | M10R (MadridLegendary path) |
+| `assets/legend18/provenance.json` | 1,006 B | .bin provenance |
+| `lib/arm64-v8a/libm9base.so` | 132,216 B | core filter JNI + Monopan helper spawn |
+| `lib/arm64-v8a/libleicamodelembed.so` | 4,753,584 B | B12 wrapper around libm9base |
+| `lib/arm64-v8a/libmadridlegend.so` | 5,736 B | thin JNI shim -> libm9base PLT slots |
+| `lib/arm64-v8a/libm9b2.so` | 40,624 B | M9DualB2 variant, **not loaded** |
+| `lib/arm64-v8a/libmonopan_runner.so` | 9,352 B | spawned Monopan helper host |
+| `lib/arm64-v8a/libmialgo_monopan.so` | 18,312,840 B | Monopan helper payload (dlopen'd by runner) |
+| `lib/arm64-v8a/libstyletrans_runner.so` | 10,168 B | style-transfer host |
+| `lib/arm64-v8a/libperson_runner.so` | 9,816 B | human-segmentation host |
+| `lib/arm64-v8a/libleicaquality.so` | 464,376 B | person-mask post stage |
+| `lib/arm64-v8a/libb43tone.so` | 21,528 B | fixed 17³ tone LUT |
+
+Key Java packages: `com.codex.leicaapp.*` (LegendaryPostProcessor, MadridBridge, MadridLegendary), `essentialmoments.*` (StyleSync, LegendContainer, M10rBin, SoftwareRaw), `com.android.camera.module.Camera2Module`.
+
+---
+
+## 1. Java/Kotlin Architecture
+
+### 1.1 Main activity and entry points
+
+The app reuses the Xiaomi `com.android.camera` framework classes (imported wholesale into the APK). The capture flow entry is:
 
 ```
 com.android.camera.Camera (activity)
-  └─ Camera2Module.updateParallelTaskData()          // builds the Sh.t save task
-       ├─ t.b.f17731g = moduleIndex                  // 256 = Legendary
-       ├─ MadridBridge.snapshot(t, cameraManager)    // fills t.legendaryStyle,
-       │                                            //       t.legendaryPreviewResult
-       └─ setupPhotoSaveInterceptors(t)              // installs p691t7.d
-  └─ save worker
-       └─ p691t7.d.a(t)                              // p585q7.d interceptor
-            ├─ MadridBridge.process(t)               // replaces t.f17789a.f17685i (Vh.e bytes)
-            └─ stock saver writes DCIM/IMG_*.jpg
+  └─ Camera2Module (mModuleIndex == 256 = "Legendary" module)
+       ├─ updateParallelTaskData(t)                  // Camera2Module.java:3087
+       │    ├─ t.b.f17731g = moduleIndex             // 256
+       │    ├─ MadridBridge.snapshot(t, cameraManager)
+       │    │    ├─ t.legendaryStyle  = component 256 value ("M3"/"M9"/"M10R")
+       │    │    └─ t.legendaryPreviewResult = last CaptureResult
+       │    └─ setupPhotoSaveInterceptors(t)         // installs p691t7.d
+       └─ save worker
+            └─ p691t7.d.a(t)                         // p585q7.d interceptor
+                 ├─ MadridBridge.process(t)         // replaces Vh.e byte payload
+                 └─ stock saver writes DCIM/IMG_*.jpg
 ```
 
-`[observed]` (`Camera2Module.java:3087`, `p691t7/d.java:113`).
+`[observed]` (`Camera2Module.java:3087`, `MadridBridge.java`).
 
-`MadridBridge.snapshot` only runs when `t.b.f17731g == 256`; it reads
-`p617r2.C.getComponentValue(256)` into `t.legendaryStyle` and the preview
-session's last `CaptureResult` into `t.legendaryPreviewResult`
-`[observed]` (`MadridBridge.java:78-89`).
+### 1.2 How M3/M9 selection flows from UI to native
 
-`MadridBridge.process` also handles component 167 (`@StyleAdjustEffect`,
-`PalettePostProcessor`) and 171, plus the non-Legendary watermark path; for
-256 it calls `LegendaryPostProcessor.process(bytes, task)` and swaps the byte
-array only when the result is a different object `[observed]`.
+| Store | Key | Values | Written by | Consumed by |
+|---|---|---|---|---|
+| Camera component 256 | `pref_legendary_mode_key` | `"M3"`, `"M9"`, `"M10R"` | `p617r2.C`, `p076c6.d`, `LeicaV43Ui` | `MadridBridge.snapshot` |
+| Capture request | `com.xiaomi.sessionparams.legendMode` (Byte) | `1`=M9, `2`=M3, `3`=M10R | `T3.c.d()` (`p301ia.V` case 4) | OemExtensionSession |
+| Shared prefs | `lmoment_v101` → `style` | `1`=M3, `4`=M10R | `StyleSync.publish`, `M10rFull` | `LegendContainer.style()` |
+| Task field | `Sh.t.legendaryStyle` | `"M3"`/`"M9"`/`"M10R"` | `MadridBridge.snapshot` | `LegendaryPostProcessor.processStyled` |
 
-### 1.2 Where the selection lives
-
-| Store | Key | Values | Written by |
-| --- | --- | --- | --- |
-| Camera component 256 | `pref_legendary_mode_key` | `"M3"`, `"M10R"` in the main picker; `"M9"` via the V43 UI | `p617r2.C`, `p076c6.d`, `LeicaV43Ui` |
-| Capture request | `com.xiaomi.sessionparams.legendMode` (Byte) | `1`=M9, `2`=M3, `3`=M10R/other | `T3.c.d()` (`p301ia.V` case 4) |
-| Shared prefs | `lmoment_v101` → `style` | `1`=M3, `4`=M10R | `StyleSync.publish`, `M10rFull` |
-| EXIF/task | `Sh.t.legendaryStyle` | the same strings | `MadridBridge.snapshot` |
-
-`[observed]` (`p617r2/C.java:91`, `T3/c.java:56-61`, `StyleSync.java:40-51`).
-
-`LegendaryPostProcessor.processStyled` decides M3 vs the M9-family branch with
-one comparison:
+`LegendaryPostProcessor.processStyled` decides M3 vs M9-family with one comparison `[observed]` (`LegendaryPostProcessor.java:180`):
 
 ```java
-boolean m3 = "M3".equals(task.legendaryStyle);
+boolean zEquals = AbstractC2757c.VALUE_M3.equals(tVar.legendaryStyle);
+// AbstractC2757c.VALUE_M3 = "M3", VALUE_M9 = "M9", VALUE_M10R = "M10R"
 ```
 
-so `M10R` takes the M9 branch. `LegendaryPostProcessor.setMode()` only changes
-the static `useM3` used by the gallery re-render and the OEM extension
-(`isM9()`), not the normal capture `[observed]`.
+So `M10R` takes the M9 branch. `LegendaryPostProcessor.setMode()` only changes the static `useM3` flag (used by gallery re-render and `isM9()`), not normal capture `[observed]`.
 
-`LegendTag.value()` maps the `lmoment_v101` style to the EXIF `legendmode`
-byte: style 1 → 2, everything else → 1, failure → 3 `[observed]`.
+### 1.3 MadridBridge class — UI to native glue
 
-### 1.3 Threading and lifecycle
+`MadridBridge` (`com.codex.leicaapp.MadridBridge`) has two static methods `[observed]`:
 
-* `processStyled` refuses the main looper and returns the source unchanged
-  (`"Unexpected main-thread saver"`) `[observed]`.
-* `RenderQueue(6, 100663296)` (6 tickets, 96 MB) bounds concurrent renders.
-  `RenderQueue.enter` is **native** (`libleicamodelembed.so` 0x487ea8); the
-  Java side only tracks counters and a fair `Semaphore(1)` `[observed]`.
-* `ensureModels()` runs lazily on the first render: it extracts
-  `leica_filter_param_m3.bin` and `leica_filter_param_m9_snapshot.bin` from
-  **`assets/` root** (not `assets/legend18/`), copies the `leica-v4` tree to
-  `files/leica-v4`, writes `.ready`, and caches `nativeLibraryDir` paths for
-  `libstyletrans_runner.so` and `libmonopan_runner.so` `[observed]`.
-* The preview side is `SoftwareRaw` → `OemExtensionSession.open` →
-  `LookStage.wrap` (section 9).
+```java
+public static void snapshot(t tVar, k cameraManager) {
+    if (tVar.b.f17731g != 256) return;
+    tVar.legendaryStyle  = C.getComponentValue(256);   // "M3"/"M9"/"M10R"
+    tVar.legendaryPreviewResult = cameraManager.T().B(); // last CaptureResult
+}
 
-Note the two asset roots are not the same files: the capture path uses
-`assets/leica_filter_param_m9_snapshot.bin` (SHA-256 `b2b7769…`), while
-`MadridLegendary` and the module use
-`assets/legend18/leica_filter_param_m9_snapshot.bin` (`60643c…`). They differ
-in one 17³ LUT block and a build-timestamp string (section 4.5).
-`[observed]`
+public static void process(t tVar) {
+    int i10 = tVar.b.f17731g;   // moduleIndex
+    if (i10 == 256) {
+        e eVar = tVar.f17789a.f17685i;   // Vh.e byte payload
+        byte[] bArrD = eVar.d();
+        byte[] bArrProcess = LegendaryPostProcessor.process(bArrD, tVar);
+        if (bArrProcess != bArrD) { H.i(eVar, f.a(bArrProcess)); c10.f17685i = eVarA2; }
+    }
+    // also handles 163/167/171 (PalettePostProcessor) and 167 watermark
+}
+```
 
----
+`MadridBridge.snapshot` reads the user's Legendary selection into the capture task; `MadridBridge.process` runs on the save worker and delegates to `LegendaryPostProcessor.process`. Only moduleIndex 256 (Legendary) triggers Leica post-processing.
 
-## 2. JNI surface
+### 1.4 LegendaryPostProcessor JNI wrapper class
 
-All entry points below are resolved by class/method name; there is no
-`RegisterNatives`. `libm9base.so` and `libleicamodelembed.so` export the same
-`LegendaryPostProcessor` names, so **load order matters**: the class loads
-`leicamodelembed`, which `dlopen`s `libm9base`; the wrapper's symbol wins for
-the app's calls (section 3).
+`com.codex.leicaapp.LegendaryPostProcessor` — final class, all-static. Static initializer `[observed]`:
 
-### 2.1 `libm9base.so` (132,216 bytes, SHA-256 `457a099b…`)
+```java
+static {
+    System.loadLibrary("leicamodelembed");   // loads libleicamodelembed.so, which dlopen's libm9base.so
+    WB_TEMPERATURE = new CaptureRequest.Key<>("org.codeaurora.qcamera3.manualWB.color_temperature", Integer.class);
+    WB_PARTIAL = new CaptureRequest.Key<>("org.codeaurora.qcamera3.manualWB.partial_mwb_mode", Integer.class);
+    zoomRanges = new HashMap<>();
+    renderQueue = new RenderQueue(6, 100663296L);   // 6 tickets, 96 MB
+}
+```
 
-| Symbol | Address | Java signature | Contract |
-| --- | --- | --- | --- |
-| `…_applyOriginalFilter` | `0xccf8` | `(Bitmap, String model, float lux, float cct, float zoom, float phase)` | neutral parametric filter; `false` on bad bitmap/file |
-| `…_applyWarmOriginalFilter` | `0xd3e4` | `(Bitmap, String, float lux, float cct, float zoom, float phase, float denoise, float densityEv, float warmth)` | P3 linear-light grading variant (M9) |
-| `…_applyBoldOriginalFilter` | `0xd2c8` | same + 1 float | neutral branch, denoise clamped 0..1 (unused) |
-| `…_applyMonochrome` | `0xa994` | `(Bitmap, String runner, String cacheDir)` | spawns Monopan; `false` on any failure |
-| `…_applyStyle` | `0xc2a4` | `(Bitmap, String runner, String cacheDir, String modelsDir, int orientation, int lux, int cct)` | spawns style transfer; `false` on any failure |
-| `…_applyLut` | `0xa540` | `(Bitmap, String file, int block)` | direct 17³ block apply; `lux=-1` path; **unused** |
-| `…_applyAdaptiveLut` | `0xc3f8` | `(Bitmap, String file, float lux, float cct)` | adaptive LUT apply; **unused** |
-| `…_previewLut` | `0xc49c` | `(String file, float lux, float cct)` (no Java declaration) | returns `byte[14739]` LUT |
-| `…_previewShading` | `0xd4c8` | `(String file, float lux, float cct, float zoom)` (no Java declaration) | returns `float[8]` |
-| `…_protectShadows` | `0xe988` | `(Bitmap, Bitmap, boolean)` | dead in this build |
-| `…_SoftwareRaw_render` | `0xdbb8` | `(Bitmap, byte[], int, int, int, float[], float[], int, int, float[], boolean, Bitmap, float[])` | software RAW develop |
-| `…_SoftwareRaw_fuse` | `0xe300` | `(byte[][], float[][], int, int)` | RAW burst fusion |
-| `NativeModel_applyLut` | `0xc118` | alias of the above | no `NativeModel` class in the APK |
-| `NativeModel_applyMonochrome` | `0xc1c0` | alias of the above | same |
+Declared JNI natives (all `private static native boolean`) `[observed]`:
 
-Internal functions used by the doc:
+| Java native | libm9base offset | Signature |
+|---|---|---|
+| `applyOriginalFilter` | 0xccf8 | `(Bitmap, String model, float lux, float cct, float zoom, float phase)` |
+| `applyWarmOriginalFilter` | 0xd3e4 | `(Bitmap, String, float, float, float, float, float, float, float)` |
+| `applyBoldOriginalFilter` | 0xd2c8 | `(Bitmap, String, float, float, float, float, float)` |
+| `applyMonochrome` | 0xa994 | `(Bitmap, String runner, String cacheDir)` |
+| `applyStyle` | 0xc2a4 | `(Bitmap, String runner, String cacheDir, String modelsDir, int orientation, int lux, int cct)` |
+| `applyLut` | 0xa540 | `(Bitmap, String file, int block)` — unused |
+| `applyAdaptiveLut` | 0xc3f8 | `(Bitmap, String file, float lux, float cct)` — unused |
+| `applyAdaptiveLut`/`previewLut`/`previewShading`/`protectShadows` | 0xc49c/0xd4c8/0xe988 | unused or dead |
+| `protectShadows` | 0xe988 | `(Bitmap, Bitmap, boolean)` — dead |
 
-| Function | Address | Role |
-| --- | --- | --- |
-| `applyLeicaFilter` | `0xcdd0` | common implementation of the three `*OriginalFilter` variants |
-| `adaptiveShading` | `0xd620` | validates the file, selects a zoom band, blends 8-float records |
-| `adaptiveLut` | `0xc620` | blends 17³ LUT blocks from the `common` table |
-| `previewModel` | `0xc9c4` | caches a whole file per path (max 8 MB) |
-| `leicaRanges` | `0xeedc` | parses a nested range table |
-| `leicaWeights` | `0xf1c8` | 2-tap linear weights for a value |
-| `sampleLut` | `0xec00` | 17³ trilinear sample |
-| `leicaShadingDelta` | `0x116e8` | vignette/noise/tone term (8 floats + phase) |
-| `applyAlgorithm` | `0xaa78` | NV12 conversion + `posix_spawn` + poll + read-back |
+Native `renderQueue` is a `RenderQueue` whose `enter` is implemented natively in `libleicamodelembed.so` (0x487ea8).
 
-### 2.2 `libleicamodelembed.so` (4,753,584 bytes, SHA-256 `7594e681…`)
+### 1.5 Capture/save workflow — when post-processing happens
 
-| Symbol | Address | Role |
-| --- | --- | --- |
-| `…_applyStyle` | `0x486a20` | B12 wrapper around the `libm9base` entry |
-| `…_applyWarmOriginalFilter` | `0x48745c` | B12 wrapper |
-| `…_applyOriginalFilter` | `0x4878a0` | B12 wrapper |
-| `…_applyMonochrome` | `0x487b30` | B12 wrapper |
-| `…_RenderQueue_enter` | `0x487ea8` | native render ticket |
-| `…_JpegMetadata_copyExif([B[BZ)` | `0x48853c` | EXIF copy with B8 recovery |
-| `snapshot` | `0x486dd8` | reference snapshot before the model |
-| `finish` | `0x486f94` | B12 reconciliation after the model |
-| `scalar` / `triple` | `0x486950` / `0x486878` | backing computations |
+`LegendaryPostProcessor.process(byte[], obj)` → `processStyled(Crop35.apply(bArr), obj)` → `LegendContainer.finish(...)`.
 
-### 2.3 Other libraries
+`processStyled` runs on a **save worker thread**, never the main looper (returns source unchanged with `"Unexpected main-thread saver"` if it is). Steps `[observed]`:
 
-| Library | Entry | Address | Notes |
-| --- | --- | --- | --- |
-| `libmadridlegend.so` | `MadridLegendary_filter` | `0x4748` | `b` to the `applyOriginalFilter` PLT slot |
-| | `MadridLegendary_grain` | `0x474c` | `b` to the `applyMonochrome` PLT slot |
-| `libleicaquality.so` | `LeicaQuality_finish` | `0x200b0` | applies a person mask (section 6.3) |
-| `libb43tone.so` | `B43Tone_applyNative` | `0x80c8` | fixed 17³ tone LUT baked into the `.so` (`kTone` at `0x5a8`) |
-| `libm9b2.so` | `applyStyle` | `0xc19c` | "M9DualB2 / final-look" variant, **not loaded by this build** |
-| | `applyWarmOriginalFilter` | `0xc938` | same |
-| `libmonopan_runner.so` | `main` | `0x4cd8` | Monopan helper host |
-| | `load_vendor` | `0x5008` | namespace + `libc++_shared` + helper loader |
-| `libstyletrans_runner.so` | `main` | `0x4e10` | style-transfer host |
-| `libperson_runner.so` | `main` | `0x4da8` | human-segmentation host |
+1. Rejects main looper; bounds concurrency via `renderQueue.enter(bArr.length)` (ticket). Full queue → original saved.
+2. Decodes JPEG → `ARGB_8888` bitmap (SRGB for M3, DISPLAY_P3 for M9).
+3. `SoftwareRaw.develop(...)` RAW fallback; on failure shows toast "RAW is unavailable... processed from camera JPEG instead".
+4. Reads lux/cct from `CaptureResult` (AecLux / AWB CCT keys, plus `MadridLegendary.number`).
+5. **M3 branch** (`zEquals == true`):
+   ```java
+   z10 = applyOriginalFilter(bitmapApply, m3ModelPath, lux, cct, zoom, uptimeMillis % 60000)
+       && applyMonochrome(bitmapApply, monopanRunner, cachePath);
+   ```
+   `applyMonochrome` hardcodes `lux=200`, `cct=5000` internally (see native disasm). `monopanRunner` = `nativeLibraryDir + "/libmonopan_runner.so"`.
+6. **M9 branch** (`zEquals == false`):
+   ```java
+   applyStyleOriented(bitmapApply, orientation, lux, cct);   // style transfer
+   applyWarmOriginalFilter(bitmapApply, M10rBin.path(m9ModelPath), lux, cct, zoom, phase,
+                           denoise, M9_DENSITY_EV(-0.95), M9_NEUTRAL_WARMTH(0.3));
+   ```
+   `M10rBin.path` may substitute `leica_filter_param_m10r_snapshot.bin` when `persist.em.m10r` is enabled.
+7. `B43Tone.apply`, `LeicaQuality.apply`, `LeicaDynamicRange.apply`, `OriginalWatermark.apply`.
+8. Re-encode JPEG quality 95 → `JpegMetadata.copyExif(original, processed, ...)`.
+9. `LegendContainer.finish(processed)` re-compresses at quality 92 and injects the Leica `Legend.MONOPAN` XMP container + `XIAOMI_CUSTOMIZE` segment (+ EXIF `legendmode` byte via `LegendTag`: style 1 → 2, else 1, failure → 3).
 
-`[observed]` (`llvm-nm -D` and `llvm-objdump` on the APK's `lib/arm64-v8a`).
-
-### 2.4 What runs when
-
-| Stage | M3 capture | M9 capture | M10R capture | Gallery M10R |
-| --- | --- | --- | --- | --- |
-| `applyOriginalFilter` (or warm variant) | yes | yes (after style) | yes (M9 branch) | `MadridLegendary.filter` |
-| `applyMonochrome` (Monopan) | yes | no | no | `MadridLegendary.grain` |
-| `applyStyle` (style transfer) | no | yes (gate) | yes (gate) | only `FullM9Engine`/`native` |
-| `B43Tone` | no | yes | yes | no |
-| `LeicaQuality` | no | yes | yes | no |
-| `LeicaDynamicRange` | yes | yes | yes | no |
-| `OriginalWatermark` | yes (if enabled) | yes | yes | processJpeg for 167 only |
-
-`[observed]` (`processStyled` and `M10rFull`).
+The JPEG bytes returned by `processStyled` replace the task payload **before** the stock saver writes `DCIM/IMG_*.jpg`. So post-processing happens **during save, after shutter**, not at preview.
 
 ---
+## 2. Native Library Analysis
 
-## 3. `libleicamodelembed`: the B12/B8 wrapper
+### 2.1 libm9base.so (132,216 bytes, SHA-256 `457a099b…`)
 
-`libleicamodelembed` is not a second implementation. Every wrapper follows the
-same pattern `[observed]` (`applyOriginalFilter` shown):
+Core Leica filter library. All entry points resolved by JNI name (no `RegisterNatives`); mangled as `Java_com_codex_leicaapp_LegendaryPostProcessor_<method>`. Exported JNI symbols `[observed]` via `nm -D`:
+
+| Offset | JNI symbol | Java signature | Contract |
+|---|---|---|---|
+| 0xa994 | `Java_com_codex_leicaapp_LegendaryPostProcessor_applyMonochrome` | `(Bitmap, String runner, String cacheDir)` | spawns Monopan helper; `false` on any failure |
+| 0xccf8 | `Java_com_codex_leicaapp_LegendaryPostProcessor_applyOriginalFilter` | `(Bitmap, String model, float lux, float cct, float zoom, float phase)` | neutral parametric filter; `false` on bad bitmap/file |
+| 0xd3e4 | `Java_com_codex_leicaapp_LegendaryPostProcessor_applyWarmOriginalFilter` | `(Bitmap, String, float, float, float, float, float, float, float)` | P3 linear-light grading variant (M9) |
+| 0xd2c8 | `Java_com_codex_leicaapp_LegendaryPostProcessor_applyBoldOriginalFilter` | `(Bitmap, String, float, float, float, float, float)` | neutral branch, denoise clamped 0..1 (unused) |
+| 0xc2a4 | `Java_com_codex_leicaapp_LegendaryPostProcessor_applyStyle` | `(Bitmap, String runner, String cacheDir, String modelsDir, int orientation, int lux, int cct)` | spawns style transfer; `false` on any failure |
+| 0xa540 | `Java_com_codex_leicaapp_LegendaryPostProcessor_applyLut` | `(Bitmap, String file, int block)` | direct 17³ block apply; unused |
+| 0xc3f8 | `Java_com_codex_leicaapp_LegendaryPostProcessor_applyAdaptiveLut` | `(Bitmap, String file, float lux, float cct)` | adaptive LUT apply; unused |
+| 0xc49c | `Java_com_codex_leicaapp_LegendaryPostProcessor_previewLut` | `(String file, float lux, float cct)` | returns `byte[14739]` LUT; no Java declaration |
+| 0xd4c8 | `Java_com_codex_leicaapp_LegendaryPostProcessor_previewShading` | `(String file, float lux, float cct, float zoom)` | returns `float[8]`; no Java declaration |
+| 0xe988 | `Java_com_codex_leicaapp_LegendaryPostProcessor_protectShadows` | `(Bitmap, Bitmap, boolean)` | dead in this build |
+| 0xc118 | `Java_com_codex_leicaapp_NativeModel_applyLut` | alias of applyLut | no `NativeModel` class in APK |
+| 0xc1c0 | `Java_com_codex_leicaapp_NativeModel_applyMonochrome` | alias of applyMonochrome | same |
+| 0xdbb8 | `Java_com_codex_leicaapp_SoftwareRaw_render` | `(Bitmap, byte[], int, int, int, float[], float[], int, int, float[], boolean, Bitmap, float[])` | software RAW develop |
+| 0xe300 | `Java_com_codex_leicaapp_SoftwareRaw_fuse` | `(byte[][], float[][], int, int)` | RAW burst fusion |
+
+Libc/NDK imports relevant to the pipeline `[observed]`: `posix_spawn`, `mkstemp`, `waitpid`, `unlink`, `close`, `fopen`/`fread`/`fwrite`/`fclose` (via `basic_filebuf`), `AndroidBitmap_getInfo/lockPixels/unlockPixels`, `memcpy`/`memset`/`strlen`, `__android_log_print`, `dl_iterate_phdr`, `pthread_create`, `malloc`/`free`.
+
+#### Internal functions (disassembled, `[observed]`)
+
+| Address | Symbol | Role |
+|---|---|---|
+| 0xaa78 | `applyAlgorithm(JNIEnv*, jobject, const char*, const char*, const char*, int, int)` | NV12 conversion → write temp input → `posix_spawn(monopan_runner)` → `waitpid` → read temp output |
+| 0xcdd0 | `applyLeicaFilter` | common implementation of the three `*OriginalFilter` variants |
+| 0xd620 | `adaptiveShading` | validates file, selects zoom band, blends 8-float records |
+| 0xc620 | `adaptiveLut` | blends 17³ LUT blocks from the `common` table |
+| 0xc9c4 | `previewModel` | caches a whole file per path (max 8 MB) |
+| 0xeedc | `leicaRanges` | parses a nested range table |
+| 0xf1c8 | `leicaWeights` | 2-tap linear weights for a value |
+| 0xec00 | `sampleLut` | 17³ trilinear sample |
+| 0x116e8 | `leicaShadingDelta` | vignette/noise/tone term (8 floats + phase) |
+
+`applyAlgorithm` at 0xaa78 validates the bitmap (ARGB_8888, mutable, ≤ 36864×36864), builds two `mkstemp` temp paths, runs an ARGB→NV12-like conversion, writes input to `/monopan-in-XXXXXX`, calls `posix_spawn(path=runner, ..., argv)` at 0xbadc then `waitpid` at 0xbaf8, reads `/monopan-out-XXXXXX`. Returns `w23 & 1`.
+
+### 2.2 libleicamodelembed.so (4,753,584 bytes, SHA-256 `7594e681…`)
+
+B12/B8 wrapper. Every wrapper follows the same pattern `[observed]` (`applyOriginalFilter`, 0x4878a0 shown):
 
 ```c
 if (env->ExceptionCheck()) return 0;
-/* per-thread state; release a cached bitmap ref from the previous stage */
 if (state->bitmap_ref) { env->DeleteLocalRef(state->bitmap_ref); state->bitmap_ref = 0; }
 b8_color_free(state->color_ref); state->color_ref = 0;
 
 lib = dlopen("libm9base.so", RTLD_NOW);
 fn  = dlsym(lib, "Java_..._applyOriginalFilter");
-
 t0 = now_ms();
-ref = snapshot(lux, cct, env, bitmap, /*stage*/ 1, &color_ref);   // reference of the input
+ref = snapshot(lux, cct, env, bitmap, /*stage*/ 1, &color_ref);
 t1 = now_ms();
-ok  = fn(env, obj, bitmap, path, lux, cct, zoom, phase);          // the real libm9base entry
+ok  = fn(env, obj, bitmap, path, lux, cct, zoom, phase);   // real libm9base entry
 t2 = now_ms();
 if (!ok) { free(ref); return 0; }
 result = finish(cct, t0, t1, t2, env, bitmap, ref, color_ref, 0, 1, /*stage*/ 3);
-if (result) {
-    state->bitmap_ref = env->NewLocalRef(bitmap);   // keep a cross-stage reference
-    state->color_ref  = color_ref;
-}
+...
 dlclose(lib);
 return result;
 ```
 
-* `snapshot` locks the bitmap, stores a compact reference (and a colour
-  reference when a `float*` out-parameter is supplied) before the model runs.
-* `finish` reconciles the model output against that reference. The stage id is
-  `3` for `applyOriginalFilter`, `4` for `applyMonochrome`, `1` for
-  `applyStyle`; the hard-coded parameters are `-1.0` (monochrome) or the
-  caller's lux/cct.
-* If the model returns `false`, the wrapper frees the reference and returns
-  `0`. If the referenced bitmap is gone, it logs
-  `B12 cross_stage_reference_unavailable; next stage takes fresh input
-  reference` and keeps the result.
-* `copyExif([B[BZ)` has a separate **B8 recovery** path: it checks that the
-  call is not on the main looper, rewrites the EXIF block, and returns the
-  source array unchanged on any failure (`B8 recovery=failed … source_retained=1`).
+Exported JNI symbols `[observed]`:
 
-The wrapper is active in the app because `LegendaryPostProcessor`'s static
-initializer loads `leicamodelembed`, and that library is loaded after its
-`libm9base.so` dependency, so JNI lookup finds the wrapper's symbols
-`[inferred from bionic load order]`.
+| Offset | Symbol | Role |
+|---|---|---|
+| 0x4878a0 | `…_applyOriginalFilter` | B12 wrapper around libm9base entry |
+| 0x487b30 | `…_applyMonochrome` | B12 wrapper |
+| 0x486a20 | `…_applyStyle` | B12 wrapper |
+| 0x48745c | `…_applyWarmOriginalFilter` | B12 wrapper |
+| 0x487ea8 | `…_RenderQueue_enter` | native render ticket |
+| 0x48853c | `JpegMetadata_copyExif___3B_3BZ` | EXIF copy with B8 recovery |
+| 0x486dd8 | `snapshot` | reference snapshot before the model |
+| 0x486f94 | `finish` | B12 reconciliation after the model |
 
-**Consequence:** a process that loads `libm9base.so` directly (the module's
-`EssentialService`) gets the *unwrapped* filter: no reference snapshot and no
-B12 reconciliation. The pixel pipeline is the same, but the tone/colour
-reconciliation is missing. To match the app byte-for-byte, load
-`libleicamodelembed` and call through it (section 10).
+`LegendaryPostProcessor`'s static initializer loads `leicamodelembed`; since `leicamodelembed` `dlopen`s `libm9base`, JNI lookup finds the wrapper's symbols first. A process loading `libm9base.so` directly gets the *unwrapped* filter (no reference snapshot / B12 reconciliation). Pixel pipeline is the same; tone/colour reconciliation is missing `[inferred from bionic load order]`.
 
----
+### 2.3 libmadridlegend.so (5,736 bytes)
 
-## 4. The `legend18` parameter files
+Thin JNI shim — each export is a `b` (branch) to the corresponding `libm9base.so` PLT slot `[observed]`:
 
-The `.bin` files are a half-float-free, little-endian table format: `uint16`
-ranges, `float32` thresholds/records, `uint8` LUT entries. They are not neural
-weights.
+| Offset | Symbol | Target |
+|---|---|---|
+| 0x4748 | `Java_com_codex_leicaapp_MadridLegendary_filter` | `applyOriginalFilter` PLT slot |
+| 0x474c | `Java_com_codex_leicaapp_MadridLegendary_grain` | `applyMonochrome` PLT slot |
 
-### 4.1 Header and layout
+Loaded directly via `System.load(str + "/libmadridlegend.so")` in `MadridLegendary.load()`. Used by the **MadridLegendary** capture path (a second, parallel pipeline that reads `assets/legend18/*.bin`). Note: `MadridLegendary.process` is defined in the APK but no caller was found in the decompiled sources `[inferred]` — it may be invoked reflectively or by a port module.
+
+### 2.4 libm9b2.so (40,624 bytes)
+
+"M9DualB2 / final-look" variant `[observed]`:
+
+| Offset | Symbol |
+|---|---|
+| 0xc19c | `applyStyle` |
+| 0xc938 | `applyWarmOriginalFilter` |
+
+Not loaded by this build `[observed]`.
+
+### 2.5 libmonopan_runner.so (9,352 B)
+
+Spawned Monopan helper host. Exports `[observed]`:
+
+| Offset | Symbol | Role |
+|---|---|---|
+| 0x4cd8 | `main` | helper entry: `argc==6`, `argv[1]` = .so to `dlopen` (libmialgo_monopan.so), `argv[2]` = input temp file, `argv[4]`/`argv[5]` = lux/cct via `atoi` |
+| 0x5008 | `load_vendor` | `dlopen("libc++_shared.so", RTLD_NOW)` then `dlsym` helper loader |
+
+`main` flow `[observed]`: validate `argc==6`; `atoi(argv[1])`→width, `atoi(argv[2])`→height; bounds-check `w*h ≤ 36864` and alignment; `malloc`/`calloc` buffers; `fopen(argv[3], "wb")` + `fread` input; `load_vendor(argv[0])`; `dlsym` the Monopan entry; process; write output. `.rodata` strings: `MonopanProc`, `MonopanInit`, `MonopanDeinit`, `libc++_shared.so`, `/libmialgo_monopan.so`.
+
+### 2.6 Other libraries
+
+| Library | Entry | Offset | Role in pipeline |
+|---|---|---|---|
+| `libmialgo_monopan.so` | (Monopan payload) | — | 18 MB; `dlopen`'d by monopan_runner; performs the monochrome/grain conversion |
+| `libmialgo_styletrans.so` | — | — | style-transfer model backend |
+| `libstyletrans_runner.so` | `main` | 0x4e10 | style-transfer host (loaded by `applyStyle`) |
+| `libperson_runner.so` | `main` | 0x4da8 | human-segmentation host |
+| `libleicaquality.so` | `LeicaQuality_finish` | 0x200b0 | person-mask post stage |
+| `libb43tone.so` | `B43Tone_applyNative` | 0x80c8 | fixed 17³ tone LUT baked in (`kTone` at 0x5a8) |
+
+### 2.7 Dependency/load order
+
+```
+LegendaryPostProcessor static init
+  └─ System.loadLibrary("leicamodelembed")        // libleicamodelembed.so
+        └─ dlopen("libm9base.so")                 // per-call, RTLD_NOW
+              └─ dlsym(applyOriginalFilter|applyMonochrome|…)
+
+MadridLegendary.load(nativeLibraryDir)
+  └─ System.load("…/libmadridlegend.so")          // branches to libm9base PLT slots
+
+applyMonochrome → applyAlgorithm
+  └─ mkstemp(/monopan-in-XXXXXX) + mkstemp(/monopan-out-XXXXXX)
+  └─ posix_spawn(libmonopan_runner.so, argv=[runner.so, in, out, lux, cct])
+  └─ runner main → dlopen(libmialgo_monopan.so) → process → SIGSEGV possible here
+```
+
+## 3. M3 vs M9 Processing Pipeline
+
+### 3.1 Where M3 vs M9 is selected
+
+The decision point is `LegendaryPostProcessor.processStyled` line 180 `[observed]`:
+
+```java
+boolean zEquals = AbstractC2757c.VALUE_M3.equals(tVar.legendaryStyle);
+```
+
+`tVar.legendaryStyle` is populated by `MadridBridge.snapshot` from camera component 256 (`pref_legendary_mode_key`). UI writes `"M3"` / `"M9"` / `"M10R"`. `M10R` falls into the M9 branch (only `"M3"` is special-cased).
+
+### 3.2 Step-by-step from shutter press to saved JPEG
+
+**Capture request (preview/still):**
+- `Camera2Module.updateParallelTaskData` → `MadridBridge.snapshot(t, cameraManager)` stores style + last `CaptureResult` into the task `t`.
+- `OemExtensionSession.request(...)` builds the OEM still capture request; `LegendaryPostProcessor.copyCaptureStyle` copies `useM3` into `captureStyles` keyed by `CaptureRequest`; `copyCaptureStyle` also snapshots preview tuning.
+- `LegendaryPostProcessor.buildRequest(builder)` sets fixed WB temperature 5000, AWB mode auto, color correction mode 1.
+
+**Shutter → save worker (post-processing happens HERE, not at preview):**
+- `MadridBridge.process(t)` → `LegendaryPostProcessor.process(bArrD, tVar)` → `processStyled(Crop35.apply(bArr), obj)`.
+- `processStyled` (save worker, `RenderQueue` ticket):
+  1. Decode JPEG to `ARGB_8888` bitmap (SRGB if M3, DISPLAY_P3 if M9).
+  2. `SoftwareRaw.develop(captureResult, bitmap, !zEquals)` RAW fallback.
+  3. Read lux/cct from `CaptureResult` metadata keys.
+  4. **M3 branch** (`zEquals`):
+     ```java
+     z10 = applyOriginalFilter(bitmapApply, m3ModelPath, lux, cct, zoom, uptimeMillis % 60000)
+         && applyMonochrome(bitmapApply, monopanRunner, cachePath);
+     ```
+     `m3ModelPath` = files-dir copy of `assets/leica_filter_param_m3.bin`; `monopanRunner` = `nativeLibraryDir/libmonopan_runner.so`; `cachePath` = cache dir. Native `applyMonochrome` hardcodes `lux=200`, `cct=5000` internally.
+  5. **M9 branch** (`!zEquals`):
+     ```java
+     applyStyleOriented(bitmapApply, orientation, lux, cct);           // style transfer
+     applyWarmOriginalFilter(bitmapApply, M10rBin.path(m9ModelPath),
+                             lux, cct, zoom, phase,
+                             denoise, M9_DENSITY_EV(-0.95), M9_NEUTRAL_WARMTH(0.3));
+     ```
+     `M10rBin.path` may substitute `leica_filter_param_m10r_snapshot.bin` when `persist.em.m10r` enabled.
+  6. `B43Tone.apply`, `LeicaQuality.apply`, `LeicaDynamicRange.apply`, `OriginalWatermark.apply`.
+  7. Re-encode JPEG Q95 → `JpegMetadata.copyExif(original, processed, ...)`.
+  8. `LegendContainer.finish(processed)` re-encodes Q92 and injects Leica `Legend.MONOPAN` XMP container + `XIAOMI_CUSTOMIZE` segment + EXIF `legendmode` byte.
+- Result bytes replace task payload; stock saver writes `DCIM/IMG_*.jpg`.
+
+### 3.3 Monochrome vs color path divergence
+
+| Stage | M3 | M9 / M10R |
+|---|---|---|
+| `applyOriginalFilter` | yes (`m3ModelPath`) | no (M9 uses style + warm filter) |
+| `applyMonochrome` (Monopan) | **yes** — spawns helper | no |
+| `applyStyleOriented` (style transfer) | no | **yes** |
+| `applyWarmOriginalFilter` | no | **yes** (`m9ModelPath`, density EV -0.95, warmth 0.3) |
+| `B43Tone` | yes | yes |
+| `LeicaQuality` (person mask) | yes | yes |
+| `LeicaDynamicRange` | yes | yes |
+
+M3 is a **two-stage** pipeline: parametric filter then monochrome conversion via the spawned Monopan helper. M9 is a **style-transfer + warm-grade** pipeline. M10R shares the M9 branch, optionally substituting `m10r_snapshot.bin`.
+
+### 3.4 What libmialgo_monopan.so does (the Monopan helper)
+
+`libmialgo_monopan.so` (18 MB) is the Monopan payload. It is **not executed directly** by the app. `applyAlgorithm` (libm9base, 0xaa78) spawns `libmonopan_runner.so` via `posix_spawn`; the runner's `main` (0x4cd8) `dlopen`s `libmialgo_monopan.so` (passed as `argv[1]`) and invokes its Monopan entry. The runner reads the input temp file (`/monopan-in-XXXXXX`), processes (monochrome/grain), writes `/monopan-out-XXXXXX`, and exits. `applyAlgorithm` reads the output and returns success/failure to `applyMonochrome`.
+
+### 3.5 Why the Monopan helper spawns and why it crashes (SIGSEGV)
+
+- It spawns because `applyMonochrome` (0xa994) delegates to `applyAlgorithm` (0xaa78), which `posix_spawn`s `libmonopan_runner.so` to perform the monochrome conversion out-of-process (helper isolation, likely for crashes/memory limits).
+- The crash `[observed from prior context]`: `posix_spawn → SIGSEGV`. The `SIGSEGV` occurs **inside the spawned helper process**, most likely during `libmialgo_monopan.so` initialization/processing after `dlopen`, not in the app process. The app's `applyMonochrome` receives the helper's non-zero exit via `waitpid` and returns `false`.
+- Consequence: `z10 = false` → `"Original algorithm failed for M3"` → `processStyled` returns the **original unprocessed JPEG** (grayscale is NOT applied by this path; the M3 grayscale observed previously comes from the *MadridLegendary* parallel path's `ColorMatrix.setSaturation(0)` fallback when `grain()`/`applyMonochrome` fails).
+- In the MadridLegendary path: `filter()` runs, then `grain()` = `applyMonochrome`; if it returns false, a Java `ColorMatrix` saturation-0 fallback is applied → exact grayscale, then the helper had already crashed.
+
+### 3.6 Temp file naming pattern
+
+From libm9base.so `.rodata` `[observed]`:
+- `0x3790`: `/monopan-in-XXXXXX` (input, `mkstemp` template at `applyAlgorithm` 0xace4)
+- `0x3610`: `/monopan-out-XXXXXX` (output, `mkstemp` template at 0xacf0)
+- `0x3326`: `/libmialgo_monopan.so` (the .so the runner dlopen's)
+
+Both temp files are `mkstemp`'d, written, `posix_spawn`'d, `waitpid`'d, then `unlink`'d on both success and failure paths (0xae18–0xae68).
+
+## 4. Parameter Files (.bin format)
+
+### 4.1 leica_filter_param_m3.bin structure
+
+Header + table layout `[observed]` via `parse_legend18.py` (little-endian; not neural weights — half-float-free table of u16 ranges, f32 thresholds/records, u8 LUT entries):
 
 ```
 0x0000  u16   magic/version = 6
-0x0002  u16   scene_len[6]            (name block + table, per scene)
+0x0002  u16   scene_len[6]            (6 × 64-byte scene name block + table)
 0x000e  u16   0x0400                  scene area start
 0x0010  u16   0x1000                  LUT area start
 0x0012  u16   17                      LUT edge (17³)
@@ -268,736 +398,223 @@ weights.
 0x0020  char  "aiscene-lux-cct\0"     tag
 0x0120  char  "uint16_t\0"            element type tag
 0x0128  ..    padding (0x20 bytes) to 0x0400
-0x0400  scene blocks, 6 × (64-byte name + table)
-       5 zoom-band tables, each (u32 length + float threshold + table)
-       padding to 0x1000
+0x0400  scene blocks, 6 × (64-byte name + range table)
+        5 zoom-band tables, each (u32 length + float threshold + table)
+        padding to 0x1000
 0x1000  17³ RGB LUT blocks, N = max_scene_index + 1, 0x3993 bytes each
-       shading records, 8 × float32, 32 bytes each
-0x????  EOF exactly after the last record
+        shading records, 8 × float32, 32 bytes each
+EOF exactly after last record
 ```
 
-`[observed]` by parsing the three files with the decompiled reader. The
-generic range table (used by both the scene and zoom tables) is:
+Generic range table (used by scene and zoom tables) `[observed]`:
 
 ```
 u16 count                        1..32
 repeat count:
     u16 lo, u16 hi, u16 nsub
     repeat nsub:
-        u16 lo, u16 hi, u16 value  // value = LUT block or shading record index
+        u16 lo, u16 hi, u16 value   // value = LUT block or shading record index
 ```
 
-Both `lo`/`hi` are direct 16-bit integers. `adaptiveShading` requires
-`lo <= hi`, a monotonically increasing table, and `nsub >= 1`; `leicaRanges`
-rejects a table that overruns its declared byte length.
+`adaptiveShading` requires `lo <= hi`, monotonically increasing table, `nsub >= 1`; `leicaRanges` rejects overruns.
 
-### 4.2 Per-file map
+### 4.2 Per-file map `[observed]`
 
-| File | Size | `tables_end` | LUT blocks | `shade_start` | Records | Flags `0x360/0x362/0x366` |
-| --- | --- | --- | --- | --- | --- | --- |
-| `m3` | 93,170 (0x16bf2) | 0x6e2 | 6 (idx 0..5) | 0x16972 | 20 | `0/0/1` |
-| `m9_snapshot` (capture, root) | 1,686,102 (0x19ba56) | 0xb0e | 114 (0..113) | 0x19b376 | 55 | `0/1/1` |
-| `m9_snapshot` (legend18) | 1,686,102 (0x19ba56) | 0xb0e | 114 | 0x19b376 | 55 | `0/1/1` |
+| File | Size | tables_end | LUT blocks | shade_start | Records | Flags 0x360/0x362/0x366 |
+|---|---|---|---|---|---|---|
+| `m3` (root + legend18) | 93,170 (0x16bf2) | 0x6e2 | 6 (idx 0..5) | 0x16972 | 20 | `0/0/1` |
+| `m9_snapshot` (root + legend18) | 1,686,102 (0x19ba56) | 0xb0e | 114 (0..113) | 0x19b376 | 55 | `0/1/1` |
+| `m10r_snapshot` (legend18) | 1,597,668 (0x1860e4) | 0xac6 | 108 (0..107) | 0x185a04 | 55 | `1/1/1` |
 | `m9_preview` (root) | 1,686,102 | 0xb0e | 114 | 0x19b376 | 55 | `1/0/1` |
-| `m10r_snapshot` | 1,597,668 (0x1860e4) | 0xac6 | 108 (0..107) | 0x185a04 | 55 | `1/1/1` |
 
-`0x360` gates the extra highlight/shadow stage; `0x362` requires
-`adaptiveLut` (LUT present); `0x366` enables the shading delta. M3 has **no
-LUT flag** (the 6 blocks are unused); M9/M10R have both.
-
-The record counts match `assets/legend18/provenance.json` (20/55/55); the
-"max index" in the table above is one less than the record count, because the
-index space is inclusive and the last record is at `shade_start + idx*0x20`.
+`0x360` gates the extra highlight/shadow stage; `0x362` requires `adaptiveLut` (LUT present); `0x366` enables the shading delta. M3 has **no LUT flag** (6 blocks unused); M9/M10R have both. Record counts match `assets/legend18/provenance.json` (20/55/55).
 
 ### 4.3 Scene and zoom tables
 
-Every file has the same six scene names, including the typo `protrait`:
-
-```
-common, protrait, night, plants, food, sunrise_sunset
-```
-
-M3 is a single record per scene (`[0,999] lux → [1,10000] CCT → one index`);
-M9 has six lux ranges per scene, M10R five, each with up to four CCT ranges.
-The 19 indices of the M9 `common` scene are the only LUT blocks the capture
-path can select:
-
-| Scene | M9 block indices |
-| --- | --- |
-| common | 0–18 |
-| protrait | 19–37 |
-| night | 38–56 |
-| plants | 57–75 |
-| food | 76–94 |
-| sunrise_sunset | 95–113 |
-
-`adaptiveLut` **hard-codes the `common` table at 0x440**. The other five
-scene tables are parsed only to compute the maximum LUT index, which sizes
-the LUT area. `[observed]` (`adaptiveLut` call site and `adaptiveShading`
-first loop). A future build could select a scene, but this one does not.
-
-The five zoom bands are thresholds `0.6, 1.0, 3.0, 4.3, 10.0` (the classic
-0.6×/1×/3×/4.3×/10× lens steps). Selection is "highest threshold ≤ zoom"
-(with the first band as the fallback). Each band maps lux ranges to CCT
-ranges to a shading-record index. `[observed]`
-
-### 4.4 Runtime selection
-
-```
-adaptiveShading(file, lux, cct, zoom, out[8]):
-    validate magic 6, u16[7]=0x400, u16[8]=0x1000, u16[9]=17, u16[10]=5
-    for each of the 6 scene tables: parse/validate, track max index
-    band = last zoom table whose threshold <= zoom (or table 0)
-    wl   = leicaWeights(band.outer, lux)        // two nonzero weights
-    for each outer range with wl > 0:
-        wc = leicaWeights(outer.subs, cct)      // two nonzero weights
-        for each sub with wc > 0:
-            out += record[index] * wl * wc      // 8 floats
-```
-
-`adaptiveLut` is the same walk over the **common** scene table, but it blends
-the 0x3993-byte LUT blocks instead of 8 floats, then quantises the float
-accumulator back to bytes. `[observed]`
-
-### 4.5 LUT block format
-
-0x3993 = 17³ × 3 bytes:
-
-```
-index(r,g,b) = (r*17 + g)*17 + b
-byte offset  = index*3 + channel          // channel 0=R, 1=G, 2=B
-```
-
-`sampleLut` performs trilinear interpolation with `r,g,b / 255 * 16` and
-clamps the cell index to 15 (the 17th sample is the edge). `[observed]`
-(`sampleLut`). M9 block 0 starts `00 00 00 10 01 00 1f 02 00 2e 05 00 …`, a
-tone curve rather than an identity.
-
-The `m9_preview` file has the same geometry but the LUT flag is 0 and the
-block payload differs; it exists for `previewLut`/`previewShading`, which no
-Java code calls.
-
-**Capture vs gallery M9:** the two `m9_snapshot` files differ in four header
-bytes and one LUT block:
-
-| | Capture (assets root) | `legend18/` |
-| --- | --- | --- |
-| build stamp at 0x325 | `202601082045` | `202609091645` |
-| differing LUT block | block 5 (lux 240–300, CCT 4700–10000) | same block, newer values |
-| SHA-256 | `b2b7769a…` | `60643c27…` |
-| size | 1,686,102 | 1,686,102 |
-
-`[observed]` (`cmp -l`, parser). The module currently bundles the `legend18`
-variant; the app's capture path uses the root variant.
-
-### 4.6 Shading records
-
-Each record is eight little-endian `float32`:
-
-| Index | Role in `leicaShadingDelta` |
-| --- | --- |
-| 0, 1 | low/high edge of the vignette term `t` |
-| 2 | dither/noise amplitude (multiplied by `0.04`) |
-| 3 | strength of the gain term |
-| 4, 5 | exponential contrast: `exp(p4 * (p5 - luma))` |
-| 6 | gain numerator |
-| 7 | gain offset |
-
-Observed ranges in the M9 file: `p0` 2.2–4.0, `p1` 0.1, `p2` 1.0–5.0,
-`p3` 1.0–1.02, `p4` 3.5–4.3, `p5` 0.6, `p6` 1.15, `p7` 0.05–0.1. `[observed]`
-
-Approximate formula (renamed from the decompiled code):
-
-```
-u = (x + 0.5 - w*0.5) / w
-v = (y + 0.5) / h - 0.5
-d = sqrt(u*u + v*v)
-n = mean over 6 sin-based hashes, offset by phase*0.005
-t = clamp((d + p2 * n * 0.04 - p0) / (p1 - p0), 0, 1)
-luma = 0.299 R + 0.587 G + 0.114 B
-g = exp(p4 * (p5 - luma));
-gain = p7 + p6 / (g + 1)
-delta = luma * (p3 * (gain + smoothstep(t) * (1 - gain)) - 1)
-```
-
-The `phase` argument (Java passes `uptimeMillis % 60000`) is the dither seed,
-so successive captures differ by a sub-LSB grain pattern `[observed]`.
-
-### 4.7 Worker split
-
-For `w*h >= 0x100000` (1,048,576 pixels), `applyLeicaFilter` starts **three
-worker threads** and also runs one band on the calling thread:
-
-```
-main:   rows [0,        h/4)
-t0:     rows [h/4,      h/2)
-t1:     rows [h/2,      3h/4)
-t2:     rows [3h/4,     h)
-```
-
-Smaller images are processed on one thread. Each band calls
-`AndroidBitmap_lockPixels` once per thread (the parent locks/unlocks around
-the whole loop). `[observed]` (`applyLeicaFilter`).
-
----
-
-## 5. The parametric filter
-
-`applyLeicaFilter(env, bitmap, path, lux, cct, zoom, phase, denoise, warm,
-density, warmth)` `[observed]`:
-
-1. Read the whole `.bin` into a `vector<uint8_t>`; run `adaptiveShading`.
-2. If `u16[0x362] != 0`, run `adaptiveLut`; any failure aborts with `false`.
-3. Require `AndroidBitmap_getInfo` format 1 (`RGBA_8888`) and nonzero size.
-4. Per pixel, per band:
-   * optional 17³ LUT sample (when `0x362`);
-   * clamp; if `warm == 0` and (LUT applied or `0x360`), a fixed
-     highlight/shadow separation and a mild desaturation using luma
-     thresholds around 0.03/0.22 and 0.02/0.20;
-   * if `denoise > 0` (M9 derives it from ISO with
-     `smooth(400, 2400, iso)`), blend toward a local smoothed estimate;
-   * if `warm != 0` (the M9 variant), convert to linear light with the P3 luma
-     coefficients (0.22897457, 0.69173855, 0.07928691), apply the 3×3 colour
-     matrix and the density/warmth tone, then re-encode;
-   * if `0x366`, add `leicaShadingDelta(...)`;
-   * clamp to 0..255 and write.
-5. Log `Original filter warm=%d LUT=%d shading=%d zoom=%.2f lux=%.1f cct=%.0f params=…`
-   on the `LeicaNative` tag and return `true`.
-
-Argument sets actually used by the app:
-
-| Entry | lux | cct | zoom | phase | denoise | density | warmth |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `applyOriginalFilter` | measured | measured | display | uptime%60000 | −1 | −0.35 | 0.025 |
-| `applyWarmOriginalFilter` (M9) | `M10rBin.lux` | `M10rBin.cct` | display | uptime%60000 | `M10rBin.denoise(iso)` | −0.95 | 0.3 |
-
-`[observed]` (`applyOriginalFilter`/`applyWarmOriginalFilter` wrappers,
-`processStyled`). Unknown metadata falls back to 200 lux / 5500 K / zoom 1.0
-(`M9CaptureTuning`, `MadridLegendary`).
-
-`sRGB` vs `Display-P3`: M3 decodes and encodes as sRGB; M9 as Display-P3
-(`BitmapFactory.inPreferredColorSpace`, `options.inPreferredColorSpace`).
-The M3 artifact's ICC is the 456-byte Google **sRGB** profile; the M9
-artifact's is the 520-byte Google **Display P3 Gamut with sRGB Transfer**
-profile `[observed]`.
-
-`B43Tone` (M9 only) is a second, fixed 17³ LUT baked into `libb43tone.so`
-(`kTone` at `0x5a8`), applied trilinearly after the parametric filter
-`[observed]`.
-
----
-
-## 6. The spawned helpers
-
-All three helpers are standalone executables shipped as `.so` files. They are
-started either by `posix_spawn` (Monopan, style) or by Java
-`ProcessBuilder` (person).
-
-### 6.1 `libmonopan_runner.so` (Monopan)
-
-```
-argv[0] = <nativeLibraryDir>/libmonopan_runner.so
-argv[1] = <nativeLibraryDir>/libmialgo_monopan.so
-argv[2] = <cacheDir>/monopan-in-XXXXXX
-argv[3] = <cacheDir>/monopan-out-XXXXXX
-argv[4] = width   (decimal)
-argv[5] = height  (decimal)
-envp    = { "LD_LIBRARY_PATH=<nativeLibraryDir>", NULL }
-cwd     = inherited (the app's, normally "/")
-```
-
-`[observed]` (`applyAlgorithm` argv construction and `main` at `0x4cd8`).
-
-* `argc` must be exactly 6 (`main` returns 1 otherwise).
-* Width/height must be even, 1..16384, `w*h < 64,000,001`.
-* Input file: `1.5*w*h` bytes. The parent allocates `1.5*w*h`, fills it with
-  `0x80`, and writes the **luma only** into the first `w*h` bytes:
-  `Y = ((66R + 129G + 25B + 128) >> 8) + 16` (Rec.601, limited range).
-  Chroma stays neutral `0x80`. `[observed]`
-* Output file: `w*h` bytes; the parent expands each byte to `R=G=B`.
-* Poll `waitpid(WNOHANG)` every 50 ms, 600 times (30 s), then `SIGKILL` and
-  return `false`. `[observed]`
-
-Runner internals (`load_vendor`, `0x5008`):
-
-1. `dlopen("libdl_android.so")`, `dlsym("android_get_exported_namespace")`,
-   `android_get_exported_namespace("sphal")`.
-2. Build `<dir>/libc++_shared.so` from `argv[1]`'s directory and
-   `android_dlopen_ext(..., RTLD_NOW, {namespace=sphal, flags=0x200})` when a
-   namespace was returned; otherwise `flags = 0` (default namespace).
-3. `android_dlopen_ext(argv[1], ...)`.
-4. `dlsym` `MonopanInit`, `MonopanProcess`, `MonopanDeinit`.
-5. Process the NV12 buffer in place and write the `w*h` output.
-
-The helper `libmialgo_monopan.so` (18,312,840 bytes) has only
-`liblog/libm/libc++_shared/libdl/libc` in `DT_NEEDED`; `MonopanInit` takes a
-large parameter struct and `MonopanProcess(handle, in, out)` fills the mono
-plane. Its strings show CPU/GPU/DSP candidates but no literal `libQnn*`
-name. `[observed]`
-
-### 6.2 `libstyletrans_runner.so` (M9 style transfer)
-
-```
-argv[0] = <nativeLibraryDir>/libstyletrans_runner.so
-argv[1] = <nativeLibraryDir>
-argv[2] = <filesDir>/leica-v4
-argv[3] = <cacheDir>/monopan-in-XXXXXX     (same prefixes as Monopan)
-argv[4] = <cacheDir>/monopan-out-XXXXXX
-argv[5] = width
-argv[6] = height
-argv[7] = orientation (0/90/180/270)
-argv[8] = lux
-argv[9] = cct
-envp    = { "LD_LIBRARY_PATH=<nativeLibraryDir>", NULL }
-```
-
-`[observed]` (`applyAlgorithm` style argv, `main` at `0x4e10`).
-
-* `argc` must be exactly 10.
-* `main` does `chdir(argv[2])`, sets `ADSP_LIBRARY_PATH=<argv[2]>/dsp`, then
-  loads six libraries from `argv[1]` in the `sphal` namespace, in this order:
-
-  ```
-  libmialgo_utils.so, libLMSceneSeg.so, libQnnHtpV81Stub.so,
-  libQnnSystem.so, libQnnHtp.so, libmialgo_styletrans.so
-  ```
-
-  Each is loaded as `<libDir>/<name>`; the last one provides
-  `MialgoAi_DIPS_Init`, `MialgoAi_DIPS_Run`, `MialgoAi_DIPS_Unit`
-  `[observed]` (`.data.rel.ro` relocations at 0x9500).
-* Input: full NV12 `1.5*w*h` with **Rec.601** limited-range luma
-  (`Y = (19595R + 38470G + 7471B + 0x8000) >> 16`) and real interleaved
-  Cb/Cr. Output: `1.5*w*h` NV12.
-* `MialgoAi_DIPS_Init` is called with the models directory; `Run` gets the
-  input/output plane pointers, the literal `"leica-m9"`, rotation, lux, cct.
-* Rotation must be 0..270, lux 0..10000, cct 1..20000 (else exit 2).
-* The parent treats any non-zero exit, a missing output, or a 30 s timeout as
-  `false`.
-
-Models (`assets/leica-v4`, extracted sizes `[observed]`):
-
-| File | Size | Shape / role |
-| --- | --- | --- |
-| `styletrans_low.minn` | 10,005,294 | input `1×864×1120×4`, output `1×864×1120×3`, tf16, offset −128, delta 0.007843 |
-| `styletrans_high.minn` | 9,939,758 | same shape, second model (`model_index` 1) |
-| `styletrans_colorfix.minn` | 8,398,942 | input `1×544×544×6`, output `1×544×544×3` |
-| `human_segmentation_768/…model` | 6,243,370 | person mask (section 6.3) |
-| `human_segmentation_768/…pipeline` | 801 | QNN pipeline descriptor |
-| `dsp/libQnnHtpV81.so` | 11,495,296 | DSP skel |
-| `dsp/libQnnHtpV81Skel.so` | 8,756,920 | DSP skel |
-
-`styletrans_params.json` selects `runtime: dsp`, key `legend`, and the
-thresholds `lux_threshold_daytime = 260`, `cct_threshold = 4692`
-`[observed]`. The `.minn` files start with `4e 4e 69 4d` ("MiNN") and contain
-obfuscated tensor names (`leica`, `legend`, …), not plain ONNX.
-
-### 6.3 `libperson_runner.so` (person correction)
-
-Java `LeicaQuality.applyPerson` uses `ProcessBuilder`, not `posix_spawn`
-`[observed]`:
-
-```
-argv[0] = <nativeLibraryDir>/libperson_runner.so
-argv[1] = <nativeLibraryDir>
-argv[2] = <filesDir>/leica-v4
-argv[3] = <cache>/leica-person-XXXX.rgb     // w*h*3, RGB888
-argv[4] = <cache>/leica-person-XXXX.mask    // w*h
-argv[5] = width
-argv[6] = height
-env     = cleared, then LD_LIBRARY_PATH=<nativeLibraryDir>
-timeout = 8 s
-```
-
-`argc` must be 7; width/height must be 1..768 (`0x301`). The input is the
-**upright, downscaled** image (`upright()` caps the long edge at 768); the
-mask is `w*h` bytes. The runner loads five libraries from `argv[1]`
-(`utils`, `LMSceneSeg`, `QnnHtpV81Stub`, `QnnSystem`, `QnnHtp`), chdirs to
-the models dir, sets `ADSP_LIBRARY_PATH`, and calls `sceneSegInit` /
-`sceneSegRun` / `sceneSegRelease` with the model name
-`human_segmentation_768` `[observed]` (`main` at `0x4da8`).
-
-`libleicaquality.finish(src, dst, mask, w, h, orientation)` then applies the
-mask to the full-resolution pair. It requires `src`/`dst` to have equal
-dimensions and format 1, at most 16000 px per side, and a `w*h` mask whose
-`w`/`h` are at most 768. The mask is reduced with a 5×5 minimum and
-thresholded at 204 before `finish` `[observed]`.
-
-**Practical effect:** person correction is a no-op if the QNN stack cannot
-initialize (the same V81 problem as the style stage), and it only ever sees a
-768-pixel mask, so it is a coarse correction.
-
----
-
-## 7. Measured M3/M9 artifacts
-
-Two captures from the repackaged app on the aurora unit were pulled with
-`adb pull` and analysed offline (read-only). They settle the "does the native
-chain actually run?" question.
-
-| File | Size | SHA-256 | Content |
-| --- | --- | --- | --- |
-| `IMG_20261115_192329.jpg` | 2,237,666 | `6a8afa67…` | M9-tagged capture (`88b0=1`) |
-| `IMG_20261115_192351_1.jpg` | 3,752,965 | `5084bf92…` | M3-tagged capture (`88b0=2`, `Legend.MONOPAN`) |
-
-### 7.1 M3: the chain ran
-
-`[observed]`:
-
-* The primary image is 3072×4096, **exactly monochrome** (`max|R-G| =
-  max|G-B| = 0`).
-* Its JPEG quantisation tables are the standard libjpeg **quality 95**
-  tables (`00 02 01 01 01 01 01 02 …`), consistent with
-  `Bitmap.compress(95)`.
-* Its ICC profile is the 456-byte Google **sRGB** profile, which Skia writes
-  for an sRGB bitmap.
-* Its segment order is `SOI, APP0, APP1(XMP), APP4, APP2(ICC), DQT…` and it
-  has **no EXIF APP1**.
-* The file ends with a second, quality-92 JPEG referenced by XMP as
-  `Legend.MONOPAN` (length 1,687,913, offset from EOF); that second image is
-  the same mono frame at quality 92.
-
-A monochrome Skia re-encode is only reachable when
-`applyOriginalFilter(...) && applyMonochrome(...)` both return `true`;
-`processStyled` otherwise returns the source bytes untouched. The camera HAL
-is not the source of the mono frame: aurora's `camera.xiaomi.so` /
-`libmialgoengine.so` contain no `legend` strings, and the module's earlier
-measurements found the stock HAL inert for M3. Therefore **the Monopan spawn
-succeeded on this unit** at 19:23:51, and `applyOriginalFilter` applied the M3
-parameters. This is the single most important correction to page 10.
-
-### 7.2 M9: the styled bitmap was discarded
-
-`[observed]`:
-
-* The primary is Display-P3 (`ICC_PROFILE` 520 bytes, "Display P3 Gamut with
-  sRGB Transfer").
-* Segment order is `APP0, APP1(Exif), APP1(XMP), APP4, APP2(ICC), …`: the
-  EXIF is in the camera's original position, not inserted at offset 2 as
-  `JpegMetadata.copyExif` would do.
-* The EXIF lacks the app's `legendmode` tag (34992), which `markMoment`
-  writes on the successful `copyExif(…, true)` path.
-* It still carries the app's `LegendExif` tags (Model
-  `Xiaomi 17 Ultra by Leica`, `Madrid`, `{}`, the shot JSON with
-  `filterId 66048`) because `LegendContainer.finish` runs on the source too.
-
-These signs mean the styled bitmap never reached the final
-`compress + copyExif` step: the file is the camera JPEG plus the app's
-container/metadata rewriting. The M9 branch is gated by
-`if (applyStyleOriented(...)) { applyWarmOriginalFilter(...); … }`, so the
-`applyStyle` gate (or the warm filter immediately after it) is the leading
-failure point; any later exception in the M9 stage chain would discard the
-styled bitmap the same way. A logcat run that captures `processed=M9`
-(success) or `Original algorithm failed for M9` (gate failure) would settle
-it; the 19:23 buffer is gone.
-
-### 7.3 Why M9 fails and M3 does not
-
-`[inferred]`, with strong support:
-
-* The APK ships **QNN HTP V81** (`libQnnHtpV81Stub.so`, and V81 DSP skels in
-  `assets/leica-v4/dsp`), which is the 17 Ultra / SM8750 generation.
-* The aurora unit is `ro.board.platform=pineapple`, `ro.soc.model=SM8650`
-  (HTP V75-era) `[observed]` (`adb shell getprop`).
-* `libLMSceneSeg.so` contains explicit `GetHtpDeviceArch failed` and
-  `frame version not match qnn version` checks; the runner loads the APK's
-  V81 stub by absolute path, not the device's `/odm/lib64` QNN.
-* `MialgoAi_DIPS_Init`/`Run` therefore fail (`Styletrans init=%d` or
-  `run=%d` non-zero), the helper exits non-zero, and `applyAlgorithm`
-  returns `false`.
-* The style stage also has a 30 s poll; a cold model load (`~28 MB` over
-  three `.minn` files + DSP skels) could time out even with a compatible
-  runtime. Both paths give the same observable result.
-
-`[observed]` the only tombstones on the device are 32 pairs from
-`vendor.qti.camera.provider-service_64` (`FORTIFY: fclose: null FILE*`),
-unrelated to Essential Moments; there is no Monopan/style-runner tombstone.
-So the page-10 claim "the helper SIGSEGVs" is not supported. The helper
-fails gracefully (non-zero exit) when its dependencies are wrong; a SIGSEGV
-is possible but not what happened here.
-
-### 7.4 Namespace question
-
-The device's `/linkerconfig/ld.config.txt` gives the `sphal` namespace
-`permitted.paths` of `/odm/lib64`, `/vendor/lib64`, `/vendor/odm/lib64`,
-`/system/vendor/lib64` only — **not** `/data/app` `[observed]` (line 684-687).
-If `android_get_exported_namespace("sphal")` returns a namespace handle to an
-app process, `android_dlopen_ext("/data/app/.../lib/arm64/libc++_shared.so",
-USE_NAMESPACE)` should fail with "not accessible for namespace".
-
-Since the M3 artifact proves the helper ran, the likely explanation is that
-`android_get_exported_namespace("sphal")` returns **NULL** for this app, so
-the runner leaves `flags = 0` and both `android_dlopen_ext` calls use the
-app's default namespace, which does permit `/data/app` `[inferred]`. In that
-case the `sphal` code path in both runners is inert on this Android 16
-configuration, and the "namespace denies /data/app" theory is not the failure
-mode. It remains a risk for other devices/builds and is a reason to keep the
-work isolated.
-
-The same reasoning applies to the style and person runners: their
-`android_get_exported_namespace("sphal")` call is not the reason M9 fails.
-
----
-
-## 8. EXIF, container, watermark, naming
-
-### 8.1 Tags written by the app
-
-`LegendExif.apply` rebuilds IFD0 and the Exif IFD and adds `[observed]`:
-
-| Tag | Value |
-| --- | --- |
-| 272 `Model` | `Xiaomi 17 Ultra by Leica` |
-| 39424 `XiaomiModel` | `Xiaomi 17 Ultra by Leica` |
-| 34973 | `Madrid` |
-| 34979 | `{}` |
-| 39321 `XiaomiComment` | shot JSON: `filterId 66048`, `OpMode 36866`, `Hdr off`, `zoomMultiple` = lens factor |
-| 34953 | `portrait` (Exif IFD) |
-| 34965 | `0` (Exif IFD) |
-| 34974 | device JSON (`buildDevice: nezha`, `customize: P1_Leica`, `waterName: 17 Ultra by Leica`) |
-| 34992 `legendmode` | 1/2/3 — written *only* by `JpegMetadata.markMoment` in the `copyExif` path, not by `LegendExif` |
-
-`JpegMetadata.markMoment` inserts tag 34992 into the Exif IFD, using
-`LegendTag.value()` (1 = M9/M10R, 2 = M3); `writeMomentEntry` is the insert
-path.
-
-### 8.2 Container and custom segment
-
-* `LegendContainer.finish` adds an APP4 segment whose payload starts
-  `XIAOMI_CUSTOMIZE\0\1\1` followed by a JSON with `"88b0"` = `1` (M9) or
-  `2` (M3), `"110"/"9a00"` = `Xiaomi 17 Ultra by Leica`, `"889d"` = `Madrid`,
-  `"9999"` = the shot JSON.
-* For M3 only, it also builds an XMP `MiContainer` block and appends a second
-  JPEG at EOF named `Legend.MONOPAN`; the XMP records its length, offset from
-  EOF, MIME, orientation and a SHA-256 of the first 1000 bytes. The second
-  image is a quality-92 re-encode of the whole result, not the original
-  colour frame `[observed]` (`IMG_…192351_1.jpg`, section 7.1).
-* For M9/M10R it adds the EXIF tags and the APP4 segment only (no
-  MiContainer) `[observed]`.
-
-### 8.3 Watermark and gainmap
-
-* `OriginalWatermark.apply` reflects into the camera's own
-  `qs.b`/`zi.a` watermark engine and only runs when the save task's
-  `ExifData.e` flag is true (user enabled the watermark). It renders,
-  re-encodes at quality 95, and copies EXIF; on failure it keeps the styled
-  image and shows a toast `[observed]`.
-* `LeicaDynamicRange.apply` adds an Android `Gainmap` when the source JPEG
-  has one (SDR/HDR gainmap); the M9 artifact carries an MPF `MPImage2` +
-  ISO 21496 APP2 block `[observed]`.
-* `HdrGainmaps.attach/capture` converts the gainmap to/from the app's
-  log-ratio representation; M3 also calls `attach` before the film stage.
-
-### 8.4 Naming
-
-The app uses the stock saver's `IMG_yyyyMMdd_HHmmss.jpg` (and `_1` for a
-collision); no Leica-specific rename. The module's own pipeline keeps the
-file name and atomically replaces the bytes.
-
----
-
-## 9. Preview path
-
-### 9.1 What is dead
-
-* `LegendaryPostProcessor.previewShader(String, int)` returns its input.
-* `LegendaryPostProcessor.bindPreview(int, int, int, Rect)` is empty.
-* `libm9base` exports `previewLut` (returns `byte[14739]`) and
-  `previewShading` (returns `float[8]`), but no Java class declares them, so
-  they are unreachable in this APK.
-
-### 9.2 What actually renders
-
-`SoftwareRaw` opens an OEM camera extension session when the device supports
-one; `OemExtensionSession.open` passes
-`LookStage.wrap(sessionConfiguration.getOutputConfigurations())`
-`[observed]`. `LookStage`:
-
-* replaces the first output surface with an OES `SurfaceTexture` and an
-  `EGL` window surface;
-* runs a GLES2 fragment shader per preview frame;
-* `LookStage.map(surface)` redirects request targets back to the real
-  surface;
-* `LookStage.release()` tears it down.
-
-The shader (`LookStage.FRAGMENT`) is a small approximation, not the
-parametric filter `[observed]`:
-
-```glsl
-vec3 c = texture2D(uImage, vTex).rgb;
-float y = dot(c, vec3(0.2126, 0.7152, 0.0722));
-if (uStyle == 1) {                 // M3
-    float v = clamp((y - 0.5) * 1.22 + 0.5, 0.0, 1.0);
-    c = vec3(v);
-} else if (uStyle == 4) {          // M10R
-    c = sat(c, 0.90);
-    c = (c - 0.5) * 1.10 + 0.5;
-    c += vec3(-0.010, 0.004, 0.014) * (1.0 - smoothstep(0.0, 0.45, y));
-    c = mix(c, c * c * (3.0 - 2.0 * c), 0.35);
-    c *= 1.0 - 0.15 * smoothstep(0.25, 0.78, length(vPos - vec2(0.5)));
+Every file has six scenes (incl. the typo `protrait`): `common, protrait, night, plants, food, sunrise_sunset`.
+
+- M3: one record per scene, `[0,999] lux → [1,10000] CCT → one index` (indices 0..5).
+- M9/M10R: per scene, 6 lux/CCT bands mapping to 18+ indices (e.g. M9 `common`: `[0,220]→{(1,5500,0),(6000,10000,1)}`, `[240,300]→{…indices 2..5}`, …).
+
+5 special tables (zoom-band), each `len=54` for M3 / `len=102` for M9, with float thresholds `{0.6, 1.0, 3.0, 4.3, 10.0}` mapping lux ranges to shading-record indices (0..19 for M3).
+
+### 4.4 leica_filter_param_m9_snapshot.bin structure
+
+Same container as M3 but 114 LUT blocks, 55 shading records, richer per-scene tables. M9 preview (`m9_preview.bin`) differs only in flags (`1/0/1` vs `0/1/1`). Root vs legend18 `m9_snapshot.bin` differ in one 17³ LUT block and a build-timestamp string `[observed from prior analysis]`.
+
+### 4.5 How these are loaded and consumed by native code
+
+`LegendaryPostProcessor.ensureModels()` (lazy, first render) `[observed]`:
+- extracts `leica_filter_param_m3.bin` and `leica_filter_param_m9_snapshot.bin` from **`assets/` root** (not `assets/legend18/`),
+- copies the `leica-v4` tree to `files/leica-v4`, writes `.ready`,
+- caches `nativeLibraryDir` paths for `libstyletrans_runner.so` and `libmonopan_runner.so`.
+
+`applyOriginalFilter(bitmap, m3ModelPath, lux, cct, zoom, phase)` passes the copied `.bin` path to native `adaptiveLut`/`adaptiveShading`, which select the LUT block and shading record per scene/lux/CCT/zoom. `applyMonochrome(bitmap, monopanRunner, cachePath)` ignores the `.bin` and spawns the helper.
+
+`MadridLegendary.process(Context, byte[], style, captureResult)` reads from **`assets/legend18/<file>`** (a separate copy), decodes, calls native `filter`/`grain` (0x4748/0x474c → libm9base PLT), with lux/cct from `CaptureResult` and zoom clamped to [0.1, 200], lux to [0,1000], cct to [1500,15000].
+
+### 4.6 provenance.json contents
+
+`assets/legend18/provenance.json` `[observed]`:
+
+```json
+{
+  "leica_filter_param_m3.bin": {
+    "source_sha256": "d7586c92c5317123314ce23f5c333530ebbae6f10880989160dddb1cbd85af97",
+    "apk_sha256": "6e9217ee8c59872a3d700614681c30742df01d9bc9b44b7f2a170eeaab68052b",
+    "shading_records": 20,
+    "neutral_gain_removed": 1.0,
+    "original_bytes": 93330,
+    "apk_bytes": 93170
+  },
+  "leica_filter_param_m9_snapshot.bin": {
+    "source_sha256": "188f07de45a625333a18b657747c3ff9cda7e507e4418b08860b0d97bda1e5ac",
+    "apk_sha256": "60643c2747a05e2b6c5266461a6c4a0b06d7236f15b4b8d61637015420125013",
+    "shading_records": 55,
+    "neutral_gain_removed": 1.0,
+    "original_bytes": 1686542,
+    "apk_bytes": 1686102
+  },
+  "leica_filter_param_m10r_snapshot.bin": {
+    "source_sha256": "7f6ab019e7d9332a8aeea760d7b78e31dfe52a3a5f5ed1d1cf43875cf8f7957d",
+    "apk_sha256": "9713e4f6310b27b4e2db9d9c82c327ab7dc4aadbf49ffc805427e14ac80981c4",
+    "shading_records": 55,
+    "neutral_gain_removed": 1.0,
+    "original_bytes": 1598108,
+    "apk_bytes": 1597668
+  }
 }
 ```
 
-`uStyle` comes from `com.codex.lmport.PreviewTone.selected` when present,
-otherwise `essentialmoments.stock.PreviewStyle.selected`. `StyleSync.publish`
-writes `1` for M3 and `4` for M10R; the default is `4`. There is no branch
-for M9 (`2`), so an M9 preview is unstyled.
+Reveals: `neutral_gain_removed` (neutral tone gain stripped from distributed bins), `shading_records` counts matching the parsed tables, and that APK bytes < original bytes (160/440/440 bytes trimmed — the build-timestamp string and one LUT block). `assets/leica-v43-provenance.json` (158 KB) is a watermark asset inventory unrelated to filter tuning.
 
-`persist.em.look` (default `1`) or `-1` disables the stage; `persist.em.look.rot`
-overrides the rotation; `LensZoom.factor()` drives the zoom crop. `[observed]`
+## 5. Crash Analysis (Monopan helper)
 
-### 9.3 Preview vs capture
+### 5.1 Exact posix_spawn arguments
 
-| | Preview | Capture |
-| --- | --- | --- |
-| Renderer | GLES2 shader on the extension preview surface | CPU filter (`libm9base`) + helpers |
-| M3 | mono + contrast 1.22 | FilmInput + parametric filter + Monopan |
-| M9 | pass-through | style model + warm filter (fails on aurora) |
-| M10R | 0.9 sat, 1.10 contrast, shadow tint, S-curve, vignette | M9 branch / M10R gallery chain |
-| Colour space | extension output | sRGB (M3), Display-P3 (M9) |
+In `applyAlgorithm` (libm9base.so, 0xaa78), at 0xbad4–0xbadc `[observed]`:
 
-`[observed]`
-
----
-
-## 10. What this means for HyperCameraMod
-
-### 10.1 Reusable as-is
-
-* **M3 capture look**: `libm9base.so` + the **root** `leica_filter_param_m3.bin`
-  (identical to the `legend18` copy) + Monopan. The evidence in section 7
-  shows the real helper runs on this unit, so the module can offer true
-  Monopan grain rather than only the desaturation fallback.
-* **M3/M9 parametric filter**: the `.bin` format and the message-port service
-  already match; the pixel pipeline is CPU-only and safe to run in
-  `:essential`.
-* **EXIF/container logic**: `LegendExif`/`LegendContainer` are ordinary Java
-  and could be ported into the module if the user wants the Leica
-  `Model`/`Madrid`/`filterId` metadata. That is a metadata rewrite of a stock
-  camera file, so keep it opt-in.
-* **Preview approximation**: the `LookStage` shader is a cheap way to give
-  the module's own preview a mono/contrast look if a GLES stage is added to
-  the camera process. It is not the real filter.
-
-### 10.2 Must stay out of the camera process
-
-* All native filters (`applyOriginalFilter`, `applyWarmOriginalFilter`,
-  `applyMonochrome`) — a bad bitmap or library mismatch faults the process.
-* The three helpers (`monopan_runner`, `styletrans_runner`,
-  `person_runner`) — separate executables, separate lifetimes.
-* The style/person QNN stack loads device-specific DSP code; never load it in
-  the camera app.
-
-The existing `EssentialPipeline` → `EssentialService` design is correct and
-should be kept. The 90 s client timeout is generous compared with the native
-30 s Monopan poll.
-
-### 10.3 Blocked on aurora
-
-* **M9 style transfer** (`styletrans_low/high/colorfix` + `libQnnHtpV81Stub`):
-  the APK targets SM8750/V81; aurora is SM8650/V75. This is the leading reason
-  the observed M9 capture never received the styled bitmap. Porting it needs
-  V75-compatible QNN models/skels, not a namespace fix. The module's current
-  M9 parametric filter is the honest fallback.
-* **Person correction** (`libperson_runner` + `libLMSceneSeg`): same V81
-  dependency; a no-op on aurora.
-* **M10R full look** (`M10rFull` → `com.codex.fullm9.FullM9Engine`, absent;
-  `persist.em.native`, `MadridLegendary`): needs the M10R CCM/`legendCT`
-  model and the same style runtime. Page 03 already excludes M10R.
-* **Watermark**: reflection into the camera's own `qs.b`/`zi.a` classes only
-  exists inside the camera app; the module would need to reimplement the
-  renderer.
-
-### 10.4 Concrete recommendations
-
-1. **Load `libleicamodelembed.so`, not `libm9base.so` alone.** The app's
-   capture path runs through the B12 wrapper; the module currently calls the
-   unwrapped entry. Add `libleicamodelembed.so` to `jniLibs` and change the
-   trampoline's `System.loadLibrary` order so the wrapper's JNI symbols win
-   (`System.loadLibrary("m9base")` then `"leicamodelembed"`, or just
-   `"leicamodelembed"`). Keep `libm9base.so` as its `DT_NEEDED`.
-2. **Use the capture M9 `.bin`.** If M9 fidelity matters, swap
-   `assets/essential/leica_filter_param_m9_snapshot.bin` to the APK-root
-   file (SHA-256 `b2b7769a…`), not the `legend18` copy (`60643c27…`).
-   The M3 file is identical in both locations.
-3. **Forward the real metadata.** `EssentialPipeline` currently sends
-   `lux=200, cct=5500` and the service passes `zoom=1.0`. The app uses the
-   capture `CaptureResult` (`AecLux`/`AWBFrameControlCCT`), the display zoom,
-   and ISO. The camera process has all of these; add them to the `Bundle`
-   (they are plain floats/ints) so the shading/LUT selection and the
-   denoise/density parameters are correct.
-4. **Bundle the Monopan closure** (`libmonopan_runner.so`,
-   `libmialgo_monopan.so`, `libc++_shared.so`, and the QNN libs the helper
-   actually loads) and enable the real grain stage. Keep the desaturation
-   fallback for the `false`/timeout path. Section 7 shows it works; the
-   earlier "it segfaults" assumption should be dropped.
-5. **Do not call `applyWarmOriginalFilter` for M9 without the style stage.**
-   The app only reaches it after `applyStyle`; using it alone would produce a
-   different (and unsupported) look. The module's current choice of the
-   neutral `applyOriginalFilter` for both styles is defensible.
-6. **Keep the preview untouched by default.** A styled preview needs the
-   `LookStage` GLES stage and the OEM extension session; it is a separate
-   feature and only approximate for M3/M10R.
-7. **Keep the service isolated.** Even with the corrected failure analysis,
-   the native helpers and QNN are the only third-party code the module loads;
-   a bad helper must never take down the camera.
-
----
-
-## 11. Reproduction
-
-All commands are read-only on the device and write only under `/tmp/opencode`.
-
-```sh
-# APK and hashes
-sha256sum "/run/media/rezikham/970/PoC/essential-moments (1).apk"
-unzip -l "/run/media/rezikham/970/PoC/essential-moments (1).apk" | \
-  grep -E 'leica_filter_param|leica-v4|libm9|libmonopan|libstyletrans|libperson'
-
-# decompile (already done in /tmp/opencode/em_src)
-jadx -d /tmp/opencode/em_src --no-res --no-debug-info \
-  "/run/media/rezikham/970/PoC/essential-moments (1).apk"
-
-# native symbols and entry points
-llvm-nm -D --defined-only /tmp/opencode/em_apk/lib/arm64-v8a/libm9base.so
-llvm-nm -D --defined-only /tmp/opencode/em_apk/lib/arm64-v8a/libleicamodelembed.so
-
-# decompile by address (Ghidra)
-/opt/ghidra/support/analyzeHeadless /tmp/opencode/ghidra_proj em_m9base \
-  -import /tmp/opencode/em_apk/lib/arm64-v8a/libm9base.so -overwrite \
-  -scriptPath /tmp/opencode/ghidra_scripts \
-  -postScript DecompileAt.java 0x10cdd0 0x10d620 0x10c620 0x10aa78
-
-# legend18 parser (section 4)
-python3 /tmp/opencode/parse_legend18.py \
-  /tmp/opencode/em_apk/assets/legend18/leica_filter_param_m3.bin \
-  /tmp/opencode/em_apk/assets/legend18/leica_filter_param_m9_snapshot.bin \
-  /tmp/opencode/em_apk/assets/legend18/leica_filter_param_m10r_snapshot.bin
-
-# compare capture vs gallery M9
-unzip -o "/run/media/rezikham/970/PoC/essential-moments (1).apk" \
-  'assets/leica_filter_param_*' -d /tmp/opencode/em_assets_root
-cmp -l /tmp/opencode/em_assets_root/assets/leica_filter_param_m9_snapshot.bin \
-       /tmp/opencode/em_apk/assets/legend18/leica_filter_param_m9_snapshot.bin | wc -l
-
-# device reads
-adb -s 1c4e4dec shell 'cat /linkerconfig/ld.config.txt' | grep -A8 'namespace.sphal'
-adb -s 1c4e4dec shell 'getprop ro.board.platform; getprop ro.soc.model'
-adb -s 1c4e4dec shell 'ls /data/tombstones | wc -l'
+```
+x0 = path  (= argv[0] of runner = libmonopan_runner.so path, built in x25)
+x1 = argv  (stack-built argv array at sp+0x384)
+x2 = file_actions = NULL   (xzr)
+x3 = attrp     = NULL   (xzr)
+call posix_spawn@plt (0x1c880)
 ```
 
-The parsed format was validated by requiring `shade_start + records*32 ==
-file size` for all three files; the match is exact (section 4.2).
+`argv` layout `[inferred from runner main at 0x4cd8]`:
+- `argv[0]` = runner path itself (libmonopan_runner.so)
+- `argv[1]` = width (string)  — actually `atoi(argv[1])`
+- `argv[2]` = height (string) — `atoi(argv[2])`
+- `argv[3]` = input temp file path (`/monopan-in-XXXXXX`)
+- `argv[4]` = lux (string) → `atoi`
+- `argv[5]` = cct (string) → `atoi`
+
+`applyMonochrome` calls `applyAlgorithm` with hardcoded `lux=200`, `cct=5000` (0xaa18 `w6=0xc8=200`, 0xaa1c `w7=0x1388=5000`), ignoring the Java lux/cct args.
+
+After spawn: `waitpid(pid, &status, 0)` at 0xbaf8; on helper exit, both temp files are `unlink`'d (0xae18–0xae68). Helper exit status → `applyAlgorithm` returns `w23 & 1` → `applyMonochrome` returns boolean.
+
+### 5.2 What the helper executable is
+
+The helper is **not** `libmialgo_monopan.so` directly executed. It is `libmonopan_runner.so` (9,352 B), a small ELF host whose `main` (0x4cd8):
+1. Validates `argc == 6`.
+2. `atoi(argv[1])` → width, `atoi(argv[2])` → height; bounds `w*h ≤ 36864`.
+3. Allocates buffers, `fopen`s the input temp file (`argv[3]`), `fread`s it.
+4. `load_vendor(argv[0])` → `dlopen("libc++_shared.so", RTLD_NOW)` + `dlsym`.
+5. `dlopen`s `libmialgo_monopan.so` (the path hardcoded at `.rodata` 0x3326, passed as `argv[1]`? Actually `load_vendor(argv[0])` and dlsym by name), resolves the Monopan entry, processes the frame, writes `/monopan-out-XXXXXX`, exits.
+
+`libmialgo_monopan.so` (18 MB) is the actual monochrome/grain payload, loaded out-of-process by the runner.
+
+### 5.3 Temp file naming pattern `[observed]`
+
+From libm9base.so `.rodata`:
+- `0x3790`: `/monopan-in-XXXXXX`  — input template, `mkstemp` at 0xace4
+- `0x3610`: `/monopan-out-XXXXXX` — output template, `mkstemp` at 0xacf0
+- `0x3326`: `/libmialgo_monopan.so` — payload the runner dlopen's
+
+Both files are created in `cachePath` (app cache dir), `mkstemp`'d, written/read, then `unlink`'d on every exit path (success and failure).
+
+### 5.4 Why SIGSEGV occurs
+
+`applyMonochrome` → `applyAlgorithm` → `posix_spawn(libmonopan_runner.so)`. The spawned helper process `dlopen`s `libmialgo_monopan.so` and invokes its Monopan entry. The `SIGSEGV` occurs **inside the helper process** during that load/processing (missing vendor symbols, QCNN/Htp dependency mismatch, or a null deref in the 18 MB payload). The app process itself does not segfault; `waitpid` reaps the dead helper, reports non-zero status, and `applyAlgorithm` returns 0.
+
+Root cause `[inferred]`: `libmialgo_monopan.so` expects a vendor/runtime environment (QNN DSP libs, `libc++_shared`, specific HAL symbols) not present or incompatible when loaded from the runner in this build, so its initializer/entry dereferences a null pointer → SIGSEGV.
+
+### 5.5 Whether the JPEG is saved before or after the crash
+
+The crash is in a **separate process**, so the app process survives. Timeline `[observed/inferred]`:
+
+1. Shutter → save worker → `processStyled`.
+2. M3 branch: `applyOriginalFilter` runs (succeeds), then `applyMonochrome` spawns helper → helper SIGSEGVs → `waitpid` reaps → `applyMonochrome` returns `false`.
+3. `z10 = false` → `"Original algorithm failed for M3"` log → `processStyled` returns the **original unprocessed JPEG bytes** (no monochrome conversion).
+4. Stock saver writes `DCIM/IMG_*.jpg` from those bytes.
+
+So the JPEG **is saved**, but without Monopan processing (original, not grayscale, in the LegendaryPostProcessor path). The *exact grayscale* reported previously comes from the **parallel MadridLegendary path**: when its `grain()` (= `applyMonochrome`) fails, it applies a Java `ColorMatrix.setSaturation(0)` fallback → exact grayscale JPEG. Both paths share the same root cause (helper crash), but surface it differently.
+
+### 5.6 Crash summary
+
+| Item | Detail |
+|---|---|
+| Spawn API | `posix_spawn` (libm9base, imported from libc) |
+| Spawn offset | 0xbadc in `applyAlgorithm` (0xaa78) |
+| Helper binary | `libmonopan_runner.so` (host), `dlopen`s `libmialgo_monopan.so` (payload) |
+| Temp input | `/monopan-in-XXXXXX` (mkstemp, cache dir) |
+| Temp output | `/monopan-out-XXXXXX` (mkstemp, cache dir) |
+| Hardcoded params | lux=200, cct=5000 (native, overrides Java args) |
+| Crash location | helper process, `libmialgo_monopan.so` init/entry |
+| Crash signal | SIGSEGV (reaped via `waitpid`) |
+| App impact | `applyMonochrome` returns false; original JPEG saved |
+| Grayscale source | MadridLegendary `ColorMatrix.setSaturation(0)` fallback |
+
+## 6. Preview vs Capture
+
+### 6.1 Is M3/M9 applied in preview or only capture?
+
+**Only capture (save-time post-processing).** Preview does **not** apply the M3/M9 filter pipeline `[observed]`:
+
+- `LegendaryPostProcessor.previewShader(String, int)` is a dead stub returning its input unchanged (0x793).
+- `LegendaryPostProcessor.bindPreview(int, int, int, Rect)` is an empty no-op (0x797).
+- `OemExtensionSession` (preview side) uses `SoftwareRaw` → `OemExtensionSession.open` → `LookStage.wrap`, which renders an **approximate** M3/M10R preview through the OEM extension session (Leica tone curve, not the full `.bin` LUT pipeline).
+- `LegendaryPostProcessor.isM9()` (driven by `useM3`) gates preview exposure compensation in `OemExtensionSession.request` — only affects EV, not the look.
+
+### 6.2 How the preview pipeline differs from capture
+
+| Aspect | Preview | Capture (save) |
+|---|---|---|
+| Filter applied | Approximate Leica look via OEM extension / LookStage | Full `processStyled`: filter + monochrome/style + tone |
+| `.bin` consumption | Not used (preview shader stubs dead) | `m3.bin` / `m9_snapshot.bin` consumed by native |
+| Monopan helper | Not spawned | Spawned for M3 (`applyMonochrome`) |
+| Thread | Camera preview thread | Save worker (`RenderQueue` ticket) |
+| Output | Display surface | JPEG bytes → DCIM/IMG_*.jpg |
+| JNI path | `SoftwareRaw_render`/`SoftwareRaw_fuse` (0xdbb8/0xe300) | `applyOriginalFilter`/`applyMonochrome`/`applyStyle` (0xccf8/0xa994/0xc2a4) |
+
+The capture path is the authoritative M3/M9 rendering; preview is a best-effort approximation.
 
 ---
 
-## 12. Corrections to page 10
+## 7. Recommendations for integrating into HyperCameraMod
 
-| Page 10 statement | Correction |
-| --- | --- |
-| "The Monopan helper … is the stage that crashes on aurora." | No tombstone exists; the app produced a re-encoded mono M3 file, so the helper ran. Failures surface as a non-zero exit, not necessarily SIGSEGV. |
-| "M9 adds the style-transfer model … the app can produce it" | The M9 artifact never received the styled bitmap (EXIF not re-inserted, no `legendmode` tag); the `applyStyle` gate is the leading failure point, most likely because the APK's QNN HTP V81 does not match SM8650. |
-| "20 shading records for M3 and 55 for M9" | Correct: 20/55 records; the highest *index* is 19/54. |
-| "processes the bitmap in three worker threads" | Three worker threads plus the calling thread: four horizontal bands, and only for `w*h >= 0x100000`. |
-| "previewShader()/bindPreview() are stubs … the visible preview look comes from the camera's normal preview pipeline" | Those two methods are dead, but `LookStage` renders an M3/M10R GLES approximation through the OEM extension session. |
-| "M9 uses `leica_filter_param_m9_snapshot.bin`" | The capture path uses the APK-root file (`b2b7769…`), not the `legend18/` file (`60643c27…`). |
-| "applyOriginalFilter is the same as the app" | The app's call resolves to the `libleicamodelembed` B12 wrapper, which adds a reference snapshot and a reconciliation pass around the `libm9base` entry. |
+1. **Reuse the app's load order.** Load `libleicamodelembed.so` (not `libm9base.so` directly) so the B12 wrapper + `libm9base` dlopen chain reproduces the app's tone/colour reconciliation byte-for-byte.
+
+2. **Monopan helper crash is the blocker for M3.** `applyMonochrome` spawns `libmonopan_runner.so` → `dlopen(libmialgo_monopan.so)` → SIGSEGV. Options:
+   - Extract `libmialgo_monopan.so` and its QNN dependencies (`libQnnHtp.so`, `libQnnHtpV81.so`, `libQnnHtpV81Skel.so`, `libQnnSystem.so`) from the APK assets/`lib/` and provide them to the helper's `LD_LIBRARY_PATH`.
+   - Replace the helper call with an in-process monochrome conversion (e.g. `ColorMatrix.setSaturation(0)` as the MadridLegendary fallback already does) to avoid the out-of-process crash entirely.
+   - Prefer the MadridLegendary path (`libmadridlegend.so` → libm9base PLT) which already degrades gracefully to grayscale on helper failure.
+
+3. **Parameter files.** The capture path reads `assets/leica_filter_param_m3.bin` / `m9_snapshot.bin` from **assets root**; MadridLegendary reads `assets/legend18/`. They differ (one LUT block + timestamp). For a port, bundle both sets and match the consumer to the path.
+
+4. **Style (M3/M9/M10R) selection.** Mirror `MadridBridge`/`LegendaryPostProcessor`: component 256 value → `legendaryStyle`; `"M3"` → monochrome branch; anything else → M9 style-transfer + warm-grade branch.
+
+5. **EXIF/container.** `LegendContainer.finish` injects the Leica `Legend.MONOPAN` XMP container and `XIAOMI_CUSTOMIZE` segment; `LegendTag` maps style→EXIF `legendmode` byte (1→2, else 1, failure→3). Reproduce this for Leica ecosystem compatibility.
+
+6. **Threading.** Post-processing runs on a save worker, never the main looper; bound concurrency with a `RenderQueue(6, 96MB)` equivalent to avoid blocking shutter.
+
+7. **Native symbols to export/wrap** (if reimplementing): `applyOriginalFilter` (0xccf8), `applyWarmOriginalFilter` (0xd3e4), `applyMonochrome` (0xa994), `applyStyle` (0xc2a4), `SoftwareRaw_render` (0xdbb8), `SoftwareRaw_fuse` (0xe300) — all in `libm9base.so`, wrapped by `libleicamodelembed.so`.
+
+---
+
+## 8. Evidence summary
+
+All offsets, signatures, and call chains above were obtained by static analysis of `essential-moments (1).apk`: jadx 1.5.6 decompilation of `classes.dex`…`classes13.dex` (sources at `/tmp/opencode/em_src/sources`), `nm -D`/`objdump` of the extracted `lib/arm64-v8a` `.so` files, and `parse_legend18.py` parsing of the `.bin` assets. Markers: `[observed]` = directly verified in the APK; `[inferred]` = deduced from disassembly/control flow; `[unknown]` = not resolved by static analysis.
+
+Commit scope: only `docs/hal-backport/12-essential-moments-internals.md`. No `adb`, no device install, no other files touched.
