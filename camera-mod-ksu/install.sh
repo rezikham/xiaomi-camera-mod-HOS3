@@ -3,24 +3,23 @@
 # Runs when module is installed/updated via KernelSU app
 # Prepares APK for user app installation (actual install deferred to post-fs-data)
 
-# During module install, KernelSU extracts to modules_update, not modules
-# KSU_MOUNT_PATH is set by KernelSU to the actual mount path
-MODDIR="${KSU_MOUNT_PATH:-/data/adb/modules_update/hypercameramod}"
-APK_PATH="$MODDIR/HyperCameraMod.apk"
+# During module install, KernelSU extracts to modules_update
+# The script runs in the extracted directory, so use relative paths
+APK_PATH="./HyperCameraMod.apk"
 PACKAGE="io.rezikham.hypercameramod"
 
-log -t HyperCameraMod "Module install: preparing APK at $APK_PATH"
+log -t HyperCameraMod "Module install: preparing APK"
 
-# Check if APK exists
+# Check if APK exists (in current directory)
 if [ ! -f "$APK_PATH" ]; then
     log -t HyperCameraMod "ERROR: APK not found at $APK_PATH"
     exit 1
 fi
 
-# Copy APK to a persistent location for post-fs-data to install
-# The module directory will be moved to /data/adb/modules/hypercameramod after install
-mkdir -p /data/adb/modules/hypercameramod
-cp -f "$APK_PATH" /data/adb/modules/hypercameramod/HyperCameraMod.apk
+# Copy APK to persistent location for post-fs-data
+# Use the module's final destination path
+mkdir -p /data/adb/modules/hypercameramod 2>/dev/null
+cp -f "$APK_PATH" /data/adb/modules/hypercameramod/HyperCameraMod.apk 2>/dev/null
 
 # Print user-facing message (visible in KernelSU app install log)
 echo ""
@@ -47,5 +46,5 @@ echo "scope 'com.android.camera', force-stop Camera."
 echo "============================================"
 echo ""
 
-log -t HyperCameraMod "Module install complete, APK staged for post-fs-data install"
+log -t HyperCameraMod "Module install complete, APK staged"
 exit 0
