@@ -1,14 +1,14 @@
 #!/system/bin/sh
 # HyperCameraMod post-fs-data
 # Stages M3/M9 LUT files and enables the HAL engine gate.
-# Runs early boot after module overlay is mounted.
+# Runs early boot after module is mounted.
 
 MODDIR=/data/adb/modules/hypercameramod
 
 # Ensure /data/vendor/camera/ exists
 mkdir -p /data/vendor/camera
 
-# Copy LUT files from module overlay
+# Copy LUT files from module directory
 if [ -f "$MODDIR/data/vendor/camera/lut_m3.png" ]; then
     cp -f "$MODDIR/data/vendor/camera/lut_m3.png" /data/vendor/camera/lut_m3.png
 fi

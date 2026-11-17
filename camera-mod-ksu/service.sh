@@ -12,7 +12,7 @@ done
 # Ensure /data/vendor/camera/ exists
 mkdir -p /data/vendor/camera
 
-# Copy LUT files from module overlay
+# Copy LUT files from module directory
 if [ -f "$MODDIR/data/vendor/camera/lut_m3.png" ]; then
     cp -f "$MODDIR/data/vendor/camera/lut_m3.png" /data/vendor/camera/lut_m3.png
 fi
