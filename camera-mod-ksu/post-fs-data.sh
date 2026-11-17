@@ -1,10 +1,11 @@
 #!/system/bin/sh
-# HyperCameraMod post-fs-data
+# HyperCameraMod post-fs-data.sh
+# Runs in post-fs-data mode (blocking, before modules mounted)
 # 1. Installs APK as user app (for LSPosed hooking)
 # 2. Stages M3/M9 LUT files and enables the HAL engine gate
-# Runs early boot after module is mounted.
 
-MODDIR=/data/adb/modules/hypercameramod
+# Use MODDIR=${0%/*} to get module path (per KernelSU guide)
+MODDIR=${0%/*}
 PACKAGE="io.rezikham.hypercameramod"
 
 # --- 1. Install APK as user app ---
@@ -46,7 +47,7 @@ chmod 0644 /data/vendor/camera/lut_m9.png 2>/dev/null
 chcon u:object_r:vendor_camera_data_file:s0 /data/vendor/camera/lut_m3.png 2>/dev/null
 chcon u:object_r:vendor_camera_data_file:s0 /data/vendor/camera/lut_m9.png 2>/dev/null
 
-# Enable HAL engine gate so camera hands look to com.xiaomi.plugin.filter
-setprop camera.debug.mivi3.output.jpeg true
+# Enable HAL engine gate using resetprop (NOT setprop - deadlocks in post-fs-data)
+resetprop -n camera.debug.mivi3.output.jpeg true
 
 log -t HyperCameraMod "M3/M9 LUTs staged, engine gate enabled, APK ready"

@@ -1,8 +1,10 @@
 #!/system/bin/sh
 # HyperCameraMod service.sh
+# Runs in late_start service mode (non-blocking, recommended for most scripts)
 # Late-mount support: stages LUTs and enables gate if module loaded after boot.
 
-MODDIR=/data/adb/modules/hypercameramod
+# Use MODDIR=${0%/*} to get module path (per KernelSU guide)
+MODDIR=${0%/*}
 
 # Wait for vendor partition to be ready
 while [ ! -d /data/vendor ]; do
@@ -28,7 +30,7 @@ chmod 0644 /data/vendor/camera/lut_m9.png 2>/dev/null
 chcon u:object_r:vendor_camera_data_file:s0 /data/vendor/camera/lut_m3.png 2>/dev/null
 chcon u:object_r:vendor_camera_data_file:s0 /data/vendor/camera/lut_m9.png 2>/dev/null
 
-# Enable HAL engine gate
+# Enable HAL engine gate (OK to use setprop here - late_start service mode)
 setprop camera.debug.mivi3.output.jpeg true
 
 log -t HyperCameraMod "Late-mount: M3/M9 LUTs staged, engine gate enabled"
