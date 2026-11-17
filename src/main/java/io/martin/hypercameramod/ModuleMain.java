@@ -1214,10 +1214,10 @@ public class ModuleMain extends XposedModule {
 
                 hook(build).intercept(chain -> {
                     Object result = chain.proceed();
-                    // The picker item is only useful when the HAL can render it. On a stock
-                    // 14 Ultra/17 Ultra the class may exist, but the M10R models and the CMOS
-                    // colour transform do not.
-                    if (!m10rEnabled() || !HalCapabilities.hasM10r()) {
+                    // Show M10R entry when toggle is on, even if HAL can't process it.
+                    // The user explicitly requested the entry to appear; actual processing
+                    // will fall back to a plain picture on unsupported devices.
+                    if (!m10rEnabled()) {
                         return result;
                     }
                     try {
@@ -1275,10 +1275,9 @@ public class ModuleMain extends XposedModule {
                         + " does not match: " + t);
             }
         }
+        // M10R toggle is on but HAL check failed - still log but do not block
         if (m10rEnabled() && !HalCapabilities.hasM10r()) {
-            log(Log.INFO, TAG, "the M10R HAL resources are not present; "
-                    + "the CMOS style is not added");
-            return;
+            log(Log.INFO, TAG, "M10R toggle on but HAL resources not present; entry will show but processing falls back to plain picture");
         }
         log(Log.WARN, TAG, "the Leica Essential style list is not one this module knows; "
                 + "the CMOS style is not added");
