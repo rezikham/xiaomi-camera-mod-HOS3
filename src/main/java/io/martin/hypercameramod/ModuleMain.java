@@ -188,6 +188,7 @@ public class ModuleMain extends XposedModule {
         installStylizationHook();
         installLegendBridgeHook();
         installLegendObserver();
+        installOriginalPortraitCaptureHook();
         installLutFallbackHook(loader);
         installLutFileWatcher();
         installBlurRadiusHook(loader);
@@ -754,6 +755,24 @@ public class ModuleMain extends XposedModule {
 
     private void applyLutToFile(java.io.File file) {
         try {
+            // --- Original Portrait Software Post-Processing ---
+            // Check if Original Portrait was selected for this capture
+            if (lastOriginalPortrait) {
+                long age = android.os.SystemClock.elapsedRealtime() - lastOriginalPortraitTime;
+                if (age <= ESSENTIAL_LEGEND_FRESH_MS) {
+                    log(Log.INFO, TAG, "Original Portrait candidate " + file.getName() + " age=" + age + "ms");
+                    handleOriginalPortraitPostProcess(file);
+                    // One selection, one file: a later normal capture must not inherit this look.
+                    lastOriginalPortrait = false;
+                    lastOriginalPortraitTime = 0;
+                    return;
+                } else {
+                    log(Log.INFO, TAG, "Original Portrait skipped " + file.getName() + ": stale selection (age=" + age + "ms)");
+                    lastOriginalPortrait = false;
+                    lastOriginalPortraitTime = 0;
+                }
+            }
+
             // The genuine pipeline is an additional path. It never replaces the LUT fallback or
             // the HAL slot: when it is on it owns the file, and it refuses to run if the HAL slot
             // is also rendering M3/M9 in the camera engine.
@@ -826,6 +845,105 @@ public class ModuleMain extends XposedModule {
             log(Log.INFO, TAG, "applied Leica LUT to " + file.getName());
         } catch (Throwable t) {
             log(Log.WARN, TAG, "LUT file post-process failed: " + t);
+        }
+    }
+
+    // Handle Original Portrait post-processing via EssentialPipelineExtension
+    private void handleOriginalPortraitPostProcess(java.io.File file) {
+        try {
+            log(Log.INFO, TAG, "Starting Original Portrait post-processing for " + file.getName());
+            
+            // Get application context
+            android.content.Context context = currentApplication();
+            if (context == null) {
+                log(Log.WARN, TAG, "Cannot get application context for Original Portrait post-process");
+                return;
+            }
+            
+            // Initialize EssentialPipelineExtension if needed
+            io.martin.hypercameramod.originalportrait.EssentialPipelineExtension ext = 
+                io.martin.hypercameramod.originalportrait.EssentialPipelineExtension.getInstance(context);
+            ext.setEnabled(true);
+            ext.initialize();
+            
+            // Create a simple synthetic depth map (center-weighted)
+            android.graphics.Bitmap bm = android.graphics.BitmapFactory.decodeFile(file.getAbsolutePath());
+            if (bm == null) {
+                log(Log.WARN, TAG, "Failed to decode JPEG for Original Portrait post-process");
+                return;
+            }
+            
+            int w = bm.getWidth();
+            int h = bm.getHeight();
+            float[] depthMap = createSyntheticDepthMap(w, h);
+            
+            // Prepare capture result metadata
+            android.hardware.camera2.CaptureResult result = createMockCaptureResult();
+            
+            // Process with EssentialPipelineExtension
+            final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+            ext.handlePortraitOriginal(file, depthMap, result, processedFile -> {
+                if (processedFile != file) {
+                    // Replace original file with processed version
+                    try {
+                        java.nio.file.Files.move(processedFile.toPath(), file.toPath(), 
+                            java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                        log(Log.INFO, TAG, "Original Portrait post-process applied to " + file.getName());
+                    } catch (Throwable t) {
+                        log(Log.WARN, TAG, "Failed to replace file after Original Portrait post-process: " + t);
+                    }
+                } else {
+                    log(Log.INFO, TAG, "Original Portrait post-process returned original file");
+                }
+                latch.countDown();
+            });
+            
+            // Wait for completion (with timeout)
+            try {
+                if (!latch.await(10, java.util.concurrent.TimeUnit.SECONDS)) {
+                    log(Log.WARN, TAG, "Original Portrait post-process timed out");
+                }
+            } catch (InterruptedException e) {
+                log(Log.WARN, TAG, "Original Portrait post-process interrupted");
+            }
+            
+            if (bm != null && !bm.isRecycled()) {
+                bm.recycle();
+            }
+            
+        } catch (Throwable t) {
+            log(Log.ERROR, TAG, "Original Portrait post-process failed: " + t);
+        }
+    }
+    
+    // Create a simple synthetic depth map (center-weighted, for testing)
+    private float[] createSyntheticDepthMap(int width, int height) {
+        float[] depth = new float[width * height];
+        float cx = width * 0.5f;
+        float cy = height * 0.5f;
+        float maxDist = (float) Math.hypot(cx, cy);
+        
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                float dx = x - cx;
+                float dy = y - cy;
+                float dist = (float) Math.hypot(dx, dy) / maxDist;
+                // Center is in focus (depth=0.5), edges are blurred (depth=0.0 or 1.0)
+                depth[y * width + x] = 0.5f + 0.3f * (1.0f - dist);
+            }
+        }
+        return depth;
+    }
+    
+    // Create a mock capture result with minimal metadata
+    private android.hardware.camera2.CaptureResult createMockCaptureResult() {
+        try {
+            Class<?> builderClass = Class.forName("android.hardware.camera2.CaptureResult$Builder");
+            Object builder = builderClass.getDeclaredConstructor().newInstance();
+            return (android.hardware.camera2.CaptureResult) builderClass.getMethod("build").invoke(builder);
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "Failed to create mock capture result: " + t);
+            return null;
         }
     }
 
@@ -1089,6 +1207,74 @@ public class ModuleMain extends XposedModule {
             log(Log.WARN, TAG, "cannot observe the Legendary style: " + t);
         }
     }
+
+    // ---- Original Portrait Software Post-Processing Hook ----------------------------------------
+    // Intercepts filterId for Portrait mode when Original is selected, forces Master for capture,
+    // and stores the Original selection for post-processing via EssentialPipelineExtension.
+
+    private void installOriginalPortraitCaptureHook() {
+        if (originalPortraitCaptureHooked) {
+            return;
+        }
+        try {
+            Class<?> builder = Class.forName("android.hardware.camera2.CaptureRequest$Builder");
+            Class<?> keyClass = Class.forName("android.hardware.camera2.CaptureRequest$Key");
+            Method set = null;
+            for (Method m : builder.getDeclaredMethods()) {
+                if (m.getName().equals("set") && m.getParameterCount() == 2
+                        && m.getParameterTypes()[0] == keyClass) {
+                    set = m;
+                }
+            }
+            if (set == null) {
+                log(Log.WARN, TAG, "CaptureRequest.Builder.set for Original Portrait not found");
+                return;
+            }
+            Object filterIdKey = keyClass.getConstructor(String.class, Class.class)
+                    .newInstance("com.xiaomi.sessionparams.filterId", Byte.class);
+            Object stylizationKey = keyClass.getConstructor(String.class, Class.class)
+                    .newInstance("com.xiaomi.sessionparams.stylizationType", Byte.class);
+
+            hook(set).intercept(chain -> {
+                Object key = chain.getArg(0);
+                if (!(key instanceof CaptureRequest.Key<?> requestKey)) {
+                    return chain.proceed();
+                }
+                String name = requestKey.getName();
+                // Intercept filterId for Portrait mode when Original is selected
+                if ("com.xiaomi.sessionparams.filterId".equals(name)
+                        && chain.getArg(1) instanceof Number filterNum
+                        && filterNum.byteValue() == 2  // STYLE_ORIGINAL = "2"
+                        && originalPortraitEnabled()) {
+                    // Force Master style for capture to avoid native HAL hang
+                    // Store Original selection for post-processing
+                    lastOriginalPortrait = true;
+                    lastOriginalPortraitTime = android.os.SystemClock.elapsedRealtime();
+                    log(Log.INFO, TAG, "Original Portrait selected -> forcing Master style for capture, will post-process");
+                    return chain.proceed(new Object[]{filterIdKey, (byte) 1}); // STYLE_MASTER = "1"
+                }
+                // Also handle stylizationType for Portrait mode
+                if ("com.xiaomi.sessionparams.stylizationType".equals(name)
+                        && chain.getArg(1) instanceof Number stylNum
+                        && stylNum.byteValue() == 171  // MODE_PORTRAIT
+                        && originalPortraitEnabled()
+                        && lastOriginalPortrait) {
+                    // Ensure stylizationType is set correctly
+                    return chain.proceed();
+                }
+                return chain.proceed();
+            });
+            originalPortraitCaptureHooked = true;
+            log(Log.INFO, TAG, "installed Original Portrait capture hook (forces Master, post-processes)");
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot install Original Portrait capture hook: " + t);
+        }
+    }
+
+    // State for Original Portrait post-processing
+    private volatile boolean lastOriginalPortrait = false;
+    private volatile long lastOriginalPortraitTime = 0;
+    private volatile boolean originalPortraitCaptureHooked = false;
 
     // ---- 3. Leica Essential CMOS (M10R) ---------------------------------------------------------
 
