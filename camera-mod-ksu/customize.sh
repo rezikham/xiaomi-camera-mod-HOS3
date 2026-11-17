@@ -40,5 +40,6 @@ ui_print ""
 # Request hot install if possible (apply without reboot)
 # Only if we're not changing system/ files (we removed system/)
 export MODULE_HOT_INSTALL_REQUEST=true
+export MODULE_HOT_RUN_SCRIPT=hotinstall.sh
 
 ui_print "HyperCameraMod installer done."
