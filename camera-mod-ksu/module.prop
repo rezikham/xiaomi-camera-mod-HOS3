@@ -1,0 +1,6 @@
+id=hypercameramod
+name=HyperCameraMod
+version=1.0.0-177
+versionCode=177
+author=rezikham
+description=HyperCameraMod - M3/M9 Leica looks for Aurora (14 Ultra). LSPosed module for Xiaomi Camera 6.7. Stages M3/M9 LUTs, enables HAL engine gate (camera.debug.mivi3.output.jpeg=true). Compatible with nomount/zeromount/mountify metamodules. No ChiX plugin, no Essential Moments app.

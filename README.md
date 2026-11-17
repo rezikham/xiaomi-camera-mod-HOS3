@@ -10,9 +10,10 @@
 
 - Palette and Parameters panel
 - Original colour style (Photo)
-- Original portrait style (opt-in toggle; off by default on the 14 Ultra)
+- **Original portrait style — software implementation on 14 Ultra** (opt-in toggle; off by default; uses post-capture depth map + OpenGL ES 3.1 bokeh renderer)
 - Leica Essential mode in the standard UI (M3/M9)
 - Leica Essential CMOS (M10R) style
+- **Moment App pipeline** (real M3/M9 post-capture processing, off by default)
 - Film simulation filters: R600, P100F, F-50, KC64, KP160
 - Settings app with toggles, **Force Stop Camera**, and **Hide launcher icon**
 
@@ -56,16 +57,19 @@ The module can only expose what the phone's camera hardware layer (`camera.qcom.
 | Palette and Parameters | ✅ | ✅ | ✅ |
 | Film filters | ✅ | ✅ | ✅ |
 | Original colour style (Photo) | ✅ | ✅ | ✅ |
-| Original portrait style | ⚠️ Opt-in — may freeze the preview | ✅ (on by default) | ✅ (on by default) |
-| Leica Essential (M3/M9) | ⚠️ stock HAL cannot process; app-side approximation toggle | ✅ | ✅ |
-| CMOS (M10R) | ❌ HAL limitation | Experimental — the HAL has no M10R processing | ✅ Native (HAL + Camera 6.8) |
+| **Original portrait style (software)** | ⚠️ Opt-in — post-capture, uses depth map | ✅ (on by default, native) | ✅ (on by default, native) |
+| Leica Essential (M3/M9) | ⚠️ stock HAL cannot process; Moment App post-capture | ✅ | ✅ |
+| Moment App pipeline (M3/M9) | ⚠️ Off by default; enable in settings | ✅ | ✅ |
+| CMOS (M10R) | ❌ HAL limitation | Experimental — HAL has no M10R | ✅ Native (HAL + Camera 6.8) |
 
-**14 Ultra HAL limitation.** M3, M9, M10R and Original portrait cannot work on the 14 Ultra because its camera hardware layer does not implement the processing they need:
+**14 Ultra HAL limitation.** M3, M9, M10R and native Original portrait cannot work on the 14 Ultra because its camera hardware layer does not implement the processing they need:
 
-- **Original portrait** starts an algorithm-up SAT preview session. The Xiaomi preview-bokeh engine (`libmialgo_mc_bokeh_cdsp_skel.so`) never returns a frame, the camera waits 5780 ms on a semaphore (`ChiX WaitForSemaphore() ... timed out`), the preview drops to about 0.1 fps, and the vendor camera provider eventually aborts (`ExtensionModule::TriggerRecovery`). The module therefore removes Original from the Portrait style picker on the 14 Ultra by default and moves a saved value back to Master. The **Original Portrait Style** toggle is off there; turning it on restores Original in the picker (together with the freeze), which is why it is opt-in rather than blocked.
-- **M3/M9 (Leica Essential)** need the Leica Essential processing available on the 17 Ultra-class hardware layer. The 14 Ultra HAL has no M10R processing either, so a CMOS shot comes back as an ordinary picture, without Leica processing and without the `legendmode` tag Gallery uses for its LEICA button.
+- **Native Original portrait** starts an algorithm-up SAT preview session. The Xiaomi preview-bokeh engine (`libmialgo_mc_bokeh_cdsp_skel.so`) never returns a frame, the camera waits 5780 ms on a semaphore (`ChiX WaitForSemaphore() ... timed out`), the preview drops to about 0.1 fps, and the vendor camera provider eventually aborts (`ExtensionModule::TriggerRecovery`). The module therefore removes native Original from the Portrait style picker on the 14 Ultra by default.
+- **Software Original portrait (v1.1.0+)** — **Post-capture implementation** that works on 14 Ultra: captures Master Portrait, extracts depth map, applies Original bokeh + color profile via OpenGL ES 3.1 compute shader (`liboriginal_portrait_bokeh.so`), tags EXIF `legendmode=0`. Enable via **Original Portrait Style** toggle (off by default). No preview freeze.
+- **M3/M9 (Leica Essential)** need the Leica Essential processing available on the 17 Ultra-class hardware layer. The 14 Ultra HAL has no M10R processing either.
+- **Moment App pipeline (v1.1.0+)** — **Post-capture implementation** using the genuine Moment App parametric filter (`libm9base.so`) + Monopan grain (`libmialgo_monopan.so`) in a private module process. Off by default; enable in settings.
 
-These are firmware limitations; no APK-only module can add the real missing HAL processing. A first **experimental HAL overlay** that copies the Nezha M3/M9 plugin stack to Aurora is in [`docs/hal-backport/`](docs/hal-backport/). It has been installed on a physical 14 Ultra: the SAT pipeline accepts the node, but Aurora's plugin registry does not register the Nezha plugin yet. The **Compatibility fallback** toggle (Settings) maps M9/M3 to the stock Leica Authentic/Vibrant colour path as an explicit approximation; it is off by default and is not the real M3/M9 pipeline. Original colour in Photo is unaffected.
+These are firmware limitations for native processing. The module provides **software post-capture alternatives** for Original Portrait and M3/M9 on 14 Ultra. A first **experimental HAL overlay** that copies the Nezha M3/M9 plugin stack to Aurora is in [`docs/hal-backport/`](docs/hal-backport/). It has been installed on a physical 14 Ultra: the SAT pipeline accepts the node, but Aurora's plugin registry does not register the Nezha plugin yet. The **Compatibility fallback** toggle (Settings) maps M9/M3 to the stock Leica Authentic/Vibrant colour path as an explicit approximation; it is off by default and is not the real M3/M9 pipeline. Original colour in Photo is unaffected.
 
 **CMOS is off by default.** The Xiaomi 17 Ultra's hardware layer (`camera.qcom.core.so`, `com.qti.chi.override.so`) has the Leica Essential processing for M3 and M9 only. A CMOS shot comes back as an ordinary picture, without the Leica processing and without the `legendmode` tag the Gallery uses for its LEICA button. Enable it with the CMOS (M10R) toggle (or `camera.feature.m10r=1`) only to experiment, or on a phone whose firmware supports it.
 
@@ -77,11 +81,12 @@ Open **HyperCameraMod** from the app drawer or from the module's entry in LSPose
 
 | Toggle | Default | What it changes |
 | ------ | ------- | --------------- |
-| Leica Essential Mode in Standard UI | on | Adds the Leica Essential mode (M3/M9) to the standard UI mode strip. |
+| Leica Essential Mode in Standard UI | off | Adds the Leica Essential mode (M3/M9) to the standard UI mode strip. |
 | Leica UI (Looks) | on | Shows the Leica Looks panel in the filter strip instead of the standard filter UI. |
 | CMOS (M10R) Style | off | Adds the CMOS (M10R) style to the Leica Essential style list. |
 | Extra Film Filters | on | Adds the R600, P100F, F-50, KC64 and KP160 film filters. |
-| Original Portrait Style | on (17 Ultra / 18 Pro Max), off (14 Ultra) | Shows Original in the Portrait style picker. The default follows the phone model; on the 14 Ultra it is off because the HAL cannot preview it. |
+| Original Portrait Style | on (17 Ultra / 18 Pro Max), off (14 Ultra) | Shows Original in the Portrait style picker. On 14 Ultra uses software post-capture (depth map + bokeh renderer). |
+| Moment App Pipeline (M3/M9) | off | Enables real M3/M9 post-capture processing via Moment App parametric filter + Monopan grain. |
 
 The toolbar has **Force Stop Camera** (root required; grant it in Magisk/KernelSU/APatch). The overflow menu has **Hide launcher icon**, which removes the app icon while keeping the settings reachable from LSPosed/Vector. After changing a toggle, force-stop Camera and open it again.
 
@@ -98,9 +103,11 @@ If the camera misbehaves, disable the module and force-stop Camera to restore th
 The toggles have system-property equivalents for setups without the settings bridge. They reset on reboot; run them as root from a boot script such as Magisk's `service.sh` to keep them.
 
 ```bash
-su -c "setprop camera.feature.m10r 1"                # CMOS (M10R) style
-su -c "setprop camera.feature.original_portrait 1"   # Original portrait (freezes the 14 Ultra preview)
-su -c "setprop camera.feature.essential_std 0"       # disable Leica Essential in the standard UI
+su -c "setprop camera.feature.m10r 1"                    # CMOS (M10R) style
+su -c "setprop camera.feature.original_portrait 1"       # Original portrait (software post-capture on 14 Ultra)
+su -c "setprop camera.feature.essential_std 1"           # enable Leica Essential in standard UI (M3/M9)
+su -c "setprop camera.feature.essential_pipeline 1"      # enable Moment App pipeline (M3/M9 post-capture)
+su -c "setprop camera.debug.mivi3.output.jpeg true"      # HAL gate for M3/M9 LUT slot
 ```
 
 ## Logs

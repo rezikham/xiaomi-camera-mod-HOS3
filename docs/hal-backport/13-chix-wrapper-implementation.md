@@ -6,7 +6,7 @@ far it got on the device. The design is in
 
 Status: the wrapper is **loaded, registered and called** by the engine
 (`connect` → `provider create` → `initialize` → `isEnabled` → `processRequest`).
-The remaining blocker is the donor's C++ runtime, not the plugin ABI.
+The remaining blocker is the donor's C++ runtime / videoprocess ABI, not the plugin ABI.
 
 ## Files
 
@@ -15,6 +15,8 @@ The remaining blocker is the donor's C++ runtime, not the plugin ABI.
 | `tools/hal-port/aurora/hcm_legend_plugin/hcm_legend.c` | the wrapper (freestanding C) |
 | `tools/hal-port/aurora/build_legend_wrapper.sh` | builds the `.so` and the KernelSU bundle |
 | `tools/hal-port/aurora/patch_legend_snapshot.py` | inserts `LegendFilterInstance0` |
+| `tools/hal-port/aurora/patch_private_libcxx.py` | rewrites `libc++.so` → `hcicxx.so` |
+| `tools/hal-port/aurora/patch_dynstr.py` | generic equal-length dynstr rewrite |
 | `out/hcm-legend.zip` | the installable module |
 
 Layout installed by the bundle:
@@ -23,6 +25,8 @@ Layout installed by the bundle:
 /odm/lib64/camera/plugins/com.xiaomi.plugin.hcmlegend.so   wrapper (NodeName)
 /odm/lib64/com.xiaomi.plugin.mileicafilter.so              donor, private
 /odm/lib64/libhcm_shim.so                                  midebug/DFX symbols
+/odm/lib64/hcicxx.so                                       private libc++ (SONAME hcicxx.so)
+/odm/lib64/libHcmPhotoFiltr.so                             private libMiPhotoFilter (SONAME libHcmPhotoFiltr.so)
 /odm/lib64/libcameraopt_stub.so, libcom.xiaomi.cam.miexifmgr.so, libmetatagwrapper.so
 /odm/etc/camera/leica_filter_param*.bin
 /odm/etc/camera/xiaomi/{normal,leica,sat,superhd}snapshot.json   + LegendFilterInstance0
@@ -162,13 +166,13 @@ rendering the donor's M3 and M9 looks.
 The donor has **no monochrome stage** (`strings` shows no monopan/desaturate
 symbol anywhere in it): Nezha's M3 output only becomes the Leica Monopan look
 when the separate Monopan step runs (`libmialgo_monopan`, the same helper the
-Essential Moments app spawns). Two ways to complete M3:
+Moment App app spawns). Two ways to complete M3:
 
 1. compose it with the existing strip entry — select M3 so the stock filter node
    applies our `M3_Monopan` 64³ LUT *and* let the wrapper node add the M3
    grading on top;
 2. add the Monopan helper as a second node/step (its spawn and format are
-   mapped in [12-essential-moments-internals.md](12-essential-moments-internals.md)).
+   mapped in [12-moment-app-internals.md](12-moment-app-internals.md)).
 
 ## Where it stands after the private libc++
 
@@ -265,3 +269,38 @@ snapshots   : stock filter node kept, wrapper inserted in front of it
 
 The wrapper leaves stock filters untouched: it is an additional node that
 passes frames through whenever `isEnabled` is 0.
+
+## Code hardening checklist (2026-11-17 review)
+
+| Item | Status | Notes |
+|---|---|---|
+| `std::string` ABI in `provider_name()` | ✅ | Long form built manually; `malloc`/`free` matched |
+| DT_NEEDED closure complete | ✅ | Verified via `readelf -d` in build script |
+| ImageParams offsets (+0x70 native, +0x38 usage) | ✅ | Corrected from +0x74; matches stock filter at 0xc474 |
+| sepolicy rules | ✅ | magiskpolicy syntax, no colon |
+| Error handling in `load_donor()` | ✅ | Returns bool, logs `dlerror()` |
+| Error handling in `isEnabled()` | ✅ | Returns 0 on donor load failure |
+| Logging levels (info vs error) | ✅ | `logi` (priority 4) vs `loge` (priority 6) |
+| Style fallback chain documented | ✅ | meta → hcm_style file → vendor property |
+| Render payload intent structure | ✅ | `com.xiaomi.mivi2.render` with `lutNames` array |
+
+## Build script improvements (2026-11-17)
+
+* `build_legend_wrapper.sh`: added `readelf -d` verification steps after each
+  patch, `ANDROID_LIBS` / `CLANG` env vars, `set -euo pipefail`.
+* `patch_private_libcxx.py`: handles SONAME + DT_NEEDED, warns on >2 refs,
+  idempotent, proper exit codes.
+* `patch_dynstr.py`: idempotent, validates equal length, proper exit codes.
+* `patch_legend_snapshot.py`: idempotent, validates JSON structure, trailing
+  newline on write.
+* All scripts: use `pathlib`, explicit error messages, non-zero exit on failure.
+
+## Known limitations
+
+| Limitation | Impact | Workaround / Fix |
+|---|---|---|
+| QNN HTP V81 vs V75 | `candyProcess` crashes on SM8750 donor | Ship donor's `libMiPhotoFilter.so` as `libHcmPhotoFiltr.so`; compare exports |
+| No Monopan stage | M3 is color, not monochrome | Add `libmialgo_monopan` as second node or compose with LUT |
+| Aurora `ImageParams` layout hardcoded | May differ on SM8750 | Add device-specific `translate()` variant |
+| `style_from_render_payload()` stub | Not parsing real FD/property | Implement once FD contract known on target build |
+| SUSFS/bind-mount hide | May not work on all kernels | Keep both; log failures for debugging |

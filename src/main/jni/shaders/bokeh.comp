@@ -1,0 +1,270 @@
+#version 310 es
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable
+
+/**
+ * Original Portrait Bokeh Renderer - Compute Shader
+ * 
+ * Simulates the optical characteristics of Xiaomi's Original Portrait style
+ * as implemented in libAncHumanPreviewBokeh.so on 17 Ultra / 18 Pro Max.
+ * 
+ * Key parameters (matching donor plugin tags 0x10000-0x1000B):
+ * - f_number: Aperture (1.4-16.0)
+ * - focal_length: Equivalent focal length in mm (35, 75)
+ * - focus_rect: Normalized focus region [cx, cy, w, h]
+ * - bokeh_style: 0=Natural, 1=Smooth, 2=Swirly, 3=Catseye, 4=Polygon
+ * - zoom_rate: Digital zoom factor
+ * - camera_role: 0=Main, 1=Tele, 2=Ultra-wide
+ * 
+ * Based on RE of libAncHumanPreviewBokeh.so (madrid/nezha)
+ */
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// Input/Output textures
+layout(rgba8, binding = 0) uniform image2D srcImage;      // Source RGB image
+layout(r32f, binding = 1) uniform image2D depthMap;       // Normalized depth [0,1]
+layout(r8ui, binding = 2) uniform uimage2D confidenceMap; // Confidence [0,255] (optional)
+layout(rgba8, binding = 3) uniform image2D dstImage;      // Output
+
+// Uniform parameters (matching donor config struct at render_config+0x98)
+layout(std140, binding = 0) uniform Params {
+    float fNumber;           // Aperture (e.g., 2.0) - tag 0x10000
+    float focalLength;       // mm (35 or 75) - derived from zoom_rate + camera_role
+    vec4 focusRect;          // cx, cy, w, h normalized [0,1] - tag 0x10001
+    int bokehStyle;          // 0-4 - tag 0x10002
+    float zoomRate;          // Digital zoom - tag 0x10004
+    int cameraRole;          // 0=main, 1=tele, 2=uw - tag 0x10005
+    bool isAutoFNumber;      // Auto aperture - tag 0x10007
+    bool isStaticScene;      // Static scene opt - tag 0x10009
+    float motionSpeed;       // Motion blur factor - tag 0x1000A
+    bool bypass;             // Bypass bokeh - tag 0x1000B
+} params;
+
+// Constants
+const float MAX_COC_PIXELS = 64.0;   // Maximum blur radius
+const float MIN_COC_PIXELS = 0.5;    // Below this = no blur
+const float SENSOR_SCALE_BASE = 200.0; // Approx pixels per mm at 12MP
+const float FOCUS_FALLBACK_DEPTH = 0.5;
+
+// -----------------------------------------------------------------------------
+// Circle of Confusion Calculation (Thin Lens Model)
+// -----------------------------------------------------------------------------
+float computeCoC(float depth) {
+    // No depth data = no blur
+    if (depth <= 0.0) return 0.0;
+    
+    // Focus depth from focus rectangle center
+    vec2 focusUV = params.focusRect.xy;
+    float focusDepth = imageLoad(depthMap, ivec2(focusUV * vec2(imageSize(depthMap)))).r;
+    
+    // Fallback if focus point has no depth
+    if (focusDepth <= 0.0) {
+        focusDepth = FOCUS_FALLBACK_DEPTH;
+    }
+    
+    // Aperture diameter in mm
+    float aperture_mm = params.focalLength / params.fNumber;
+    
+    // Thin lens formula: CoC = |A * (1/focusDist - 1/depth)|
+    // Where A = aperture diameter
+    float coc_mm = aperture_mm * abs(1.0/focusDepth - 1.0/depth);
+    
+    // Convert mm to pixels
+    // Sensor scale depends on output resolution and zoom
+    float sensorScale = SENSOR_SCALE_BASE * params.zoomRate;
+    
+    return clamp(coc_mm * sensorScale, 0.0, MAX_COC_PIXELS);
+}
+
+// -----------------------------------------------------------------------------
+// Bokeh Disk Weight Functions (Style-Dependent)
+// -----------------------------------------------------------------------------
+float diskWeight_Natural(vec2 offset, float cocRadius) {
+    // Gaussian-like falloff (Natural style)
+    float normalizedDist = length(offset) / cocRadius;
+    return exp(-normalizedDist * normalizedDist * 4.0);
+}
+
+float diskWeight_Smooth(vec2 offset, float cocRadius) {
+    // Soft edge with smoothstep (Smooth style)
+    float normalizedDist = length(offset) / cocRadius;
+    return 1.0 - smoothstep(0.6, 1.0, normalizedDist);
+}
+
+float diskWeight_Swirly(vec2 offset, float cocRadius) {
+    // Swirly bokeh with slight spiral distortion
+    float dist = length(offset);
+    float normalizedDist = dist / cocRadius;
+    float angle = atan(offset.y, offset.x) + normalizedDist * 0.8;
+    float baseWeight = 1.0 - smoothstep(0.7, 1.0, normalizedDist);
+    float swirl = 0.85 + 0.15 * sin(angle * 4.0);
+    return baseWeight * swirl;
+}
+
+float diskWeight_Catseye(vec2 offset, float cocRadius) {
+    // Catseye: vignetting toward image edges (optical vignetting)
+    float dist = length(offset);
+    float normalizedDist = dist / cocRadius;
+    
+    // Base disk with soft edge
+    float baseWeight = 1.0 - smoothstep(0.5, 1.0, normalizedDist);
+    
+    // Catseye vignetting: stronger toward corners
+    // Simplified: vignette based on normalizedDist
+    float vignette = 1.0 - normalizedDist * 0.6;
+    
+    return baseWeight * vignette;
+}
+
+float diskWeight_Polygon(vec2 offset, float cocRadius) {
+    // Heptagonal (7-blade) aperture simulation
+    float dist = length(offset);
+    float normalizedDist = dist / cocRadius;
+    
+    if (normalizedDist > 1.0) return 0.0;
+    
+    float sides = 7.0;
+    float angle = atan(offset.y, offset.x);
+    
+    // Distance to polygon edge
+    float polygonR = cocRadius / cos(fmod(abs(angle), 2.0 * 3.14159265 / sides) - 3.14159265 / sides);
+    float edgeDist = polygonR - dist;
+    
+    // Soft polygon edge
+    return smoothstep(-2.0, 2.0, edgeDist);
+}
+
+float diskWeight(vec2 offset, float cocRadius, float confidence) {
+    if (cocRadius <= 0.0) return 0.0;
+    
+    float w = 0.0;
+    switch (params.bokehStyle) {
+        case 0: w = diskWeight_Natural(offset, cocRadius); break;
+        case 1: w = diskWeight_Smooth(offset, cocRadius); break;
+        case 2: w = diskWeight_Swirly(offset, cocRadius); break;
+        case 3: w = diskWeight_Catseye(offset, cocRadius); break;
+        case 4: w = diskWeight_Polygon(offset, cocRadius); break;
+        default: w = diskWeight_Smooth(offset, cocRadius); break;
+    }
+    
+    // Confidence weighting (0-1)
+    return w * (confidence / 255.0);
+}
+
+// -----------------------------------------------------------------------------
+// Edge-Preserving Weight (Bilateral-style)
+// -----------------------------------------------------------------------------
+float edgeWeight(float centerDepth, float neighborDepth, float depthScale) {
+    float depthDiff = abs(centerDepth - neighborDepth);
+    // Sharp depth transitions preserve edges
+    // depthScale controls sensitivity (higher = more edge preservation)
+    return exp(-depthDiff * depthScale);
+}
+
+// -----------------------------------------------------------------------------
+// Highlight Preservation (Prevent specular blowout)
+// -----------------------------------------------------------------------------
+vec3 preserveHighlights(vec3 color, float weight) {
+    // Detect highlights (luminance > threshold)
+    float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
+    if (luminance > 1.5) {
+        // Compress highlights in proportion to blur weight
+        float compression = mix(1.0, 0.5, weight);
+        return color * compression;
+    }
+    return color;
+}
+
+// -----------------------------------------------------------------------------
+// Main Compute Shader Entry Point
+// -----------------------------------------------------------------------------
+void main() {
+    ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 dims = imageSize(srcImage);
+    
+    // Bounds check
+    if (pos.x >= dims.x || pos.y >= dims.y) return;
+    
+    // Read source pixel
+    vec4 srcColor = imageLoad(srcImage, pos);
+    
+    // Read depth
+    float depth = imageLoad(depthMap, pos).r;
+    
+    // Read confidence (optional)
+    float confidence = 255.0;
+    if (gl_IsBoundTextureUnit(2)) {
+        confidence = float(imageLoad(confidenceMap, pos).r);
+    }
+    
+    // Bypass or invalid depth = pass through
+    if (params.bypass || depth <= 0.0) {
+        imageStore(dstImage, pos, srcColor);
+        return;
+    }
+    
+    // Compute Circle of Confusion
+    float coc = computeCoC(depth);
+    if (coc < MIN_COC_PIXELS) {
+        imageStore(dstImage, pos, srcColor);
+        return;
+    }
+    
+    // Gather samples within CoC radius
+    int radius = int(ceil(coc));
+    
+    // Limit radius for performance (quality presets can adjust)
+    radius = min(radius, int(MAX_COC_PIXELS));
+    
+    vec3 accum = vec3(0.0);
+    float totalWeight = 0.0;
+    
+    // Optimization: importance sampling for large radii
+    // For now: full disk sampling (quality preset)
+    int step = max(1, radius / 16); // Adaptive stepping
+    
+    for (int dy = -radius; dy <= radius; dy += step) {
+        for (int dx = -radius; dx <= radius; dx += step) {
+            ivec2 samplePos = pos + ivec2(dx, dy);
+            
+            // Bounds check
+            if (samplePos.x < 0 || samplePos.x >= dims.x ||
+                samplePos.y < 0 || samplePos.y >= dims.y) continue;
+            
+            vec2 offset = vec2(float(dx), float(dy));
+            float dist = length(offset);
+            
+            // Early exit outside disk
+            if (dist > coc) continue;
+            
+            // Read sample depth
+            float sampleDepth = imageLoad(depthMap, samplePos).r;
+            if (sampleDepth <= 0.0) continue;
+            
+            // Compute disk weight
+            float w = diskWeight(offset, coc, confidence);
+            if (w <= 0.001) continue; // Skip negligible weights
+            
+            // Edge preservation
+            w *= edgeWeight(depth, sampleDepth, 50.0);
+            
+            // Read sample color
+            vec4 sampleColor = imageLoad(srcImage, samplePos);
+            
+            // Highlight preservation
+            vec3 sampleRGB = preserveHighlights(sampleColor.rgb, w);
+            
+            accum += sampleRGB * w;
+            totalWeight += w;
+        }
+    }
+    
+    // Normalize and write output
+    if (totalWeight > 0.0) {
+        vec3 result = accum / totalWeight;
+        // Preserve original alpha
+        imageStore(dstImage, pos, vec4(result, srcColor.a));
+    } else {
+        imageStore(dstImage, pos, srcColor);
+    }
+}

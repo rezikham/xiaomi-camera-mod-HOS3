@@ -1,0 +1,16 @@
+# HyperCameraMod SELinux policy
+# Allows module scripts and camera HAL to access staged LUT files
+
+# Allow module script to write to /data/vendor/camera
+allow kernelsu kernelsu_data_file:dir { write add_name remove_name }
+allow kernelsu kernelsu_data_file:file { write create unlink }
+
+# Allow camera HAL process to read LUT files
+allow hal_camera_default vendor_camera_data_file:file { read open getattr }
+
+# Allow setprop for camera.debug.mivi3.output.jpeg
+allow kernelsu property_socket:unix_stream_socket connectto
+allow kernelsu camera_prop:property_service set
+
+# Allow chcon for vendor_camera_data_file
+allow kernelsu file_type:security compute_av

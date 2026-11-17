@@ -2,24 +2,46 @@ plugins {
     alias(libs.plugins.agp.app)
 }
 
+import java.io.FileInputStream
+import java.util.Properties
+
 android {
     namespace = "io.martin.hypercameramod"
     compileSdk = 37
     buildToolsVersion = "37.0.0"
+    ndkVersion = "27.0.12077973"
 
+    // Read version from version.properties, auto-increment versionCode on each build
+    val versionProps = Properties()
+    val versionFile = rootProject.file("version.properties")
+    if (versionFile.exists()) {
+        versionProps.load(FileInputStream(versionFile))
+    }
+    val baseVersion = versionProps.getProperty("baseVersion", "1.0.0")
+    var versionCode = versionProps.getProperty("versionCode", "100").toInt()
 
-    // Version from CI: -PversionName=1.0.0 -PversionCode=100 (first run)
-    // Stable: versionName=1.0.0, versionCode=100+run_number
-    // CI: versionName=1.0.0-<versionCode>, versionCode=100+run_number
-    val ciVersionName = project.findProperty("versionName")?.toString() ?: "1.0.0"
-    val ciVersionCode = project.findProperty("versionCode")?.toString()?.toIntOrNull() ?: 100
+    // Allow CI override via -PversionCode
+    val ciVersionCode = project.findProperty("versionCode")?.toString()?.toIntOrNull()
+    if (ciVersionCode != null) {
+        versionCode = ciVersionCode
+    }
+
+    // Increment versionCode for next build (local builds only, not CI)
+    val isCi = project.findProperty("CI") != null || System.getenv("CI") == "true" || System.getenv("GITHUB_ACTIONS") == "true"
+    if (!isCi) {
+        versionCode++
+        versionProps.setProperty("versionCode", versionCode.toString())
+        versionProps.store(versionFile.outputStream(), "Auto-incremented by Gradle")
+    }
+
+    val computedVersionName = "$baseVersion-$versionCode"
 
     defaultConfig {
         applicationId = "io.rezikham.hypercameramod"
         minSdk = 26
         targetSdk = 37
-        versionCode = ciVersionCode
-        versionName = ciVersionName
+        versionCode = versionCode
+        versionName = computedVersionName
     }
 
     buildTypes {
@@ -44,6 +66,16 @@ android {
         resources {
             merges += "META-INF/xposed/*"
             excludes += "**"
+        }
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/jni/CMakeLists.txt")
+            version = "3.22.1"
         }
     }
 }

@@ -305,7 +305,7 @@ Consequence: on Aurora, M3/M9 can only be rendered through the filter/LUT slot
 above (Photo mode, Negative filter), not through Essential Moment. The
 `ModeUI` panel exists but its selection has no processing behind it.
 
-The standalone **Essential Moments** app (`com.martin.essentialmoments`) is the
+The standalone **Moment App** app (`com.martin.essentialmoments`) is the
 opposite case: it ships the real pipeline (`libmialgo_monopan.so`,
 `libm9base.so`, `legend18/leica_filter_param_m{3,9,m10r}*.bin`) and produced a
 verified exact-grayscale 3072x4096 M3 capture on Aurora, then crashed in the

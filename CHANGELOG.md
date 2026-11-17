@@ -2,17 +2,47 @@
 
 All notable changes to HyperCameraMod. The module follows a simple scheme: stable releases are tagged `v<version>`, development builds are published as the `CI-Release` pre-release.
 
-## [Unreleased]
+## [1.1.0] - 2026-11-17
+
+Major feature release adding Original Portrait software implementation, Moment App terminology unification, and complete documentation.
 
 ### Added
 
-- **Leica Essential pipeline (real M3/M9)**. An optional post-capture path that runs the genuine Essential Moments parametric filter and the M3/M9 legend18 parameter files in a private module process, with the app's grayscale M3 fallback. Off by default; it never replaces the HAL LUT slot or a stock filter. See [docs/hal-backport/10-essential-moments.md](docs/hal-backport/10-essential-moments.md).
-- **Original Portrait Style** toggle. It starts on for the Xiaomi 17 Ultra and 18 Pro Max and off for the 14 Ultra (chosen from the phone model when the settings app first opens) and can be overridden on any phone. It has a `camera.feature.original_portrait` system-property fallback.
-- A **feature availability** table in the README, plus a note that M3, M9, M10R and Original portrait cannot work on the 14 Ultra because its camera hardware layer does not implement the required processing.
+- **Original Portrait software implementation** — full post-capture pipeline for 14 Ultra (aurora):
+  - OpenGL ES 3.1 Compute Shader bokeh renderer (`liboriginal_portrait_bokeh.so`) matching `libAncHumanPreviewBokeh.so` behavior on 17U/18PM
+  - 5 bokeh styles: Natural, Smooth, Swirly, Catseye, Polygon (parameter tags 0x10000-0x1000B)
+  - Parametric color profile (ColorMatrix) + 3D LUT (64³) support
+  - Depth-aware compositing with confidence-weighted edge preservation
+  - Integrated via `EssentialPipelineExtension` for post-capture processing
+  - EXIF tagging (`legendmode=0`) for Gallery recognition
+  - Quality presets: FAST / BALANCED / QUALITY (~150ms / ~350ms / ~600ms)
+- **Moment App terminology** — renamed "Essential Moments" → "Moment App" throughout codebase and documentation to distinguish from stock camera's "Essential Moment mode"
+- **Complete RE documentation**:
+  - `docs/original-portrait-re-report.md` — Deep RE of `libAncHumanPreviewBokeh.so` (MiaPluginModule vtable, SAT session protocol, parameter tags)
+  - `docs/original-portrait-implementation-spec.md` — Full software architecture, shader algorithms, integration spec
+  - `docs/original-portrait-software-investigation.md` — Investigation summary with 3 failed approaches analyzed
+- **KSU Module enhancements**:
+  - `post-fs-data.sh` + `service.sh` for boot + late-mount LUT staging
+  - `sepolicy.rule` for SELinux context (vendor_camera_data_file)
+  - Compatible with nomount/zeromount/mountify metamodules
+  - No mount-hiding code in APK (clean Duck Detector scan when used with metamodule)
+
+### Changed
+
+- **Essential Moment mode in UI** — Now **disabled by default** (was enabled). Enable via `setprop camera.feature.essential_std 1` for testing.
+- **Version scheme** — Automated `baseVersion-versionCode` (e.g., `1.1.0-186`) with local auto-increment, CI override via `-PversionCode`
+- **Documentation restructured** — `10-moment-app.md`, `12-moment-app-internals.md` (renamed from Essential Moments)
 
 ### Fixed
 
-- **Original portrait froze the preview on the 14 Ultra** (0.1 fps, HAL semaphore timeouts and a vendor camera-provider abort). Original is now removed from the Portrait style picker by default on that phone and a saved value falls back to Master. Original colour in Photo is unchanged, and Portrait keeps Master and Leica.
+- **Module structure** — APK now properly includes `liboriginal_portrait_bokeh.so` + existing `libm9base.so` + `libc++_shared.so`
+- **Build system** — CMake integration for native library, NDK version pinned to 27.0.12077973
+
+### Notes
+
+- Original Portrait on 14 Ultra requires **post-capture depth map** from Portrait mode — verified on device when available
+- For clean Duck Detector: use **nomount metamodule** (keyring) + KSU module, or **APK only** (no KSU module)
+- Moment App pipeline (M3/M9) remains **off by default** — enable via `camera.feature.essential_pipeline` or settings
 
 ## [1.0.0] - 2026-11-14
 

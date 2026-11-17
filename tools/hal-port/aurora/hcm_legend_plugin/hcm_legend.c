@@ -11,6 +11,26 @@
  * Nezha-shaped structures it expects.
  *
  * Build: tools/hal-port/aurora/build_legend_wrapper.sh
+ *
+ * ========================================================================
+ * ABI SAFETY NOTES (reviewed 2026-11-17):
+ * - getPluginName() returns std::string by value as libc++ long form:
+ *   {cap = len|1, size = len, data = malloc(len+1)}. The name
+ *   "com.xiaomi.plugin.hcmlegend" (26 bytes) exceeds the 22-byte SSO
+ *   threshold so long form is required. Caller frees the buffer.
+ * - DT_NEEDED: libc.so, libdl.so, liblog.so, libcom.xiaomi.pluginutils.so,
+ *   libhcm_shim.so (RTLD_GLOBAL), hcicxx.so (private libc++), 
+ *   com.xiaomi.plugin.mileicafilter.so (donor, RTLD_LOCAL),
+ *   libHcmPhotoFiltr.so (private libMiPhotoFilter), libcameraopt_stub.so,
+ *   libcom.xiaomi.cam.miexifmgr.so, libmetatagwrapper.so
+ * - ImageParams translation: Aurora native handle at +0x70, donor expects
+ *   at +0xB0. Aurora usage at +0x1C, donor at +0x38. Metadata shared_ptr
+ *   at +0x28/+0x30 (Aurora) -> +0x40/+0x48 (donor).
+ * - sepolicy: hal_camera_default needs {open read getattr map execute} on
+ *   system_file (KernelSU labels module files system_file under /odm).
+ * - Error handling: load_donor() returns bool, isEnabled() returns 0 on
+ *   failure (clean pass-through), processRequest logs donor return code.
+ * ========================================================================
  */
 typedef unsigned char u8;
 typedef unsigned int u32;
@@ -99,6 +119,10 @@ static void logi(const char *fmt, u64 a, u64 b) {
     if (p_log) p_log(4, "HCM-Legend", fmt, (void *)a, (void *)b);
 }
 
+static void loge(const char *fmt, u64 a, u64 b) {
+    if (p_log) p_log(6, "HCM-Legend", fmt, (void *)a, (void *)b);
+}
+
 /* ------------------------------------------------------------------ */
 /* Provider registration                                               */
 /* ------------------------------------------------------------------ */
@@ -128,9 +152,12 @@ static hcm_string provider_name(void *self) {
     u64 n = 0;
     while (g_name[n]) n++;
     char *p = (char *)malloc(n + 1);
-    if (p) {
-        for (u64 i = 0; i <= n; i++) p[i] = g_name[i];
+    if (!p) {
+        loge("provider_name malloc failed", 0, 0);
+        hcm_string s = {0, 0, NULL};
+        return s;
     }
+    for (u64 i = 0; i <= n; i++) p[i] = g_name[i];
     hcm_string s;
     s.cap = n | 1;
     s.size = n;
@@ -141,7 +168,10 @@ static hcm_string provider_name(void *self) {
 static void *provider_create(void *self) {
     (void)self;
     void *p = malloc(sizeof(void *) * 24);
-    if (!p) return 0;
+    if (!p) {
+        loge("provider_create malloc failed", 0, 0);
+        return 0;
+    }
     memset(p, 0, sizeof(void *) * 24);
     *(void ***)p = g_plugin_vtable;
     logi("provider create -> %lx", (u64)p, 0);
@@ -180,18 +210,31 @@ static meta_find_fn p_find;
 static u32 style_from_meta(void *meta) {
     if (!meta || !p_find) return 0;
     hcm_string s = p_find(meta, "com.xiaomi.mivi2.render");
-    if (!s.data || s.size == 0) return 0;
+    if (!s.data || s.size == 0) {
+        if (s.data) free(s.data);
+        return 0;
+    }
+    u32 style = 0;
     for (u64 i = 0; i + 6 <= s.size; i++) {
         if (s.data[i] != 'l' || s.data[i + 1] != 'u' || s.data[i + 2] != 't'
                 || s.data[i + 3] != '_') {
             continue;
         }
-        if (s.data[i + 4] == 'm' && s.data[i + 5] == '3') return 2;
-        if (s.data[i + 4] == 'm' && s.data[i + 5] == '9') return 1;
+        if (s.data[i + 4] == 'm' && s.data[i + 5] == '3') { style = 2; break; }
+        if (s.data[i + 4] == 'm' && s.data[i + 5] == '9') { style = 1; break; }
     }
-    return 0;
+    free(s.data);
+    return style;
 }
 
+/* Parse render payload from intent extras: com.xiaomi.mivi2.render JSON with
+ * "lutNames":["lut_m3"] or ["lut_m9"]. Expected structure:
+ *   Intent extra key: "com.xiaomi.mivi2.render"
+ *   Value: JSON string e.g. {"lutNames":["lut_m3"],"otherKeys":...}
+ *   This is set by the camera app when user selects M3/M9 in Leica Essential UI.
+ *   The wrapper reads it via MiMetadata::find() which returns the raw JSON string.
+ *   We scan for "lut_m3" or "lut_m9" substrings (robust against JSON formatting).
+ *   Fallback order: meta -> /data/vendor/camera/hcm_style -> persist.vendor.camera.hypercam.style */
 static u32 forced_style(void) {
     int fd = open("/data/vendor/camera/hcm_style", 0);
     if (fd >= 0) {
@@ -311,11 +354,14 @@ static int load_donor(void) {
     }
     void *ctor = p_dlsym(h, "_ZN19MiLeicaFilterPluginC1Ev");
     if (!ctor) {
-        logi("donor ctor missing", 0, 0);
+        loge("donor ctor missing", 0, 0);
         return 0;
     }
     void *obj = malloc(DONOR_SIZE);
-    if (!obj) return 0;
+    if (!obj) {
+        loge("donor object malloc failed", 0, 0);
+        return 0;
+    }
     memset(obj, 0, DONOR_SIZE);
     ((void (*)(void *))ctor)(obj);
     void **vt = *(void ***)obj;
@@ -324,6 +370,9 @@ static int load_donor(void) {
     g_donor_enabled = (donor_params_fn)vt[12];
     g_donor_destroy = (donor_destroy_fn)vt[11];
     g_donor_reinit = (donor_void_fn)p_dlsym(h, "_ZN19MiLeicaFilterPlugin12initResourceEv");
+    if (!g_donor_reinit) {
+        loge("donor initResource symbol missing", 0, 0);
+    }
     g_donor = obj;
     logi("donor loaded vt=%lx", (u64)vt, 0);
     return 1;
@@ -381,11 +430,11 @@ static void translate(struct AImg *src, struct NImg *dst) {
     dst->fmt = src->fmt;
     dst->width = src->width;
     dst->height = src->height;
-    dst->usage = src->usage;
+    dst->usage = src->usage;      /* Nezha +0x38 <- Aurora +0x1c */
     dst->fmt2 = 0;
-    dst->meta = src->meta;
-    dst->meta2 = src->meta2;
-    dst->native = src->native;
+    dst->meta = src->meta;        /* Nezha +0x40 <- Aurora +0x28 */
+    dst->meta2 = src->meta2;      /* Nezha +0x48 <- Aurora +0x30 */
+    dst->native = src->native;    /* Nezha +0xb0 <- Aurora +0x70 */
 }
 
 static int plugin_initialize(void *self, void *ci, void *iface) {
@@ -399,15 +448,21 @@ static u32 g_frame;
 static int plugin_process_request(void *self, void *pri) {
     (void)self;
     if (!pri) return 0;
-    if (!load_donor()) return 0;
+    if (!load_donor()) {
+        loge("process_request: load_donor failed", 0, 0);
+        return 0;
+    }
 
     struct AImg *ai = 0, *ao = 0;
     void *in = *(void **)pri;
     void *out = *(void **)((u8 *)pri + 0x18);
     if (in) ai = (struct AImg *)*(void **)((u8 *)in + 0x28);
     if (out) ao = (struct AImg *)*(void **)((u8 *)out + 0x28);
-    logi("pri in=%lx out=%lx ai=%lx ao=%lx", (u64)in, (u64)out);
-    if (!ai || !ao) return 0;
+    logi("pri in=%lx out=%lx ai=%lx ao=%lx", (u64)in, (u64)out, (u64)ai, (u64)ao);
+    if (!ai || !ao) {
+        loge("process_request: missing image params", (u64)ai, (u64)ao);
+        return 0;
+    }
 
     if (!g_donor_inited) {
         u8 ci[0x60];
@@ -472,7 +527,10 @@ static int plugin_enabled(void *self, void *params) {
     logi("isEnabled m0=%lx m18=%lx find=%lx style=%lx",
          (u64)m0, ((u64)m18 << 8) | (u64)style);
     if (!style) return 0;
-    if (!load_donor()) return 0;
+    if (!load_donor()) {
+        loge("isEnabled: load_donor failed", 0, 0);
+        return 0;
+    }
     return 1;
 }
 
@@ -545,12 +603,12 @@ static int setup_provider(void) {
     void *h = p_dlopen("/odm/lib64/camera/plugins/com.xiaomi.plugin.filter.so",
                        RTLD_NOW | RTLD_LOCAL);
     if (!h) {
-        logi("stock plugin dlopen failed", 0, 0);
+        loge("stock plugin dlopen failed", 0, 0);
         return 0;
     }
     void **vt = (void **)p_dlsym(h, "_ZTV20FilterPluginProvider");
     if (!vt) {
-        logi("stock provider vtable missing", 0, 0);
+        loge("stock provider vtable missing", 0, 0);
         return 0;
     }
     /* [0]=offset-to-top, [1]=typeinfo, [2..7]=slots 0..5 */
@@ -565,7 +623,10 @@ static int setup_provider(void) {
 int connect(void *pm) {
     if (!setup_provider()) return 0;
     void *p = malloc(8);
-    if (!p) return 0;
+    if (!p) {
+        loge("connect malloc failed", 0, 0);
+        return 0;
+    }
     *(void **)p = g_provider_vtable;
     provider_manager_add(pm, p);
     logi("connect registered", (u64)pm, 0);

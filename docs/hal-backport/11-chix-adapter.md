@@ -56,17 +56,17 @@ Aurora engine (libmialgoengine.so)
   |-- MiaNode::processRequest (V1 overload, slot 2)  --+
   |                                                    v
   |------------------------------------> wrapper plugin (com.xiaomi.plugin.hcmlegend.so)
-                                           implements Aurora 15-slot vtable
-                                           |
-                                           |-- translate() -> Nezha-shaped ImageParams
-                                           |-- calls donor slot-5 processRequest
-                                           v
-                                    donor .so (com.xiaomi.plugin.mileicafilter.so)
-                                    dlopened RTLD_LOCAL, never registered
-                                           |
-                                           |-- candyProcess -> videoprocess (GL/EGL)
-                                           v
-                                    output buffer filled (M3/M9 look)
+                                            implements Aurora 15-slot vtable
+                                            |
+                                            |-- translate() -> Nezha-shaped ImageParams
+                                            |-- calls donor slot-5 processRequest
+                                            v
+                                     donor .so (com.xiaomi.plugin.mileicafilter.so)
+                                     dlopened RTLD_LOCAL, never registered
+                                            |
+                                            |-- candyProcess -> videoprocess (GL/EGL)
+                                            v
+                                     output buffer filled (M3/M9 look)
 ```
 
 The wrapper is an **Aurora-native** plugin: it is compiled against the project's
@@ -109,6 +109,21 @@ dynstr edit (no `patchelf`) `[observed]`. The wrapper's link line also declares
 `NEEDED libc.so libdl.so liblog.so libcom.xiaomi.pluginutils.so libhcm_shim.so
 com.xiaomi.plugin.mileicafilter.so` so all three land in one link group
 `[observed]`.
+
+### Donor DT_NEEDED closure (required at runtime)
+
+| Library | Source | Purpose |
+|---|---|---|
+| `libcom.xiaomi.plugin.mileicafilter.so` | Nezha `/odm/lib64/camera/plugins/` | donor algorithm |
+| `libhcm_shim.so` | built from `compat_shim.S` | midebug/DFX symbols |
+| `hcicxx.so` | Nezha `libc++.so` (SONAME-rewritten) | private libc++ with filesystem |
+| `libHcmPhotoFiltr.so` | Nezha `libMiPhotoFilter.so` (SONAME-rewritten) | videoprocess API for `candyProcess` |
+| `libcameraopt_stub.so` | Nezha `/odm/lib64/` | donor dependency |
+| `libcom.xiaomi.cam.miexifmgr.so` | Nezha `/odm/lib64/` | donor dependency |
+| `libmetatagwrapper.so` | Nezha `/odm/lib64/` | donor dependency |
+| `libcom.xiaomi.metadatautils.so` | Nezha `/odm/lib64/` | `MiMetadata::find` for style selection |
+
+All must be present under `/odm/lib64/` (or `/odm/lib64/hcm/` for the shim) at runtime.
 
 ## 3. ABI mapping
 
@@ -405,6 +420,29 @@ wrapper; with `0`, `isEnabled` returns 0 and the node is a pass-through
 `com.xiaomi.mivi2.render` metadata and falls back to `/data/vendor/camera/hcm_style`
 then the vendor property `[observed]` (source).
 
+#### Render payload intent structure
+
+The camera app signals the selected Leica look via the render payload intent extra
+`com.xiaomi.mivi2.render`. Expected JSON structure:
+
+```json
+{
+  "lutNames": ["lut_m3"]   // or ["lut_m9"]
+}
+```
+
+The wrapper's `style_from_meta()` scans the raw JSON string for the substring
+`lut_m3` or `lut_m9` (robust against whitespace/formatting). This is the
+**primary** style source. Fallback order:
+
+1. `MiMetadata::find("com.xiaomi.mivi2.render")` → parse `lutNames` array
+2. `/data/vendor/camera/hcm_style` (file with single char `1`/`2`/`0`)
+3. `persist.vendor.camera.hypercam.style` (vendor property `1`/`2`/`0`)
+
+The render payload is set by the camera app when the user selects M3/M9 in the
+Leica Essential UI (component 256). This avoids the need for a system property
+and works per-capture.
+
 ## 8. Blocked items
 
 ### candyProcess SEGV_ACCERR
@@ -418,8 +456,7 @@ Full stack trace `[observed]`:
 #00 libc++.so
 #01 com.xiaomi.plugin.mileicafilter.so
       MiLeicaFilterPlugin::candyProcess(FilterFrameParam*, FilterFrameParam*,
-                                        VideoFormat, param_lut_t*,
-                                        param_shading_float_t*)+428
+                                        VideoFormat, param_lut_t*, param_shading_float_t*)+428
 #02 MiLeicaFilterPlugin::processRequest(ProcessRequestInfo*)+2308
 #03 com.xiaomi.plugin.hcmlegend.so plugin_process_request+720
 #04 libmialgoengine.so MiaNode::processRequest(...)+4428
@@ -495,6 +532,29 @@ KernelSU labels module files `system_file`; `hal_camera_default` cannot read
 `system_file` under `/odm`, so the `sepolicy.rule` above is required
 `[observed]`. `chcon` on the overlay fails (read-only file system).
 
+### Donor library versions needed (exact)
+
+| Library | Nezha source | Version / Build |
+|---|---|---|
+| `com.xiaomi.plugin.mileicafilter.so` | `/odm/lib64/camera/plugins/` | Madrid/Nezha (SM8650) |
+| `libMiPhotoFilter.so` → `libHcmPhotoFiltr.so` | `/odm/lib64/` | Madrid/Nezha |
+| `libc++.so` → `hcicxx.so` | `/vendor/lib64/` or `/odm/lib64/` | Nezha (has `std::filesystem`) |
+| `libcameraopt_stub.so` | `/odm/lib64/` | Nezha |
+| `libcom.xiaomi.cam.miexifmgr.so` | `/odm/lib64/` | Nezha |
+| `libmetatagwrapper.so` | `/odm/lib64/` | Nezha |
+| `libcom.xiaomi.metadatautils.so` | `/odm/lib64/` | Nezha |
+| `leica_filter_param*.bin` | `/odm/etc/camera/` | Nezha (M3: 93KB, M9: 1.69MB) |
+
+**SM8750 (17 Ultra / 18 Pro Max) vs Aurora (SM8650) compatibility:**
+- The donor algorithm (`mileicafilter.so`) is from Madrid (SM8650). On SM8750
+  devices the camera HAL may expect different `ImageParams` layouts or
+  `GraphicBuffer` usage flags. The wrapper's `translate()` function would need
+  adjustment if field offsets differ.
+- QNN HTP version: Aurora is HTP V75-era; SM8750 donors may use HTP V81. The
+  `libMiPhotoFilter.so` / `libHcmPhotoFiltr.so` videoprocess path is the main
+  compatibility risk. If the SM8750 donor uses newer QNN APIs, the private
+  `libHcmPhotoFiltr.so` must come from the same donor build.
+
 ## 10. Next steps (prioritized, requires the phone)
 
 1. **Tombstone analysis** for `candyProcess+428` (`SEGV_ACCERR`,
@@ -511,8 +571,10 @@ KernelSU labels module files `system_file`; `hal_camera_default` cannot read
 4. **Verify style selection end-to-end**: confirm `isEnabled` style=1/2 and the
    M3/M9 saturation deltas on a clean reboot with only this module active.
 5. **Complete M3**: add the Monopan helper (`libmialgo_monopan`, spawned by the
-   Essential Moments app) as a second node/step so M3 output becomes the
+   Moment App app) as a second node/step so M3 output becomes the
    monochrome Leica look `[inferred]`.
 6. **Confirm pipeline insertion** in `normalsnapshot.json` (the graph the device
    actually uses for Photo mode) and that `LegendFilterInstance0` has no
    `NodeMask` `[inferred]`.
+7. **SM8750 testing**: validate wrapper on 17 Ultra / 18 Pro Max; adjust
+   `translate()` if `ImageParams` layout differs.

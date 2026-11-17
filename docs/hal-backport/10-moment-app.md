@@ -1,11 +1,11 @@
-# 10 — Essential Moments: the real M3/M9 pipeline
+# 10 — Moment App: the real M3/M9 pipeline
 
-This page maps the genuine Leica pipeline in **Essential Moments**
+This page maps the genuine Leica pipeline in **Moment App**
 (`com.martin.essentialmoments`, version `6.8.001960.0`, 150 MB APK) and documents
 the optional module path that runs it on saved JPEGs.
 
 > **Deep material lives in
-> [12-essential-moments-internals.md](12-essential-moments-internals.md).**
+> [12-moment-app-internals.md](12-moment-app-internals.md).**
 > That page has the JNI symbol/offset tables, the `legend18` binary layout,
 > the `libleicamodelembed` B12 wrapper, the helper argv/env contracts, the
 > preview shader, and the measured M3/M9 artifacts. Two conclusions below are
@@ -34,7 +34,7 @@ The short version:
 ## 1. Where the code is
 
 | Layer | Class / file | Role |
-| --- | --- | --- |
+|---|---|---|
 | Launcher | `com.codex.leicaapp.CameraLauncher` | Starts `com.android.camera.Camera` inside the repackaged APK. |
 | Camera UI | `com.android.camera.*` | The stock Xiaomi Camera classes, patched by the app. |
 | Capture snapshot | `com.android.camera.module.Camera2Module` → `MadridBridge.snapshot(t, cameraManager)` | Copies the selected Legendary style and the last preview `CaptureResult` onto the save task. |
@@ -149,7 +149,7 @@ JPEG is kept.
 4. `applyWarmOriginalFilter(bitmap, m9ModelPath, lux, cct, zoom, phase,
    denoise, densityEv, warmth)` — the M9 grading with the M9 snapshot, density
    `-0.95 EV`, warmth `0.3`.
-5. `B43Tone.apply`, `LeicaQuality.apply` (person correction), 
+5. `B43Tone.apply`, `LeicaQuality.apply` (person correction),
    `LeicaDynamicRange.apply` (SDR/HDR gainmap), `OriginalWatermark.apply`.
 6. JPEG 95 + EXIF copy.
 
@@ -180,7 +180,7 @@ initializer loads `libleicamodelembed.so`, which `dlopen`s `libm9base.so`,
 calls the original symbol, and wraps it in a B12 reference/reconciliation pass
 (`snapshot` before, `finish` after). A process that loads only `libm9base`
 gets the same pixels but not the B12 reconciliation. Symbol addresses and the
-wrapper contract are in [12](12-essential-moments-internals.md) section 2-3.
+wrapper contract are in [12](12-moment-app-internals.md) section 2-3.
 
 ### 3.5 How the legend18 `.bin` files are used
 
@@ -205,12 +205,12 @@ the file sizes are 93,170 / 1,686,102 / 1,597,668 bytes. The capture path uses
 `b2b7769a…`), which differs from the `assets/legend18/` copy (`60643c27…`) in
 one LUT block and a build timestamp; the module currently bundles the
 `legend18` copy. The full byte layout, per-file tables and selection
-algorithm are in [12](12-essential-moments-internals.md) section 4.
+algorithm are in [12](12-moment-app-internals.md) section 4.
 
 Unknown metadata defaults, taken from `MadridLegendary.process`:
 
 | Parameter | Range | Default |
-| --- | --- | --- |
+|---|---|---|
 | lux | 0..1000 | 200 |
 | CCT | 1500..15000 | 5500 |
 | zoom | 0.1..200 | 1.0 |
@@ -253,25 +253,25 @@ applyAlgorithm(env, bitmap, runnerPath, cacheDir, /*extra=*/NULL,
    is effectively NV12 with a flat chroma plane.
 3. Creates temp files in `cacheDir`:
 
-   ```
-   <cache>/monopan-in-XXXXXX
-   <cache>/monopan-out-XXXXXX
-   ```
+```
+<cache>/monopan-in-XXXXXX
+<cache>/monopan-out-XXXXXX
+```
 
    with `mkstemp`, writes the `1.5*w*h` buffer, closes both.
 4. Builds `helperPath = dirname(runnerPath) + "/libmialgo_monopan.so"`.
 5. Builds argv/envp:
 
-   ```
-   argv[0] = <nativeLibraryDir>/libmonopan_runner.so
-   argv[1] = <nativeLibraryDir>/libmialgo_monopan.so
-   argv[2] = <cache>/monopan-in-XXXXXX
-   argv[3] = <cache>/monopan-out-XXXXXX
-   argv[4] = width
-   argv[5] = height
-   envp[0] = "LD_LIBRARY_PATH=<nativeLibraryDir>"
-   envp[1] = NULL
-   ```
+```
+argv[0] = <nativeLibraryDir>/libmonopan_runner.so
+argv[1] = <nativeLibraryDir>/libmialgo_monopan.so
+argv[2] = <cache>/monopan-in-XXXXXX
+argv[3] = <cache>/monopan-out-XXXXXX
+argv[4] = width
+argv[5] = height
+envp[0] = "LD_LIBRARY_PATH=<nativeLibraryDir>"
+envp[1] = NULL
+```
 
    then `posix_spawn(&pid, argv[0], NULL, NULL, argv, envp)`.
 6. Polls `waitpid(WNOHANG)` every 50 ms, up to 600 iterations (30 s), then
@@ -328,7 +328,7 @@ observed M9 JPEG never received the styled bitmap: its EXIF was not re-inserted
 and the `legendmode` tag is absent, so the M9 chain discarded the result. The
 `applyStyle` gate is the leading failure point, with the QNN version mismatch
 as the likely cause. Details and the artifact proof are in
-[12](12-essential-moments-internals.md) sections 6-7.
+[12](12-moment-app-internals.md) sections 6-7.
 
 ## 5. Preview vs capture
 
@@ -352,7 +352,7 @@ preview path is different:
 So the preview is a cheap shader approximation; the real M3/M9 look is
 **post-capture**. The module follows the same model: preview is untouched, the
 saved JPEG is processed. The shader source and lifecycle are in
-[12](12-essential-moments-internals.md) section 9.
+[12](12-moment-app-internals.md) section 9.
 
 ## 6. Integration design
 
@@ -414,7 +414,7 @@ validates `msg.sendingUid`; requests from any other UID are rejected.
 ### 6.3 What is bundled
 
 | File | Size | Purpose |
-| --- | --- | --- |
+|---|---|---|
 | `lib/arm64-v8a/libm9base.so` | 132 KB | Parametric filter + spawn logic. |
 | `lib/arm64-v8a/libc++_shared.so` | 1.26 MB | `DT_NEEDED` of `libm9base.so`. |
 | `assets/essential/leica_filter_param_m3.bin` | 93 KB | M3 shading/LUT parameters (identical to the APK root file). |
@@ -487,7 +487,7 @@ Blocked on aurora / not bundled:
   filter instead.
 * The module calls `libm9base` directly, so it misses the app's
   `libleicamodelembed` B12 reconciliation. See
-  [12](12-essential-moments-internals.md) section 10 for the recommended
+  [12](12-moment-app-internals.md) section 10 for the recommended
   change.
 
 ## 7. Test steps (on device)
@@ -497,10 +497,10 @@ system properties.
 
 1. Build and install the module:
 
-   ```sh
-   ./gradlew :assembleRelease --offline
-   adb -s 1c4e4dec install -r build/outputs/apk/release/xiaomi-camera-mod-release.apk
-   ```
+```sh
+./gradlew :assembleRelease --offline
+adb -s 1c4e4dec install -r build/outputs/apk/release/xiaomi-camera-mod-release.apk
+```
 
 2. Keep the LSPosed scope on `com.android.camera`, then open the module
    settings and enable **Leica Essential pipeline (real M3/M9)**. Leave
@@ -509,37 +509,37 @@ system properties.
 
 3. Force-stop Camera once so the setting is read:
 
-   ```sh
-   adb -s 1c4e4dec shell am force-stop com.android.camera
-   adb -s 1c4e4dec logcat -c
-   adb -s 1c4e4dec logcat -s HCM-Essential HyperCameraMod
-   ```
+```sh
+adb -s 1c4e4dec shell am force-stop com.android.camera
+adb -s 1c4e4dec logcat -c
+adb -s 1c4e4dec logcat -s HCM-Essential HyperCameraMod
+```
 
 4. Open Camera, select **M3** in the Leica Essential picker, take one photo.
    Expected log sequence:
 
-   ```
-   Essential candidate IMG_....jpg legend=2
-   service created
-   libm9base loaded
-   Monopan grain=false in ... ms
-   legend=2 <in> -> <out> bytes in ... ms
-   applied legend=2 to IMG_....jpg
-   ```
+```
+Essential candidate IMG_....jpg legend=2
+service created
+libm9base loaded
+Monopan grain=false in ... ms
+legend=2 <in> -> <out> bytes in ... ms
+applied legend=2 to IMG_....jpg
+```
 
    `Monopan grain=false` is expected without the optional libs.
 
 5. Pull the file and verify true monochrome at the original resolution:
 
-   ```sh
-   adb -s 1c4e4dec pull /sdcard/DCIM/Camera/IMG_....jpg /tmp/opencode/m3.jpg
-   python3 - <<'PY'
-   from PIL import Image
-   im = Image.open('/tmp/opencode/m3.jpg').convert('RGB')
-   px = list(im.getdata())
-   print(im.size, max(abs(r-g) for r,g,b in px), max(abs(g-b) for r,g,b in px))
-   PY
-   ```
+```sh
+adb -s 1c4e4dec pull /sdcard/DCIM/Camera/IMG_....jpg /tmp/opencode/m3.jpg
+python3 - <<'PY'
+from PIL import Image
+im = Image.open('/tmp/opencode/m3.jpg').convert('RGB')
+px = list(im.getdata())
+print(im.size, max(abs(r-g) for r,g,b in px), max(abs(g-b) for r,g,b in px))
+PY
+```
 
    Both maxima must be 0. The EXIF `Model` should still be the camera's
    original value; the module does not rewrite it.
@@ -559,9 +559,9 @@ system properties.
 9. Crash-isolation check: while a photo is being processed, kill only the
    module process:
 
-   ```sh
-   adb -s 1c4e4dec shell am force-stop io.rezikham.hypercameramod
-   ```
+```sh
+adb -s 1c4e4dec shell am force-stop io.rezikham.hypercameramod
+```
 
    Camera must stay alive, the shutter must remain usable, and the JPEG must
    remain the unprocessed original.
@@ -585,3 +585,103 @@ system properties.
   new trampoline.
 * Keep the pipeline off by default. It is the only path in the module that
   loads third-party native code.
+
+## 9. Exact model requirements
+
+### Required native libraries (bundled)
+
+| Library | Source | Role |
+|---|---|---|
+| `libm9base.so` | Moment App APK `lib/arm64-v8a/` | Core parametric filter + Monopan spawn |
+| `libc++_shared.so` | Moment App APK `lib/arm64-v8a/` | C++ runtime for `libm9base.so` |
+
+### Required parameter files (bundled as assets)
+
+| File | Source | SHA-256 (legend18 copy) | Size |
+|---|---|---|---|
+| `leica_filter_param_m3.bin` | APK `assets/leica_filter_param_m3.bin` (root) | `6e9217ee8c59872a3d700614681c30742df01d9bc9b44b7f2a170eeaab68052b` | 93,170 B |
+| `leica_filter_param_m9_snapshot.bin` | APK `assets/legend18/leica_filter_param_m9_snapshot.bin` | `60643c2747a05e2b6c5266461a6c4a0b06d7236f15b4b8d61637015420125013` | 1,686,102 B |
+
+**Note:** The capture path uses the APK root `m9_snapshot.bin` (`b2b7769a…`), which
+differs in one LUT block and a build timestamp. For exact parity with the app's
+capture output, replace the bundled file with the root copy.
+
+### Optional native libraries (for Monopan grain)
+
+| Library | Source | Size | Notes |
+|---|---|---|---|
+| `libmonopan_runner.so` | APK `lib/arm64-v8a/` | 9 KB | Spawn host |
+| `libmialgo_monopan.so` | APK `lib/arm64-v8a/` | 18 MB | Monopan payload (QNN model) |
+| `libQnnHtp.so`, `libQnnHtpV81.so`, `libQnnHtpV81Skel.so`, `libQnnSystem.so` | APK `lib/arm64-v8a/` | ~13 MB | QNN HTP V81 runtime (SM8750) |
+
+**QNN version mismatch:** The APK ships QNN HTP V81 (SM8750). On aurora
+(SM8650, HTP V75), the Monopan helper **may** fail to initialize the QNN
+backend. The app's own artifact shows it works on this unit, but this is not
+guaranteed across builds. The fallback (grayscale) is always safe.
+
+### JNI symbols required from `libm9base.so`
+
+All bound to `com.codex.leicaapp.LegendaryPostProcessor`:
+
+| Symbol | Offset | Signature |
+|---|---|---|
+| `Java_com_codex_leicaapp_LegendaryPostProcessor_applyOriginalFilter` | 0xccf8 | `(Bitmap, String, float, float, float, float)` |
+| `Java_com_codex_leicaapp_LegendaryPostProcessor_applyWarmOriginalFilter` | 0xd3e4 | `(Bitmap, String, float, float, float, float, float, float, float)` |
+| `Java_com_codex_leicaapp_LegendaryPostProcessor_applyMonochrome` | 0xa994 | `(Bitmap, String, String)` |
+| `Java_com_codex_leicaapp_LegendaryPostProcessor_applyStyle` | 0xc2a4 | `(Bitmap, String, String, String, int, int, int)` |
+
+If `libleicamodelembed.so` is used instead (recommended), the same JNI symbols
+are re-exported with B12 wrapper logic at offsets in section 2.2 of page 12.
+
+## 10. Integration architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ Camera process (com.android.camera)                             │
+│  ModuleMain.installLutFallbackHook()                            │
+│    └─ Bitmap.compress hook → EssentialPipeline.handle()        │
+│         └─ bindService(:essential) → send JPEG via pipe        │
+└──────────────────────────┬──────────────────────────────────────┘
+                           │ Binder IPC (ParcelFileDescriptor)
+                           ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ Module process (io.rezikham.hypercameramod:essential)           │
+│  EssentialService.onBind() → Messenger → handler thread         │
+│    onMessage(MSG_PROCESS):                                      │
+│      1. validate caller UID = com.android.camera                │
+│      2. read JPEG from input pipe                               │
+│      3. loadNative(): System.loadLibrary("c++_shared")          │
+│         System.loadLibrary("m9base")                            │
+│      4. ensureAsset(.bin) → copy from APK assets to files dir   │
+│      5. decode JPEG → ARGB_8888 mutable bitmap (sRGB)           │
+│      6. LegendaryPostProcessor.applyOriginalFilter(bitmap, ...) │
+│      7. if M3: try applyMonochrome() → fallback desaturate()    │
+│      8. bitmap.compress(JPEG, 95) + copyExif()                  │
+│      9. write result to output pipe → reply to camera           │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Key design decisions
+
+| Decision | Rationale |
+|---|---|
+| Bound service (not thread) | Native crash isolation; binder death detection; no storage permission |
+| ParcelFileDescriptor pipes | Zero-copy-ish; no world-readable files; works across UID boundary |
+| Off-by-default (`essential_pipeline_enabled`) | Only path loading third-party native code; explicit opt-in |
+| 3-min freshness on `lastLegend` | Prevents stale M3/M9 selection on subsequent normal captures |
+| HAL LUT slot guard | Prevents double-processing (HAL + module) on same file |
+| sRGB decode for both M3/M9 | Matches `MadridLegendary`; simpler than full `processStyled` DISPLAY_P3 path |
+| `libleicamodelembed` not loaded | Module is minimal; B12 reconciliation omitted (see page 12 §10) |
+
+## 11. Device-dependent tasks (for when phone connects)
+
+| Task | Command / Action | Expected Outcome |
+|---|---|---|
+| Verify `libm9base.so` loads | `adb shell setprop camera.feature.essential_pipeline 1; adb logcat -s HCM-Essential` | `libm9base loaded` |
+| Test M3 capture | Select M3 in Leica UI, take photo | `legend=2`, JPEG is true monochrome (R=G=B) |
+| Test M9 capture | Select M9, take photo | `legend=1`, colour JPEG with M9 parametric look |
+| Verify EXIF preservation | `exiftool` on result | Original EXIF APP1 copied, no Leica container added |
+| Test Monopan (with libs) | Copy optional libs to jniLibs, rebuild, test M3 | `Monopan grain=true` or fast fallback; no crash |
+| Test crash isolation | `am force-stop io.rezikham.hypercameramod` during processing | Camera stays alive; original JPEG kept |
+| Test double-processing guard | Enable HAL LUT slot + Essential pipeline, take M3 photo | Pipeline logs skip; HAL slot renders |
+| Measure latency | Log timestamps in `EssentialPipeline.handle()` | End-to-end < 5 s typical |

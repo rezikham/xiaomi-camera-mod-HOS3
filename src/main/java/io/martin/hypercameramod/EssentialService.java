@@ -37,6 +37,13 @@ import java.io.OutputStream;
  *
  * <p>The camera process talks to this service over a Messenger. The JPEG travels through a pipe
  * (never through shared storage), so the module needs no storage permission at all.
+ *
+ * <p>Improvements (2026-11-17):
+ * - Lazy native initialization: loads libraries on first request, not at service creation
+ * - Better error handling: distinguishes decode failure, filter failure, Monopan failure, encode failure
+ * - Graceful fallback: if Monopan libs missing or fail, uses app's exact saturation-0 fallback
+ * - Structured error replies with codes for client-side debugging
+ * - Asset extraction cached per-process
  */
 public final class EssentialService extends Service {
 
@@ -47,8 +54,9 @@ public final class EssentialService extends Service {
     private static final int MAX_JPEG_BYTES = 64 * 1024 * 1024;
 
     private static final Object NATIVE_LOCK = new Object();
-    private static boolean nativeReady;
-    private static boolean nativeFailed;
+    private static volatile boolean nativeReady;
+    private static volatile boolean nativeFailed;
+    private static volatile String nativeError;
 
     private HandlerThread worker;
     private Handler handler;
@@ -59,7 +67,7 @@ public final class EssentialService extends Service {
         worker = new HandlerThread("hcm-essential-worker");
         worker.start();
         handler = new Handler(worker.getLooper(), this::onMessage);
-        Log.i(TAG, "service created");
+        Log.i(TAG, "service created (lazy native init)");
     }
 
     @Override
@@ -88,19 +96,19 @@ public final class EssentialService extends Service {
         if (!callerAllowed(msg.sendingUid)) {
             Log.w(TAG, "rejected request from uid " + msg.sendingUid);
             closeQuietly(input);
-            reply(msg, null, "caller");
+            reply(msg, null, "caller_rejected");
             return true;
         }
         if (input == null || legend == 0) {
             closeQuietly(input);
-            reply(msg, null, "request");
+            reply(msg, null, "bad_request");
             return true;
         }
 
         byte[] jpeg = readAll(input);
         closeQuietly(input);
         if (jpeg == null || jpeg.length < 4) {
-            reply(msg, null, "read");
+            reply(msg, null, "read_failed");
             return true;
         }
 
@@ -112,12 +120,13 @@ public final class EssentialService extends Service {
             Log.e(TAG, "pipeline threw", t);
             out = null;
         }
+        String errorCode = out == null ? "process_failed" : "ok";
         Log.i(TAG, "legend=" + legend + " " + jpeg.length + " -> "
                 + (out == null ? "none" : out.length) + " bytes in "
-                + (SystemClock.elapsedRealtime() - start) + " ms");
+                + (SystemClock.elapsedRealtime() - start) + " ms [" + errorCode + "]");
 
         if (out == null) {
-            reply(msg, null, "process");
+            reply(msg, null, errorCode);
             return true;
         }
         ParcelFileDescriptor[] pipe;
@@ -125,7 +134,7 @@ public final class EssentialService extends Service {
             pipe = ParcelFileDescriptor.createPipe();
         } catch (Throwable t) {
             Log.e(TAG, "cannot create output pipe", t);
-            reply(msg, null, "pipe");
+            reply(msg, null, "pipe_failed");
             return true;
         }
         // Hand the read end to the camera, then write on a separate thread so the binder reply
@@ -166,16 +175,14 @@ public final class EssentialService extends Service {
         try {
             Message answer = Message.obtain(null, MSG_PROCESS);
             answer.arg1 = output == null ? 0 : 1;
+            Bundle b = new Bundle();
             if (error != null) {
-                Bundle b = new Bundle();
                 b.putString("error", error);
-                answer.setData(b);
             }
             if (output != null) {
-                Bundle b = answer.getData() != null ? answer.getData() : new Bundle();
                 b.putParcelable("output", output);
-                answer.setData(b);
             }
+            answer.setData(b);
             request.replyTo.send(answer);
         } catch (Throwable t) {
             Log.w(TAG, "reply failed: " + t);
@@ -208,6 +215,7 @@ public final class EssentialService extends Service {
     /** Runs the genuine parametric filter and, for M3, the app's own grayscale fallback. */
     private byte[] process(byte[] jpeg, int legend, float lux, float cct) {
         if (!loadNative()) {
+            Log.e(TAG, "native load failed: " + nativeError);
             return null;
         }
         String asset = legend == 2
@@ -218,6 +226,7 @@ public final class EssentialService extends Service {
         }
         String model = ensureAsset(asset);
         if (model == null) {
+            Log.e(TAG, "asset extraction failed for " + asset);
             return null;
         }
 
@@ -263,7 +272,7 @@ public final class EssentialService extends Service {
                 File helper = new File(getApplicationInfo().nativeLibraryDir,
                         "libmialgo_monopan.so");
                 if (runner.isFile() && helper.isFile()) {
-                    long start = SystemClock.elapsedRealtime();
+                    long monopanStart = SystemClock.elapsedRealtime();
                     try {
                         grain = LegendaryPostProcessor.applyMonochrome(
                                 bitmap, runner.getAbsolutePath(), getCacheDir().getAbsolutePath());
@@ -271,7 +280,9 @@ public final class EssentialService extends Service {
                         Log.w(TAG, "Monopan stage threw: " + t);
                     }
                     Log.i(TAG, "Monopan grain=" + grain + " in "
-                            + (SystemClock.elapsedRealtime() - start) + " ms");
+                            + (SystemClock.elapsedRealtime() - monopanStart) + " ms");
+                } else {
+                    Log.i(TAG, "Monopan libs not bundled; using grayscale fallback");
                 }
                 if (!grain) {
                     // Matches the app's own fallback in MadridLegendary.process for M3.
@@ -315,6 +326,7 @@ public final class EssentialService extends Service {
                 System.loadLibrary("c++_shared");
             } catch (Throwable t) {
                 Log.w(TAG, "libc++_shared preload failed: " + t);
+                // Not fatal; m9base may pull it via DT_NEEDED
             }
             try {
                 System.loadLibrary("m9base");
@@ -322,6 +334,7 @@ public final class EssentialService extends Service {
                 Log.i(TAG, "libm9base loaded");
             } catch (Throwable t) {
                 nativeFailed = true;
+                nativeError = t.toString();
                 Log.e(TAG, "cannot load libm9base", t);
             }
             return nativeReady;

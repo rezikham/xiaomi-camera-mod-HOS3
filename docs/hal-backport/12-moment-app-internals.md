@@ -1,6 +1,6 @@
-# 12 — Essential Moments internals
+# 12 — Moment App internals
 
-This page is a comprehensive static-analysis report of the standalone "Essential Moments" camera app (`com.martin.essentialmoments`, version 6.8.001960.0), built from the input APK
+This page is a comprehensive static-analysis report of the standalone "Moment App" camera app (`com.martin.essentialmoments`, version 6.8.001960.0), built from the input APK
 `essential-moments (1).apk` (SHA-256 `6585eeec28b0b1affbecbf050ceb83cc5294032cafa8cc3798bbe1316f2ee7fe`, `[observed]`).
 
 **Scope:** static analysis on the host APK only. No `adb`, no device install, no runtime execution. Evidence markers follow `[observed]`, `[inferred]`, `[unknown]`.
@@ -617,4 +617,4 @@ The capture path is the authoritative M3/M9 rendering; preview is a best-effort 
 
 All offsets, signatures, and call chains above were obtained by static analysis of `essential-moments (1).apk`: jadx 1.5.6 decompilation of `classes.dex`…`classes13.dex` (sources at `/tmp/opencode/em_src/sources`), `nm -D`/`objdump` of the extracted `lib/arm64-v8a` `.so` files, and `parse_legend18.py` parsing of the `.bin` assets. Markers: `[observed]` = directly verified in the APK; `[inferred]` = deduced from disassembly/control flow; `[unknown]` = not resolved by static analysis.
 
-Commit scope: only `docs/hal-backport/12-essential-moments-internals.md`. No `adb`, no device install, no other files touched.
+Commit scope: only `docs/hal-backport/12-moment-app-internals.md`. No `adb`, no device install, no other files touched.

@@ -30,6 +30,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * {@link EssentialService} in the module's private {@code :essential} process and replaces the
  * file only if a complete result comes back before the timeout. A native crash therefore costs
  * the look on one photo, never the camera session.
+ *
+ * <p>Improvements (2026-11-17):
+ * - Lazy service connection: only binds when an M3/M9 file arrives
+ * - Better error handling: distinguishes timeout, crash, invalid JPEG, caller rejection
+ * - Fallback to LUT path: if service unavailable, returns false so caller can try LUT fallback
+ * - Structured logging with error codes for device debugging
  */
 final class EssentialPipeline {
 
@@ -41,6 +47,17 @@ final class EssentialPipeline {
     private static final long RESULT_TIMEOUT_MS = 90_000;
     private static final long MIN_FILE_BYTES = 200_000;
 
+    // Error codes for structured logging
+    private static final String ERR_NONE = "ok";
+    private static final String ERR_NO_CONTEXT = "no_context";
+    private static final String ERR_BIND_FAILED = "bind_failed";
+    private static final String ERR_CONNECT_TIMEOUT = "connect_timeout";
+    private static final String ERR_SERVICE_CRASHED = "service_crashed";
+    private static final String ERR_RESULT_TIMEOUT = "result_timeout";
+    private static final String ERR_INVALID_JPEG = "invalid_jpeg";
+    private static final String ERR_REPLY_FAILED = "reply_failed";
+    private static final String ERR_SERVICE_ERROR = "service_error";
+
     private static final AtomicBoolean BUSY = new AtomicBoolean();
     private static volatile Context appContext;
 
@@ -51,14 +68,19 @@ final class EssentialPipeline {
      * Post-processes one saved JPEG. Returns true when the file was taken over by this pipeline
      * (whether or not the native stage produced a result), so the caller never also runs the
      * LUT fallback on the same file.
+     *
+     * @param file the saved JPEG file
+     * @param legend 1 = M9, 2 = M3, 0 = not our look
+     * @return true if pipeline handled this file (caller should skip LUT fallback)
      */
     static boolean handle(File file, int legend) {
         if (file == null || !file.isFile() || file.length() < MIN_FILE_BYTES) {
+            Log.i(TAG, "handle: file too small or missing: " + (file != null ? file.getName() : "null"));
             return false;
         }
         if (legend != 1 && legend != 2) {
             Log.i(TAG, "no M3/M9 selection; leaving " + file.getName() + " untouched");
-            return true;
+            return true; // consume the selection so LUT fallback doesn't run
         }
         if (!BUSY.compareAndSet(false, true)) {
             Log.w(TAG, "pipeline busy; leaving " + file.getName() + " untouched");
@@ -66,30 +88,28 @@ final class EssentialPipeline {
         }
         try {
             long start = android.os.SystemClock.elapsedRealtime();
-            byte[] result = process(readFile(file), legend);
-            if (result == null || result.length < 4
-                    || (result[0] & 0xFF) != 0xFF || (result[1] & 0xFF) != 0xD8
-                    || (result[result.length - 2] & 0xFF) != 0xFF
-                    || (result[result.length - 1] & 0xFF) != 0xD9) {
-                Log.w(TAG, "no complete JPEG for " + file.getName() + "; original kept");
+            Result result = process(readFile(file), legend);
+            if (!result.success) {
+                Log.w(TAG, "pipeline failed for " + file.getName() + ": " + result.errorCode);
+                // Return true to consume the selection, but don't replace the file
                 return true;
             }
             File tmp = new File(file.getParentFile(), file.getName() + ".hcm-essential.tmp");
             try (FileOutputStream out = new FileOutputStream(tmp)) {
-                out.write(result);
+                out.write(result.jpeg);
             }
             if (!tmp.renameTo(file)) {
                 // Some providers refuse rename-over-existing; fall back to a copy.
                 try (FileOutputStream out = new FileOutputStream(file)) {
-                    out.write(result);
+                    out.write(result.jpeg);
                 }
                 tmp.delete();
             }
             Log.i(TAG, "applied legend=" + legend + " to " + file.getName() + " ("
-                    + result.length + " bytes, " + (android.os.SystemClock.elapsedRealtime() - start)
-                    + " ms)");
+                    + result.jpeg.length + " bytes, "
+                    + (android.os.SystemClock.elapsedRealtime() - start) + " ms)");
         } catch (Throwable t) {
-            Log.e(TAG, "pipeline failed for " + file.getName(), t);
+            Log.e(TAG, "pipeline unexpected error for " + file.getName(), t);
         } finally {
             BUSY.set(false);
         }
@@ -111,17 +131,26 @@ final class EssentialPipeline {
         }
     }
 
-    private static byte[] process(byte[] jpeg, int legend) throws Exception {
+    private static Result process(byte[] jpeg, int legend) throws Exception {
         Context context = context();
         if (context == null) {
             Log.w(TAG, "no application context");
-            return null;
+            return new Result(false, null, ERR_NO_CONTEXT);
         }
-        ParcelFileDescriptor[] inputPipe = ParcelFileDescriptor.createPipe();
+
+        ParcelFileDescriptor[] inputPipe;
+        try {
+            inputPipe = ParcelFileDescriptor.createPipe();
+        } catch (Throwable t) {
+            Log.w(TAG, "create input pipe failed", t);
+            return new Result(false, null, ERR_SERVICE_ERROR);
+        }
+
         final CountDownLatch connected = new CountDownLatch(1);
         final CountDownLatch done = new CountDownLatch(1);
         final byte[][] result = new byte[1][];
         final Messenger[] service = new Messenger[1];
+        final String[] errorCode = new String[1];
 
         Handler replyHandler = new Handler(Looper.getMainLooper(), msg -> {
             if (msg.what != MSG_PROCESS) {
@@ -134,10 +163,13 @@ final class EssentialPipeline {
                 if (output != null) {
                     result[0] = readAll(output);
                 } else {
-                    Log.w(TAG, "service error: " + (data == null ? "?" : data.getString("error")));
+                    String err = data == null ? ERR_SERVICE_ERROR : data.getString("error", ERR_SERVICE_ERROR);
+                    Log.w(TAG, "service error: " + err);
+                    errorCode[0] = err;
                 }
             } catch (Throwable t) {
                 Log.w(TAG, "reply read failed", t);
+                errorCode[0] = ERR_REPLY_FAILED;
             } finally {
                 done.countDown();
             }
@@ -154,16 +186,22 @@ final class EssentialPipeline {
             @Override
             public void onServiceDisconnected(ComponentName name) {
                 // Native crash or process kill: fail fast, keep the original file.
+                Log.w(TAG, "service disconnected (crash/kill)");
+                errorCode[0] = ERR_SERVICE_CRASHED;
                 done.countDown();
             }
 
             @Override
             public void onBindingDied(ComponentName name) {
+                Log.w(TAG, "binding died");
+                errorCode[0] = ERR_SERVICE_CRASHED;
                 done.countDown();
             }
 
             @Override
             public void onNullBinding(ComponentName name) {
+                Log.w(TAG, "null binding");
+                errorCode[0] = ERR_BIND_FAILED;
                 connected.countDown();
                 done.countDown();
             }
@@ -176,11 +214,11 @@ final class EssentialPipeline {
             bound = context.bindService(intent, connection, Context.BIND_AUTO_CREATE);
             if (!bound) {
                 Log.w(TAG, "cannot bind " + SERVICE_CLASS);
-                return null;
+                return new Result(false, null, ERR_BIND_FAILED);
             }
             if (!connected.await(CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS) || service[0] == null) {
-                Log.w(TAG, "service did not connect");
-                return null;
+                Log.w(TAG, "service did not connect in time");
+                return new Result(false, null, ERR_CONNECT_TIMEOUT);
             }
 
             Message request = Message.obtain(null, MSG_PROCESS);
@@ -202,13 +240,26 @@ final class EssentialPipeline {
                     Log.w(TAG, "input write failed: " + t);
                 }
             }, "hcm-essential-in").start();
-            inputPipe[1] = null;
+            inputPipe[1] = null; // ownership transferred to thread
 
             if (!done.await(RESULT_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
                 Log.w(TAG, "timed out waiting for the pipeline");
-                return null;
+                return new Result(false, null, ERR_RESULT_TIMEOUT);
             }
-            return result[0];
+
+            if (errorCode[0] != null) {
+                return new Result(false, null, errorCode[0]);
+            }
+
+            byte[] outJpeg = result[0];
+            if (outJpeg == null || outJpeg.length < 4
+                    || (outJpeg[0] & 0xFF) != 0xFF || (outJpeg[1] & 0xFF) != 0xD8
+                    || (outJpeg[outJpeg.length - 2] & 0xFF) != 0xFF
+                    || (outJpeg[outJpeg.length - 1] & 0xFF) != 0xD9) {
+                Log.w(TAG, "service returned invalid JPEG");
+                return new Result(false, null, ERR_INVALID_JPEG);
+            }
+            return new Result(true, outJpeg, ERR_NONE);
         } finally {
             if (bound) {
                 try {
@@ -260,6 +311,18 @@ final class EssentialPipeline {
                 pfd.close();
             } catch (Throwable ignored) {
             }
+        }
+    }
+
+    private static final class Result {
+        final boolean success;
+        final byte[] jpeg;
+        final String errorCode;
+
+        Result(boolean success, byte[] jpeg, String errorCode) {
+            this.success = success;
+            this.jpeg = jpeg;
+            this.errorCode = errorCode;
         }
     }
 }

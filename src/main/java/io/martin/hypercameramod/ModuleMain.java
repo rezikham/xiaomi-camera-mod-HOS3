@@ -29,8 +29,12 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.PrintWriter;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 import io.github.libxposed.api.XposedModule;
@@ -99,7 +103,7 @@ public class ModuleMain extends XposedModule {
     private static final int MODE_PORTRAIT = 171;
     private static final String ORIGINAL_PORTRAIT_KEY = "original_portrait_enabled";
     private static final String COMPAT_FALLBACK_KEY = "compat_fallback_enabled";
-    // Genuine Essential Moments M3/M9 pipeline. Off by default. Runs all native work in the
+    // Genuine Moment App M3/M9 pipeline. Off by default. Runs all native work in the
     // module's private :essential process (EssentialService), never in the camera process.
     private static final String ESSENTIAL_PIPELINE_KEY = "essential_pipeline_enabled";
     private static final String ESSENTIAL_PIPELINE_PROP = "camera.feature.essential_pipeline";
@@ -147,7 +151,8 @@ public class ModuleMain extends XposedModule {
     private volatile boolean textHooked;
     // -1 = not read yet, 0 = off, 1 = on. Read once per Camera process.
     private volatile int originalPortraitState = -1;
-
+    // LUT files staged to /data/vendor/camera/ on first M3/M9 selection.
+    private static volatile boolean lutFilesInstalled = false;
     @Override
     public void onPackageLoaded(PackageLoadedParam param) {
         install("onPackageLoaded", param.getPackageName(), param.getDefaultClassLoader());
@@ -159,6 +164,9 @@ public class ModuleMain extends XposedModule {
         if (CAMERA_PACKAGE.equals(param.getPackageName())) {
             scheduleNotice();
             installLutFileWatcher();
+            // Stage LUT files at camera app startup (Option B: no KSU module needed).
+            // Runs in camera process context with su; requires root granted to camera app.
+            ensureLutFiles();
         }
     }
 
@@ -194,6 +202,53 @@ public class ModuleMain extends XposedModule {
     }
 
     // ---- 1. Palette and Parameters ----------------------------------------------------------
+
+    // Stage Leica LUT files from module APK to /data/vendor/camera/ so the stock filter
+    // node can render M3/M9. Requires root (su); fails silently if not rooted.
+    // Writes bytes directly through su stdin — no temp files needed.
+    private static void ensureLutFiles() {
+        if (lutFilesInstalled) {
+            return;
+        }
+        try {
+            copyAssetToSystem("leica_luts/M3_Monopan.png", "/data/vendor/camera/lut_m3.png");
+            copyAssetToSystem("leica_luts/130_LeicaNatural.png", "/data/vendor/camera/lut_m9.png");
+            lutFilesInstalled = true;
+            android.util.Log.i(TAG, "LUT files staged to /data/vendor/camera/");
+        } catch (Throwable t) {
+            android.util.Log.w(TAG, "Failed to stage LUT files: " + t);
+        }
+    }
+
+    private static void copyAssetToSystem(String assetName, String destPath) throws Exception {
+        ZipFile zip = new ZipFile(moduleApk);
+        ZipEntry entry = zip.getEntry("assets/" + assetName);
+        if (entry == null) {
+            throw new Exception("Asset not found: " + assetName);
+        }
+        InputStream is = zip.getInputStream(entry);
+        byte[] data = is.readAllBytes();
+        is.close();
+        zip.close();
+
+        // Copy to system location using su: pipe LUT bytes through su stdin,
+        // write to /data/vendor/camera/<name>, chmod 0644.
+        Process su = Runtime.getRuntime().exec("su");
+        OutputStream os = su.getOutputStream();
+        PrintWriter pw = new PrintWriter(os);
+        pw.println("cp /dev/stdin " + destPath);
+        pw.println("chmod 0644 " + destPath);
+        pw.println("exit");
+        pw.flush();
+
+        // Write LUT bytes to su's stdin after the commands
+        os.write(data);
+        os.flush();
+        int exitCode = su.waitFor();
+        if (exitCode != 0) {
+            throw new Exception("su exit code: " + exitCode);
+        }
+    }
 
     private void installPropertyHook() {
         if (propertiesHooked) {
@@ -705,16 +760,16 @@ public class ModuleMain extends XposedModule {
             byte latest = lastLegend;
             if (essentialPipelineEnabled()) {
                 if (halLutSlotEnabled()) {
-                    log(Log.INFO, TAG, "Essential pipeline skipped: HAL LUT slot is on");
+                    log(Log.INFO, TAG, "Moment App pipeline skipped: HAL LUT slot is on");
                     return;
                 }
                 long age = android.os.SystemClock.elapsedRealtime() - lastLegendTime;
                 if (latest == 0 || age > ESSENTIAL_LEGEND_FRESH_MS) {
-                    log(Log.INFO, TAG, "Essential pipeline skipped " + file.getName()
+                    log(Log.INFO, TAG, "Moment App pipeline skipped " + file.getName()
                             + ": no fresh M3/M9 selection (legend=" + latest + ", age=" + age + " ms)");
                     return;
                 }
-                log(Log.INFO, TAG, "Essential candidate " + file.getName() + " legend=" + latest);
+                log(Log.INFO, TAG, "Moment App candidate " + file.getName() + " legend=" + latest);
                 EssentialPipeline.handle(file, latest);
                 // One selection, one file: a later normal capture must not inherit this look.
                 lastLegend = 0;
@@ -777,6 +832,8 @@ public class ModuleMain extends XposedModule {
     // Fallback for builds that never send com.xiaomi.sessionparams.legendMode: read the style the
     // app has stored for the rear camera. M9 = 1, M3 = 2.
     private static byte legendFromPrefs() {
+        // Stage LUT files on first M3/M9 selection so the stock filter node can render them.
+        ensureLutFiles();
         try {
             Class<?> sp = Class.forName("android.os.SystemProperties");
             String forced = (String) sp.getMethod("get", String.class, String.class)
@@ -894,7 +951,7 @@ public class ModuleMain extends XposedModule {
         return propertyOn("camera.feature.compat_fallback");
     }
 
-    // Genuine Leica Essential pipeline from Essential Moments. Off by default; all native work
+    // Genuine Moment App pipeline (from Moment App). Off by default; all native work
     // happens in the module's :essential process.
     private boolean essentialPipelineEnabled() {
         if (propertyOn(ESSENTIAL_PIPELINE_PROP)) {
@@ -1027,7 +1084,7 @@ public class ModuleMain extends XposedModule {
                 return chain.proceed();
             });
             legendObserverHooked = true;
-            log(Log.INFO, TAG, "observing " + LEGEND_MODE_KEY + " for the Essential pipeline");
+            log(Log.INFO, TAG, "observing " + LEGEND_MODE_KEY + " for the Moment App pipeline");
         } catch (Throwable t) {
             log(Log.WARN, TAG, "cannot observe the Legendary style: " + t);
         }
@@ -1090,14 +1147,14 @@ public class ModuleMain extends XposedModule {
         return out;
     }
 
-    // On unless camera.feature.essential_std is 0.
+    // Off unless camera.feature.essential_std is 1.
     private static boolean essentialStdEnabled() {
         try {
             Class<?> props = Class.forName("android.os.SystemProperties");
-            return !"0".equals(props.getMethod("get", String.class, String.class)
-                    .invoke(null, ESSENTIAL_STD_KEY, "1"));
+            return "1".equals(props.getMethod("get", String.class, String.class)
+                    .invoke(null, ESSENTIAL_STD_KEY, "0"));
         } catch (Throwable t) {
-            return true;
+            return false;
         }
     }
 
