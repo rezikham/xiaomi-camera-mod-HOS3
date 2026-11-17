@@ -194,52 +194,5 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Compose release notes from CHANGELOG.md
-      if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-      run: |
-        VERSION="${GITHUB_REF_NAME#v}"
-        {
-          echo "**Version:** \`$VERSION\` (versionCode \`${{ steps.calc_version.outputs.version_code }}\`)"
-          echo
-          echo "**Commit:** ${{ github.sha }}"
-          echo
-          awk -v ver="$VERSION" '
-            index($0, "## [" ver "]") == 1 { found = 1; next }
-            found && index($0, "## [") == 1 { exit }
-            found { print }
-          ' CHANGELOG.md
-          echo
-          echo "**Module:** \`HyperCameraMod\` — the single module, with the HyperFilmFilters features built in. Do not install HyperFilmFilters alongside it."
-          echo
-          echo "**Requirements:**"
-          echo "- Xiaomi phone on HyperOS 3 or HyperOS 4 (tested: Xiaomi 14 Ultra, Xiaomi 17 Ultra)"
-          echo "- Xiaomi Camera 6.7 (verified on the 14 Ultra: HyperOS 3.0.304.0.WNAMIXM, Camera 6.7.000280.0)"
-          echo "- Root: Magisk, KernelSU or APatch. Root is only needed for the **Force Stop Camera** button."
-          echo "- LSPosed or Vector with libxposed API 101/102. The settings-to-camera toggles need API 102."
-          echo "- Module scope: \`com.android.camera\` only, package \`io.rezikham.hypercameramod\`"
-          echo
-          echo "**Installation:**"
-          echo "1. Install the APK and enable the module in LSPosed/Vector, scope \`com.android.camera\`"
-          echo "2. Open HyperCameraMod settings from the app drawer or the module list"
-          echo "3. Set the toggles, then tap **Force Stop Camera** (grant root) and open Camera again"
-          echo
-          echo "**Logs / reporting a problem:**"
-          echo "1. If a feature is missing, check its toggle, tap **Force Stop Camera**, and open Camera again."
-          echo "2. In LSPosed/Vector open **Logs** and filter for \`HyperCameraMod\`, or from a root shell: \`su -c \"logcat -c\"\`, open Camera, then \`su -c \"logcat -d -s HyperCameraMod\"\`."
-          echo "3. Include your phone model, HyperOS version, Camera version (e.g. \`6.7.000500.0\`), and the log lines."
-        } > release-notes.md
-        cat release-notes.md
-
-    - name: Create Versioned Release (stable builds only)
-      if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-      uses: softprops/action-gh-release@v2
-      with:
-        tag_name: ${{ github.ref_name }}
-        name: "HyperCameraMod ${{ github.ref_name }}"
-        body_path: release-notes.md
-        draft: false
-        prerelease: false
-        files: |
-          build/outputs/apk/release/io.rezikham.hypercameramod-${{ steps.calc_version.outputs.version_name }}.apk
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    # Stable releases are now manual (see RELEASE.md). CI only publishes to CI-Release.
+    # To create a stable release: tag locally, push tag, then manually create release from CHANGELOG.
