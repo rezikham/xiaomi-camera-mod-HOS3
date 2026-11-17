@@ -1147,15 +1147,16 @@ public class ModuleMain extends XposedModule {
         return out;
     }
 
-    // Off unless camera.feature.essential_std is 1.
-    private static boolean essentialStdEnabled() {
+    // Reads the essential_mode_enabled preference mirrored from SettingsActivity.
+    private boolean essentialStdEnabled() {
         try {
-            Class<?> props = Class.forName("android.os.SystemProperties");
-            return "1".equals(props.getMethod("get", String.class, String.class)
-                    .invoke(null, ESSENTIAL_STD_KEY, "0"));
+            android.content.SharedPreferences p = getRemotePreferences("hypercameramod");
+            if (p != null && p.contains("essential_mode_enabled")) {
+                return p.getBoolean("essential_mode_enabled", true);
+            }
         } catch (Throwable t) {
-            return false;
         }
+        return true; // default on
     }
 
     private static boolean propertyOn(String key) {
