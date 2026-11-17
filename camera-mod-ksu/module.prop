@@ -1,6 +1,6 @@
 id=hypercameramod
 name=HyperCameraMod
-version=1.1.0-187
-versionCode=187
+version=1.1.0-193
+versionCode=193
 author=rezikham
-description=HyperCameraMod v1.1.0 - M3/M9 Leica looks + Original Portrait software for Aurora (14 Ultra). LSPosed module for Xiaomi Camera 6.7. Stages M3/M9 LUTs, enables HAL engine gate. Includes APK auto-install as user app (grant root in KernelSU after install). Compatible with nomount/zeromount/mountify metamodules. No ChiX plugin.
+description=HyperCameraMod 1.1.0-193 - M3/M9 Leica looks + Original Portrait software for Aurora (14 Ultra). LSPosed module for Xiaomi Camera 6.7. Stages M3/M9 LUTs, enables HAL engine gate. Includes APK auto-install as user app (grant root in KernelSU after install). Compatible with nomount/zeromount/mountify metamodules. No ChiX plugin.
