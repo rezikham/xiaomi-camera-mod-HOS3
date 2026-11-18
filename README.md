@@ -30,7 +30,7 @@ Package: `io.rezikham.hypercameramod`
 
 | Device | Model / codename | OS | Camera | Verified |
 | ------ | ---------------- | -- | ------ | -------- |
-| Xiaomi 14 Ultra | `24031PN0DC` / aurora | HyperOS `3.0.304.0.WNAMIXM` (Android 16) | `6.7.000280.0` | Original Portrait toggle, film filters |
+| Xiaomi 14 Ultra | `24031PN0DC` / aurora | HyperOS `3.0.304.0.WNAMIXM` (Android 16) | `6.7.000280.0` | Original Portrait toggle (software), film filters, HAL module experimental |
 | Xiaomi 14 Pro Ti | `23116PN5BC` / shennong | HyperOS `3.0.310.0.WNBCNXM` (Android 16) | `6.4.000430.0` | film filters |
 | Xiaomi 18 Pro Max | `M154FF` / madrid | HyperOS `4.0.29.0.XEOCNXM` (Android 17) | `6.8.002230.0` | film filters (static, needs a device log); Legend/M10R native |
 
@@ -69,7 +69,45 @@ The module can only expose what the phone's camera hardware layer (`camera.qcom.
 - **M3/M9 (Leica Essential)** need the Leica Essential processing available on the 17 Ultra-class hardware layer. The 14 Ultra HAL has no M10R processing either.
 - **Moment App pipeline (v1.1.0+)** — **Post-capture implementation** using the genuine Moment App parametric filter (`libm9base.so`) + Monopan grain (`libmialgo_monopan.so`) in a private module process. Off by default; enable in settings.
 
-These are firmware limitations for native processing. The module provides **software post-capture alternatives** for Original Portrait and M3/M9 on 14 Ultra. A first **experimental HAL overlay** that copies the Nezha M3/M9 plugin stack to Aurora is in [`docs/hal-backport/`](docs/hal-backport/). It has been installed on a physical 14 Ultra: the SAT pipeline accepts the node, but Aurora's plugin registry does not register the Nezha plugin yet. The **Compatibility fallback** toggle (Settings) maps M9/M3 to the stock Leica Authentic/Vibrant colour path as an explicit approximation; it is off by default and is not the real M3/M9 pipeline. Original colour in Photo is unaffected.
+These are firmware limitations for native processing. The module provides **software post-capture alternatives** for Original Portrait and M3/M9 on 14 Ultra.
+
+## Native HAL Backport Path (Experimental, Requires Device)
+
+Native M3/M9 and Original Portrait on Aurora require **patching `camera.qcom.so`** — mount-based file overlays alone cannot work because Aurora's HAL binary has no code path to load donor plugins or the `MiaPluginModule` vtable.
+
+### What's needed for native support
+
+| Component | What must change | Location |
+|-----------|-----------------|----------|
+| `legendMode` handling | HAL must copy `com.xiaomi.sessionparams.legendMode` into MiMetadata tag 508 | `camera.qcom.so` binary patch |
+| `oemIsLegendMode` | Compute `(legendMode-1) < 2` for values 1/2 | `camera.qcom.so` binary patch |
+| `MiaPluginModule` loader | `dlopen` `libAncHumanPreviewBokeh.so`, call `get_api_impl`, walk 10-function vtable | `camera.qcom.so` binary patch |
+| Plugin nodes | `mileicafilter`, `legendST` in `leicasnapshot.json` | Already in module ZIP |
+| QNN models | V81 `.minn` models → V75-compatible format | Porting required |
+
+### Offline artifacts (ready for device testing)
+
+- `docs/hal-backport/14-hal-patch-specification.md` — exact binary patch spec (with Aurora binary offsets)
+- `tools/hal-port/aurora/hal_patch.py` — HAL extraction, analysis, patching, module build scripts
+- `tools/hal-port/aurora/hal_shim/` — C++ shim layer for `MiaPluginModule` compatibility
+- `docs/hal-backport/15-qnn-model-porting.md` — QNN HTP V81→V75 porting plan
+- `docs/hal-backport/16-software-native-path.md` — software-only "close to native" path (EXIF tagging, color profile)
+- `docs/hal-backport/17-property-workaround.md` — property-based software workaround (`persist.vendor.camera.leicafilter.forceEnable`)
+
+### Software-only "close to native" (no HAL patch)
+
+For users who cannot risk HAL patching, the software path adds:
+
+| Enhancement | What it does | Status |
+|-------------|-------------|--------|
+| EXIF `legendmode` tag (0x88b0) | Gallery shows LEICA button on M3/M9 photos | Specified |
+| Color profile matching | Parametric contrast/saturation/highlights to match donor look | Specified (needs measurement) |
+| Preview bokeh | Software blur at preview resolution | Deferred (performance) |
+| `persist.vendor.camera.leicafilter.forceEnable` | Forces `mileicafilter.so` to process captures | Specified (requires module) |
+
+**Important**: The property workaround requires our KSU module (provides `mileicafilter.so`). Stock Aurora does NOT have this plugin natively.
+
+The **Compatibility fallback** toggle (Settings) maps M9/M3 to the stock Leica Authentic/Vibrant colour path as an explicit approximation; it is off by default and is not the real M3/M9 pipeline. Original colour in Photo is unaffected.
 
 **CMOS is off by default.** The Xiaomi 17 Ultra's hardware layer (`camera.qcom.core.so`, `com.qti.chi.override.so`) has the Leica Essential processing for M3 and M9 only. A CMOS shot comes back as an ordinary picture, without the Leica processing and without the `legendmode` tag the Gallery uses for its LEICA button. Enable it with the CMOS (M10R) toggle (or `camera.feature.m10r=1`) only to experiment, or on a phone whose firmware supports it.
 
@@ -92,11 +130,25 @@ The toolbar has **Force Stop Camera** (root required; grant it in Magisk/KernelS
 
 ## Usage
 
-1. Install the module and enable it in LSPosed or Vector, scope **Camera** only.
+### Standard LSPosed Module (APK only)
+1. Install the APK and enable it in LSPosed or Vector, scope **Camera** only.
 2. Open **HyperCameraMod** settings and set the toggles.
 3. Tap **Force Stop Camera**, then open Camera again.
 
 If the camera misbehaves, disable the module and force-stop Camera to restore the stock behaviour.
+
+### Experimental HAL Backport Module (KernelSU)
+For native Original Portrait on 14 Ultra (requires device testing):
+
+1. Flash `camera-mod-ksu-v1.1.0-223-fixed.zip` via KernelSU
+2. Reboot device
+3. Open KernelSU app → Grant root to "HyperCameraMod" (io.rezikham.hypercameramod)
+4. Enable module in LSPosed/Vector:
+   - Scope: `com.android.camera`
+   - Force-stop Camera app after enabling
+5. Open Camera app → Portrait → Original style
+
+**Requirements**: nomount metamodule enabled, HyperOS 3.0.304.0.WNAMIXM, Camera 6.7.000280.0
 
 ### System properties (fallback)
 
@@ -108,6 +160,12 @@ su -c "setprop camera.feature.original_portrait 1"       # Original portrait (so
 su -c "setprop camera.feature.essential_std 1"           # enable Leica Essential in standard UI (M3/M9)
 su -c "setprop camera.feature.essential_pipeline 1"      # enable Moment App pipeline (M3/M9 post-capture)
 su -c "setprop camera.debug.mivi3.output.jpeg true"      # HAL gate for M3/M9 LUT slot
+```
+
+**HAL module properties** (set by `post-fs-data.sh` automatically):
+```bash
+su -c "setprop camera.debug.mivi3.output.jpeg true"      # Required for M3/M9 LUT slot
+# LUT files staged to /data/vendor/camera/lut_m3.png and lut_m9.png
 ```
 
 ## Logs

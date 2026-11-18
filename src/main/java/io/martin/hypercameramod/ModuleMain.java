@@ -232,23 +232,26 @@ public class ModuleMain extends XposedModule {
         is.close();
         zip.close();
 
-        // Copy to system location using su: pipe LUT bytes through su stdin,
-        // write to /data/vendor/camera/<name>, chmod 0644.
-        Process su = Runtime.getRuntime().exec("su");
-        OutputStream os = su.getOutputStream();
-        PrintWriter pw = new PrintWriter(os);
-        pw.println("cp /dev/stdin " + destPath);
-        pw.println("chmod 0644 " + destPath);
-        pw.println("exit");
-        pw.flush();
+        // Base64 encode for safe transmission through su stdin
+        String base64 = android.util.Base64.encodeToString(data, android.util.Base64.DEFAULT);
 
-        // Write LUT bytes to su's stdin after the commands
-        os.write(data);
+        // Copy to system location using su:
+        //   su -c "base64 -d > /data/vendor/camera/lut_m3.png"
+        // su runs the shell command with stdin connected to our OutputStream.
+        // base64 reads from stdin (su's stdin), decodes, writes to destPath.
+        Process su = Runtime.getRuntime().exec(new String[]{"su", "-c", "base64 -d > " + destPath});
+        OutputStream os = su.getOutputStream();
+        os.write(base64.getBytes(java.nio.charset.StandardCharsets.UTF_8));
         os.flush();
         int exitCode = su.waitFor();
+
         if (exitCode != 0) {
             throw new Exception("su exit code: " + exitCode);
         }
+
+        // Set permissions
+        Process chmod = Runtime.getRuntime().exec(new String[]{"su", "-c", "chmod 0644 " + destPath});
+        chmod.waitFor();
     }
 
     private void installPropertyHook() {

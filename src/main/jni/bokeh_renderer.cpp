@@ -247,6 +247,7 @@ private:
     GLuint computeProgram_ = 0;
     GLuint srcTexture_ = 0, depthTexture_ = 0, confidenceTexture_ = 0, dstTexture_ = 0;
     GLuint uniformBuffer_ = 0;
+    GLuint colorProfileBuffer_ = 0;
     
     // EGL context (for offscreen rendering)
     EGLDisplay eglDisplay_ = EGL_NO_DISPLAY;
@@ -457,10 +458,17 @@ private:
         glBindBuffer(GL_UNIFORM_BUFFER, uniformBuffer_);
         glBufferData(GL_UNIFORM_BUFFER, sizeof(UniformParams), nullptr, GL_DYNAMIC_DRAW);
         glBindBufferBase(GL_UNIFORM_BUFFER, 0, uniformBuffer_);
+
+        // Color profile uniform buffer (binding = 1)
+        glGenBuffers(1, &colorProfileBuffer_);
+        glBindBuffer(GL_UNIFORM_BUFFER, colorProfileBuffer_);
+        glBufferData(GL_UNIFORM_BUFFER, sizeof(ColorProfileUniforms), nullptr, GL_DYNAMIC_DRAW);
+        glBindBufferBase(GL_UNIFORM_BUFFER, 1, colorProfileBuffer_);
         glBindBuffer(GL_UNIFORM_BUFFER, 0);
+
         return true;
     }
-    
+
     // Packed uniform structure (must match GLSL std140 layout)
     struct UniformParams {
         float fNumber;
@@ -475,7 +483,18 @@ private:
         int bypass;          // bool as int
         float padding[3];    // std140 alignment
     };
-    
+
+    // Color profile uniforms (binding = 1)
+    struct ColorProfileUniforms {
+        float contrast;
+        float saturation;
+        float highlights;
+        float shadows;
+        float colorTemp;
+        float tint;
+        float padding[2];
+    };
+
     void updateUniforms(const OriginalParams& params) {
         UniformParams ubo{};
         ubo.fNumber = params.fNumber;
@@ -491,9 +510,24 @@ private:
         ubo.isStaticScene = params.isStaticScene ? 1 : 0;
         ubo.motionSpeed = params.motionSpeed;
         ubo.bypass = params.bypass ? 1 : 0;
-        
+
         glBindBuffer(GL_UNIFORM_BUFFER, uniformBuffer_);
         glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(UniformParams), &ubo);
+        glBindBuffer(GL_UNIFORM_BUFFER, 0);
+
+        // Update color profile uniforms
+        ColorProfileUniforms cp{};
+        cp.contrast = params.contrast;
+        cp.saturation = params.saturation;
+        cp.highlights = params.highlights;
+        cp.shadows = params.shadows;
+        cp.colorTemp = params.colorTemp;
+        cp.tint = params.tint;
+        cp.padding[0] = 0.0f;
+        cp.padding[1] = 0.0f;
+
+        glBindBuffer(GL_UNIFORM_BUFFER, colorProfileBuffer_);
+        glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(ColorProfileUniforms), &cp);
         glBindBuffer(GL_UNIFORM_BUFFER, 0);
     }
     
@@ -574,6 +608,10 @@ private:
         if (uniformBuffer_) {
             glDeleteBuffers(1, &uniformBuffer_);
             uniformBuffer_ = 0;
+        }
+        if (colorProfileBuffer_) {
+            glDeleteBuffers(1, &colorProfileBuffer_);
+            colorProfileBuffer_ = 0;
         }
         destroyContext();
         initialized_ = false;

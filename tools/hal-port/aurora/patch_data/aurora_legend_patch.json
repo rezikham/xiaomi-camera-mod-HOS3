@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "target": "Aurora (14 Ultra) camera.qcom.so",
+  "target_sha256": "5b30cefde5b4a4aabf52282778c6d757",
+  "target_size": 17288384,
+  "description": "Add native legendMode 1/2 (M9/M3) handling to Aurora's camera HAL",
+  "patches": [
+    {
+      "id": "add_legendmode_string",
+      "description": "Add 'com.xiaomi.sessionparams.legendMode' string to .rodata",
+      "type": "add_string",
+      "string": "com.xiaomi.sessionparams.legendMode",
+      "reference_page": 0x91000,
+      "note": "Same page as existing 'stylizationType' string at 0x917d7"
+    },
+    {
+      "id": "patch_readoutputvendortag",
+      "description": "Add legendMode QueryVendorTagLocation call in ReadOutputVendorTag",
+      "type": "code_patch",
+      "anchor_offset": 0xECD8A4,
+      "anchor_instruction": "adrp x1, 0x91000; add x1, x1, #0x7d7",
+      "anchor_description": "stylizationType query in ReadOutputVendorTag",
+      "action": "Insert legendMode query immediately after stylizationType query",
+      "note": "Need to discover exact bytes via disassembly at this offset"
+    },
+    {
+      "id": "patch_datacompress",
+      "description": "Add legendMode QueryVendorTagLocation call in DataCompress",
+      "type": "code_patch",
+      "anchor_offset": 0xF55BC0,
+      "anchor_instruction": "adrp x1, 0x91000; add x1, x1, #0x7d7",
+      "anchor_description": "stylizationType query in DataCompress",
+      "action": "Insert legendMode query immediately after stylizationType query",
+      "note": "Need to discover exact bytes via disassembly at this offset"
+    },
+    {
+      "id": "write_tag_508",
+      "description": "Write legendMode value to MiMetadata tag 508",
+      "type": "code_patch",
+      "note": "After querying legendMode, write value 1/2 to MiMetadata tag 508 so mileicafilter reads it"
+    },
+    {
+      "id": "load_anc_human",
+      "description": "Load libAncHumanPreviewBokeh.so for Original Portrait",
+      "type": "code_patch",
+      "note": "dlopen + get_api_impl + walk 10-function vtable when stylizationType=171, filterId=2"
+    }
+  ],
+  "missing_libraries": [
+    "libmetatagwrapper.so",
+    "libcameraopt_stub.so",
+    "libcom.xiaomi.cam.miexifmgr.so",
+    "libmialgo_styletrans.so",
+    "libLMSceneSeg.so"
+  ],
+  "verification": {
+    "command": "strings -t x camera.qcom.so | grep legendMode",
+    "expected": "At least one match for 'com.xiaomi.sessionparams.legendMode'",
+    "logcat_filter": "mileicafilter|legendMode|MPluginModule|OemRetrieveLegendMode"
+  }
+}
