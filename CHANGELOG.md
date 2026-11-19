@@ -153,6 +153,20 @@ HAL backport module for Original Portrait on 14 Ultra (experimental).
 
 
 
+## [1.1.0-229] - 2026-11-19
+
+### Added
+
+- **Authentic 17 Ultra LUTs extracted from device** — M3/M9 LUTs now sourced from the actual 17 Ultra (nezha) firmware instead of being programmatically generated:
+  - `assets/leica_luts/M3_Monopan.png` → replaced with `131_MonochromeTrue.png` from 17U `/odm/etc/camera/videofilter/` (14,535 bytes, authentic monochrome LUT)
+  - `assets/leica_luts/130_LeicaNatural.png` → verified identical to 17U version (77,354 bytes)
+  - KSU module staged LUTs updated: `camera-mod-ksu/data/vendor/camera/lut_m3.png` and `lut_m9.png`
+
+### Fixed
+
+- **Release asset upload** — `camera-mod-ksu-v1.1.0-229-fixed.zip` and `hypercameramod-1.1.0-229-apk-lut-slot.apk` uploaded to CI-Release
+
+
 ## [1.0.0] - 2026-11-14
 
 First stable release of this fork, verified on a **Xiaomi 14 Ultra** running **HyperOS 3.0.304MIXMC09** with **Xiaomi Camera 6.7.000280.0** (the 17 Ultra camera build, installed as a normal app update).
