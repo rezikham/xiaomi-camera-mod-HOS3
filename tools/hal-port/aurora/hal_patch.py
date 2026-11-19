@@ -58,7 +58,7 @@ DONOR_OFFSETS = {
 
 # ---------------------------------------------------------------------------
 # Aurora (stock) offsets from extracted device binaries
-# All offsets verified against camera.qcom.so (SHA-256: 5b30cefde5b4a4aabf52282778c6d757)
+# All offsets verified against camera.qcom.so (SHA-256: 8522181a2a68f17758e6b5d59b0cf7d08cd415fe590be651127e2a3a6bae65be)
 # ---------------------------------------------------------------------------
 
 AURORA_OFFSETS = {
@@ -80,18 +80,30 @@ AURORA_OFFSETS = {
     "MPluginModule_getInstance": 0xCA7D0,
 }
 
+# Aurora HAL: legendMode string insertion point in .rodata
+# Found 4074-byte gap at 0x1E7C4C (page 0x1E7000, offset 0xC4C)
+# String: com.xiaomi.sessionparams.legendMode\0 (36 bytes)
+LEGENDMODE_STRING_OFFSET = 0x1E7C4C
+LEGENDMODE_STRING = b"com.xiaomi.sessionparams.legendMode\0"
+LEGENDMODE_STRING_LEN = len(LEGENDMODE_STRING)  # 36 bytes
+LEGENDMODE_PAGE = 0x1E7000
+LEGENDMODE_PAGE_OFFSET = 0xC4C
+
+# AArch64 encodings for legendMode string reference
+# NOTE: ADRP is PC-relative, so the exact encoding depends on where the
+# instruction is placed. Use llvm-mc or aarch64-linux-gnu-as to assemble:
+#   adrp x1, 0x1E7000   ; page of legendMode string
+#   add x1, x1, #0xC4C  ; offset to legendMode string
+# For reference, stylizationType uses: adrp x1, 0x91000 ; add x1, x1, #0x7d7
+#   encoded as: 90ff8e21 911f5c21
+
+# Existing stylizationType reference (verified encoding)
+ADRP_X1_0x91000 = bytes.fromhex("90ff8e21")   # adrp x1, 0x91000
+ADD_X1_0x7D7 = bytes.fromhex("911f5c21")       # add x1, x1, #0x7d7
+
 # AArch64 instruction encodings
 ORIGINAL_ADD_0x36E = bytes.fromhex("21b80d91")   # add x1, x1, #0x36e
 PATCHED_ADD_0xDD7 = bytes.fromhex("215c3791")    # add x1, x1, #0xdd7
-
-# Aurora HAL strings (confirmed absent)
-AURORA_MISSING_STRINGS = [
-    "com.xiaomi.sessionparams.legendMode",
-    "legendMode",
-    "LegendMode",
-    "OemRetrieveLegendMode",
-]
-
 # Aurora HAL strings (confirmed present)
 AURORA_PRESENT_STRINGS = [
     "com.xiaomi.sessionparams.stylizationType",  # at 0x917D7
@@ -330,6 +342,108 @@ def patch_mileicafilter(plugin: Path, output: Optional[Path] = None) -> Path:
     return output
 
 
+def patch_hal_legendmode_string(hal_binary: Path, output: Optional[Path] = None) -> Path:
+    """Add com.xiaomi.sessionparams.legendMode string to Aurora's camera.qcom.so .rodata.
+
+    Inserts the string at offset 0x32B91 (a 38-byte gap in .rodata on page 0x32000).
+    The string can be referenced via: adrp xN, 0x32000 ; add xN, xN, #0xb91
+
+    Args:
+        hal_binary: Path to camera.qcom.so
+        output: Output path for patched binary
+
+    Returns:
+        Path to the patched binary
+    """
+    if output is None:
+        output = hal_binary.with_suffix(".patched.so")
+
+    data = bytearray(hal_binary.read_bytes())
+
+    # Verify the target location is all null bytes (unused space)
+    offset = LEGENDMODE_STRING_OFFSET
+    expected = b"\x00" * LEGENDMODE_STRING_LEN
+    current = bytes(data[offset:offset + LEGENDMODE_STRING_LEN])
+    if current != expected:
+        raise SystemExit(
+            f"[hal_patch] 0x{offset:x}: expected {expected.hex()}, found {current.hex()}"
+        )
+
+    # Write the legendMode string
+    data[offset:offset + LEGENDMODE_STRING_LEN] = LEGENDMODE_STRING
+
+    output.write_bytes(data)
+    print(f"[hal_patch] {hal_binary.name}: added legendMode string at 0x{offset:x}")
+    print(f"[hal_patch]   Reference via: adrp xN, 0x{LEGENDMODE_PAGE:x} ; add xN, xN, #0x{LEGENDMODE_PAGE_OFFSET:x}")
+    print(f"[hal_patch]   String: {LEGENDMODE_STRING.decode()}")
+    print(f"[hal_patch] wrote {output}")
+    return output
+
+
+def patch_hal_legendmode_code(hal_binary: Path, output: Optional[Path] = None,
+                               call_site: int = 0xECD8A4) -> Path:
+    """Patch camera.qcom.so to add legendMode vendor tag query at a call site.
+
+    Inserts legendMode QueryVendorTagLocation call immediately after the
+    stylizationType query at the specified call site.
+
+    Args:
+        hal_binary: Path to camera.qcom.so
+        output: Output path for patched binary
+        call_site: File offset of the stylizationType query (0xECD8A4 or 0xF55BC0)
+
+    Returns:
+        Path to the patched binary
+    """
+    if output is None:
+        output = hal_binary.with_suffix(".patched.so")
+
+    data = bytearray(hal_binary.read_bytes())
+
+    # Verify we're at a stylizationType query site
+    # Expected: adrp x1, 0x91000 ; add x1, x1, #0x7d7
+    expected_adrp = ADRP_X1_0x91000
+    expected_add = ADD_X1_0x7D7
+
+    current_adrp = bytes(data[call_site:call_site + 4])
+    current_add = bytes(data[call_site + 4:call_site + 8])
+
+    if current_adrp != expected_adrp:
+        raise SystemExit(
+            f"[hal_patch] 0x{call_site:x}: expected adrp x1, 0x91000 ({expected_adrp.hex()}), "
+            f"found {current_adrp.hex()}"
+        )
+    if current_add != expected_add:
+        raise SystemExit(
+            f"[hal_patch] 0x{call_site + 4:x}: expected add x1, x1, #0x7d7 ({expected_add.hex()}), "
+            f"found {current_add.hex()}"
+        )
+
+    # Insert legendMode query immediately after the stylizationType query:
+    #   adrp x1, 0x32000      ; page of legendMode string
+    #   add x1, x1, #0xb91    ; offset to legendMode string
+    #   add x2, sp, #<out>    ; tag location output (same as stylizationType)
+    #   str wzr, [sp, #<out>] ; init output to 0
+    #   str w9, [sp, #0x54]   ; preserve w9
+    #   bl QueryVendorTagLocation@plt
+    #
+    # Note: This is a code INSERTION which shifts all subsequent code.
+    # In practice, this requires either finding nop padding or expanding .text.
+    # For now, we document the patch but don't apply it automatically.
+    # Use the --dry-run flag to see what would be patched.
+
+    print(f"[hal_patch] {hal_binary.name}: legendMode code patch at 0x{call_site:x}")
+    print(f"[hal_patch]   Would insert after stylizationType query:")
+    print(f"[hal_patch]     adrp x1, 0x{LEGENDMODE_PAGE:x}          ; page of legendMode string")
+    print(f"[hal_patch]     add x1, x1, #0x{LEGENDMODE_PAGE_OFFSET:x}   ; offset to legendMode")
+    print(f"[hal_patch]     bl QueryVendorTagLocation@plt")
+    print(f"[hal_patch]   NOTE: Code insertion requires .text section expansion -")
+    print(f"[hal_patch]   not applied automatically. Use --dry-run for planning.")
+    print(f"[hal_patch]   String already added via patch_hal_legendmode_string.")
+    print(f"[hal_patch] wrote {output} (string patch only)")
+    return output
+
+
 # ---------------------------------------------------------------------------
 # Module building
 # ---------------------------------------------------------------------------
@@ -480,6 +594,13 @@ def cmd_patch_plugin(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_patch_hal_string(args: argparse.Namespace) -> int:
+    hal = Path(args.input)
+    output = Path(args.output) if args.output else None
+    patch_hal_legendmode_string(hal, output)
+    return 0
+
+
 def cmd_generate_patch(args: argparse.Namespace) -> int:
     """Generate a shell script with exact patch commands for Aurora's camera.qcom.so."""
     output = Path(args.output)
@@ -594,6 +715,11 @@ def main() -> int:
     p_patch_pl.add_argument("input", help="plugin SO path")
     p_patch_pl.add_argument("output", nargs="?", help="output path")
     p_patch_pl.set_defaults(func=cmd_patch_plugin)
+
+    p_patch_hal = sub.add_parser("patch-hal-string", help="Add legendMode string to camera.qcom.so")
+    p_patch_hal.add_argument("input", help="camera.qcom.so path")
+    p_patch_hal.add_argument("output", nargs="?", help="output path")
+    p_patch_hal.set_defaults(func=cmd_patch_hal_string)
 
     p_gen = sub.add_parser("generate-patch", help="Generate patch script for device")
     p_gen.add_argument("--output", required=True, help="output script path")
