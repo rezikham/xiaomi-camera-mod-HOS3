@@ -2,6 +2,24 @@
 
 All notable changes to HyperCameraMod. The module follows a simple scheme: stable releases are tagged `v<version>`, development builds are published as the `CI-Release` pre-release.
 
+## [1.2.4] - 2026-11-22
+
+### Fixed
+
+- Film labels in the Leica Looks panel and the FILTER strip now render every
+  character. Missing glyphs are drawn with the camera's own **LG1056 Regular**
+  (`assets/watermarks/leica/111/lg1056_regular.otf`), loaded at runtime from the
+  camera APK. Nothing is bundled in the module, and the font already has full
+  printable-ASCII coverage. Codes such as `600F`, `C-50D` and `KG200` no
+  longer lose characters.
+
+### Notes
+
+- The LG1056 font is part of the camera APK; the module only reads it from the
+  running camera app.
+- The KernelSU LUT module is unchanged from 1.2.0
+  (`camera-mod-ksu-v1.2.0-306.zip`).
+
 ## [1.2.3] - 2026-11-22
 
 ### Added

@@ -211,9 +211,43 @@ public class ModuleMain extends XposedModule {
     // out as the light gray of the native labels (#C1C1C1), and over a dark panel it is hardly
     // visible, as on the native labels.
     private static final int LABEL_RING_ALPHA = 56;
-    private static final Typeface FALLBACK_TYPEFACE =
-            Typeface.create("sans-serif-condensed", Typeface.NORMAL);
+    private static volatile Typeface labelTypeface;
     private static final Paint FALLBACK_MEASURE = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+    // Use the camera's own LG1056 Regular for characters missing from the embedded
+    // subset. The font already ships in the camera APK, so nothing is redistributed.
+    private static Typeface labelTypeface() {
+        Typeface typeface = labelTypeface;
+        if (typeface != null) {
+            return typeface;
+        }
+        Application app = currentApplication();
+        if (app != null) {
+            String[] paths = {
+                    "watermarks/leica/111/lg1056_regular.otf",
+                    "watermarks/leica/92/lg1056_regular.otf",
+                    "watermarks/leica/90/lg1056_regular.otf",
+                    "watermarks/leica/88/lg1056_regular.otf"
+            };
+            for (String path : paths) {
+                try {
+                    typeface = Typeface.createFromAsset(app.getAssets(), path);
+                    break;
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+        if (typeface == null) {
+            typeface = Typeface.create("sans-serif-condensed", Typeface.NORMAL);
+        }
+        labelTypeface = typeface;
+        return typeface;
+    }
+
+    private static float labelTextSize(float height) {
+        // LG1056 cap height is about 0.72 em; the extracted glyphs are cap-height bitmaps.
+        return height / 0.72f;
+    }
     private static final String LABEL_TOP_LINE = "FLM";
     private static final float HYPHEN_LENGTH = 0.5f;    // hyphen length, as a share of letter height
     private static final Map<Character, Bitmap> GLYPH_CACHE = new HashMap<>();
@@ -1391,8 +1425,8 @@ public class ModuleMain extends XposedModule {
                     x += glyphWidth;
                 } else {
                     Paint fallback = new Paint(paint);
-                    fallback.setTypeface(FALLBACK_TYPEFACE);
-                    fallback.setTextSize(height);
+                    fallback.setTypeface(labelTypeface());
+                    fallback.setTextSize(labelTextSize(height));
                     fallback.setTextAlign(Paint.Align.LEFT);
                     if (spread > 0) {
                         fallback.setStyle(Paint.Style.STROKE);
@@ -1428,8 +1462,8 @@ public class ModuleMain extends XposedModule {
     }
 
     private static synchronized float fallbackWidth(char c, float height) {
-        FALLBACK_MEASURE.setTypeface(FALLBACK_TYPEFACE);
-        FALLBACK_MEASURE.setTextSize(height);
+        FALLBACK_MEASURE.setTypeface(labelTypeface());
+        FALLBACK_MEASURE.setTextSize(labelTextSize(height));
         return FALLBACK_MEASURE.measureText(String.valueOf(c));
     }
 
