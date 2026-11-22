@@ -2,6 +2,27 @@
 
 All notable changes to HyperCameraMod. The module follows a simple scheme: stable releases are tagged `v<version>`, development builds are published as the `CI-Release` pre-release.
 
+## [1.2.5] - 2026-11-23
+
+### Changed
+
+- Film labels now render from a bundled **LG1056 Regular** OTF instead of the
+  generated 12-glyph bitmap table and the mixed camera-font fallback. Every
+  label character now comes from the same official face.
+- Both LG1056 weights are bundled in the module: `lg1056_regular.otf` for the
+  labels and `lg1056_light.otf` for future use. The label renderer no longer
+  depends on the camera APK for glyphs.
+- Kept the native label metrics measured during the LG1050 trial: 9.7 dp cap
+  height, 2.3 dp line gap, 0.66 dp translucent outline.
+
+### Notes
+
+- The bundled Regular is byte-identical to the camera's
+  `assets/watermarks/leica/111/lg1056_regular.otf` and to the font in Leica
+  FOTOS 6.3.0.
+- The KernelSU LUT module is unchanged from 1.2.0
+  (`camera-mod-ksu-v1.2.0-306.zip`).
+
 ## [1.2.4] - 2026-11-22
 
 ### Fixed
