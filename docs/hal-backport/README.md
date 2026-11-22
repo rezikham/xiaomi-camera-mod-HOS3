@@ -111,3 +111,7 @@ Evidence conventions:
 | [10-moment-app.md](10-moment-app.md) | The genuine Moment App M3/M9 pipeline: Java/native map, Monopan spawn and crash analysis, process-isolated module integration |
 | [11-chix-adapter.md](11-chix-adapter.md) | ChiX plugin lifecycle: `postProcess()` vs `processRequest()`, `NodeMask` dispatch, donor ABI and the wrapper-plugin plan to host the Legendary algorithm |
 | [12-moment-app-internals.md](12-moment-app-internals.md) | Moment App internals: JNI entry points and offsets, `libleicamodelembed` B12 wrapper, `legend18` binary format, helper argv/env, style models, preview shader, measured M3/M9 artifacts |
+| [19-module-incremental-rebuild.md](19-module-incremental-rebuild.md) | KSU module staged rebuild (LUT-only stage and bisect plan) |
+| [20-camera-5.3-filters.md](20-camera-5.3-filters.md) | Camera 5.3 filter/LUT extraction |
+| [21-film-filters-5.3-vs-later.md](21-film-filters-5.3-vs-later.md) | 5.3 film filters vs HyperCameraMod, 6.7 and 6.8 |
+| [22-all-film-filters.md](22-all-film-filters.md) | Exposing all 12 film filters with version detection, reuse and code names |

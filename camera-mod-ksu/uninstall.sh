@@ -1,45 +1,20 @@
 #!/system/bin/sh
-# HyperCameraMod uninstall.sh
-# Runs when KernelSU removes this module
+# HyperCameraMod uninstall.sh -- LUT stage
+# Removes only what this module staged: the LUT files and the engine gate.
+# Does not touch the APK (install/uninstall it manually) and unmounts nothing.
 
-MODDIR=${0%/*}
-PACKAGE="io.rezikham.hypercameramod"
+log -t HyperCameraMod "Uninstalling LUT module..."
 
-log -t HyperCameraMod "Uninstalling module..."
+LUTS="lut_m3.png lut_m9.png
+lut_600f.png lut_bf70.png lut_r600.png lut_p100f.png
+lut_f50.png lut_kc64.png lut_v250.png lut_h400.png
+lut_kp160.png lut_fc400.png lut_c50d.png lut_kg200.png"
 
-# Unmount bind mounts
-TARGET_PLUGIN_DIR="/odm/lib64/camera/plugins"
-TARGET_ANCHUMAN="/odm/lib64/libAncHumanPreviewBokeh.so"
-TARGET_MIALGO="/odm/lib64/libmialgoengine.so"
+for lut in $LUTS; do
+    rm -f "/data/vendor/camera/$lut"
+done
 
-log -t HyperCameraMod "Unmounting plugin directory..."
-umount "$TARGET_PLUGIN_DIR" 2>/dev/null
-
-log -t HyperCameraMod "Unmounting libAncHumanPreviewBokeh.so..."
-umount "$TARGET_ANCHUMAN" 2>/dev/null
-
-log -t HyperCameraMod "Unmounting libmialgoengine.so..."
-umount "$TARGET_MIALGO" 2>/dev/null
-
-# Uninstall the APK if present
-if pm list packages | grep -q "^package:$PACKAGE$"; then
-    log -t HyperCameraMod "Uninstalling HyperCameraMod APK..."
-    pm uninstall "$PACKAGE" >/dev/null 2>&1
-    if [ $? -eq 0 ]; then
-        log -t HyperCameraMod "APK uninstalled successfully"
-    else
-        log -t HyperCameraMod "WARNING: APK uninstall failed"
-    fi
-else
-    log -t HyperCameraMod "APK not installed, skipping uninstall"
-fi
-
-# Remove staged LUT files
-rm -f /data/vendor/camera/lut_m3.png
-rm -f /data/vendor/camera/lut_m9.png
-
-# Reset HAL engine gate property
 resetprop --delete camera.debug.mivi3.output.jpeg 2>/dev/null
 
-log -t HyperCameraMod "Module uninstalled completely"
+log -t HyperCameraMod "LUT module uninstalled"
 exit 0

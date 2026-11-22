@@ -1,0 +1,32 @@
+{
+    "variants": {
+        "disable": {
+            "enable": 0,
+            "persistToFile": 0,
+            "regionSize": {
+                "marker": 8, // 8B
+                "persist": 8, // 8B
+                "shared": 8, // 8B
+                "grid": 8  // 8B
+            },
+            "enabledEntites": [ ]
+        },
+        "default": {
+            "enable": 1,
+            "persistToFile": 0,
+            "regionSize": {
+                "marker": 256, // 256B
+                "persist": 65536, // 64KB
+                "shared": 262144, // 256KB
+                "grid": 1769216  // 2MB - 256B - 64KB - 256KB
+            },
+            "enabledEntites": [
+                "SensorModeData",
+                "VideoRecordingData",
+                "DFXCodeData",
+                "MisData",
+                "MisDFXData"
+            ]
+        }
+    }
+}

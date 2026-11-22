@@ -29,7 +29,7 @@
     <string name="pref_essential_pipeline_key">essential_pipeline_enabled</string>
 
     <string name="pref_extra_filters_title">Extra Film Filters</string>
-    <string name="pref_extra_filters_summary">Enable extra film simulation filters: R600, P100F, F-50, KC64, KP160.</string>
+    <string name="pref_extra_filters_summary">Expose all 12 film simulation filters: 600F, BF70, R600, P100F, F-50, KC64, V250, H400, KP160, FC400, C-50D, KG200. Existing entries are reused and renamed to the film code.</string>
     <string name="pref_extra_filters_key">extra_filters_enabled</string>
 
     <string name="pref_hal_lut_slot_title">Render M3/M9 in the camera engine (HAL LUT slot)</string>

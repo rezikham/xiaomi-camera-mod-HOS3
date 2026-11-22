@@ -1,32 +1,20 @@
-# HyperCameraMod SELinux policy
-# Allows module scripts and camera HAL to access staged LUT files and plugin libraries
+# HyperCameraMod SELinux policy -- LUT-ONLY TEST BUILD
 
-# Allow module script to write to /data/vendor/camera
+# Allow the module script to write/stage LUT files in /data/vendor/camera
 allow kernelsu kernelsu_data_file:dir { write add_name remove_name }
 allow kernelsu kernelsu_data_file:file { write create unlink }
 
-# Allow camera HAL process to read LUT files
+# Allow camera HAL to read the staged LUTs
 allow hal_camera_default vendor_camera_data_file:file { read open getattr }
 
-# Allow camera HAL process to read library files from module (kernelsu_data_file context)
-allow hal_camera_default kernelsu_data_file:file { read open getattr execute }
-allow hal_camera_default kernelsu_data_file:dir { search }
+# Allow chcon of the staged LUTs
+allow kernelsu file_type:security compute_av
 
-# Allow camera HAL process to read library files from module (system_file context for bind mounts)
-allow hal_camera_default system_file:file { read open getattr execute }
-allow hal_camera_default system_file:dir { search }
-
-# Allow camera HAL to load plugins from /odm/lib64/camera/plugins/
-allow hal_camera_default odm_file:file { read open getattr execute }
-allow hal_camera_default odm_file:dir { search }
-
-# Allow setprop for camera.debug.mivi3.output.jpeg
+# Allow the engine gate property write
 allow kernelsu property_socket:unix_stream_socket connectto
 allow kernelsu camera_prop:property_service set
 
-# Allow chcon for vendor_camera_data_file
-allow kernelsu file_type:security compute_av
-
-# Allow module to mount/bind files
-allow kernelsu kernel:security { load_policy }
-allow kernelsu kernel:system module_request
+# Allow the camera app (platform_app) to read the staged LUTs for live preview
+allow platform_app vendor_data_file:dir search;
+allow platform_app vendor_camera_data_file:dir { search read open getattr };
+allow platform_app vendor_camera_data_file:file { read open getattr map };

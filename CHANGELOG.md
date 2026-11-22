@@ -2,6 +2,15 @@
 
 All notable changes to HyperCameraMod. The module follows a simple scheme: stable releases are tagged `v<version>`, development builds are published as the `CI-Release` pre-release.
 
+## [Unreleased]
+
+### Changed
+
+- **All 12 film filters are exposed**: 600F, BF70, R600, P100F, F-50, KC64, V250, H400, KP160, FC400, C-50D, KG200.
+- The filter module detects the camera layout (6.4, 6.7, 6.7.000500, 6.8) and reuses a filter that is already present in that version's list instead of adding a duplicate. Existing entries are renamed to the film code, so a 6.7/6.8 camera that calls a filter 反转/韩胶/贝松/etc. shows the code instead.
+- The film name is supplied by the module's own string hook, so the displayed name is the film stock (letters and digits) regardless of the ROM's artistic label.
+- **M3/M9 live preview fixed (APK 305)**: the render engine asks for the neutral fallback `lut_nc` for slots 91/92, not `lut_m3`/`lut_m9`. `OpenGl3dUtils.a`/`Xu.g` now return a freshly decoded M3/M9 bitmap for that name while `EffectController.h` is 91/92. The old SIGSEGV was caused by returning cached bitmaps that native consumers had already recycled; every preview request now decodes a fresh 512x512 bitmap. Verified: M3 preview is monochrome (saturation 0.0), M9 keeps its subtle Leica Natural look, repeated M3/M9/Original switching is stable.
+
 ## [1.1.0] - 2026-11-17
 
 Major feature release adding Original Portrait software implementation, Moment App terminology unification, and complete documentation.

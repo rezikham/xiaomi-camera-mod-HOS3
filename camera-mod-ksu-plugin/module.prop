@@ -1,0 +1,6 @@
+id=hypercameramod_plugin
+name=HyperCameraMod (Madrid plugin port)
+version=0.1.0
+versionCode=1
+author=rezikham
+description=EXPERIMENTAL, separate from the LUT module. Overlays the Madrid 6.8 jpegrAggr/heifedit plugins with a private libhcm_* dependency namespace. Requires a KernelSU metamodule with /odm overlay support. Does not touch the LUT module or install the APK.

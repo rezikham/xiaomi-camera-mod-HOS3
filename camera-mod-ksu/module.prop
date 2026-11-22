@@ -1,6 +1,6 @@
 id=hypercameramod
-name=HyperCameraMod
-version=1.1.0-232
-versionCode=232
+name=HyperCameraMod (LUT stage)
+version=1.1.0-262-preview-read
+versionCode=262
 author=rezikham
-description=HyperCameraMod 1.1.0-232 - M3/M9 Leica looks + Original Portrait software for Aurora (14 Ultra). LSPosed module for Xiaomi Camera 6.7. Stages M3/M9 LUTs, enables HAL engine gate. Includes APK auto-install as user app (grant root in KernelSU after install). Compatible with nomount/zeromount/mountify metamodules. No ChiX plugin.
+description=LUT stage build. Stages the authentic 17U M3 Monopan and M9 Leica Natural LUTs plus the Camera 5.3 film-filter LUTs (600F, BF70, R600, P100F, F-50, KC64, V250, H400, KP160, FC400, C-50D, KG200) at /data/vendor/camera and enables camera.debug.mivi3.output.jpeg. Contains NO libraries, NO plugin mounts, NO /odm or /vendor modifications, and does NOT install the APK.

@@ -14,7 +14,7 @@
 - Leica Essential mode in the standard UI (M3/M9)
 - Leica Essential CMOS (M10R) style
 - **Moment App pipeline** (real M3/M9 post-capture processing, off by default)
-- Film simulation filters: R600, P100F, F-50, KC64, KP160
+- Film simulation filters: 600F, BF70, R600, P100F, F-50, KC64, V250, H400, KP160, FC400, C-50D, KG200 (existing entries are reused and renamed to the film code)
 - Settings app with toggles, **Force Stop Camera**, and **Hide launcher icon**
 
 Package: `io.rezikham.hypercameramod`
@@ -122,7 +122,7 @@ Open **HyperCameraMod** from the app drawer or from the module's entry in LSPose
 | Leica Essential Mode in Standard UI | off | Adds the Leica Essential mode (M3/M9) to the standard UI mode strip. |
 | Leica UI (Looks) | on | Shows the Leica Looks panel in the filter strip instead of the standard filter UI. |
 | CMOS (M10R) Style | off | Adds the CMOS (M10R) style to the Leica Essential style list. |
-| Extra Film Filters | on | Adds the R600, P100F, F-50, KC64 and KP160 film filters. |
+| Extra Film Filters | on | Exposes all 12 film filters (600F through KG200). A filter the camera already has is reused and its name is changed to the film code instead of adding a duplicate. |
 | Original Portrait Style | on (17 Ultra / 18 Pro Max), off (14 Ultra) | Shows Original in the Portrait style picker. On 14 Ultra uses software post-capture (depth map + bokeh renderer). |
 | Moment App Pipeline (M3/M9) | off | Enables real M3/M9 post-capture processing via Moment App parametric filter + Monopan grain. |
 
