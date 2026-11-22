@@ -293,7 +293,11 @@ public class ModuleMain extends XposedModule {
             log(Log.INFO, TAG, stage + ": camera layout " + profile.name() + ", hooked "
                     + profile.listClass() + "." + profile.listMethod());
             installPanelHook(profile, loader);
-            installLooksHook(profile, loader, resolved);
+            if (leicaUiEnabled()) {
+                installLooksHook(profile, loader, resolved);
+            } else {
+                log(Log.INFO, TAG, "Leica UI disabled; skipping the Leica Looks injection");
+            }
             installCategoryHook(profile, loader, resolved);
             installComponentHook(loader, resolved);
             installOrderHook(profile, loader, resolved);
@@ -578,6 +582,18 @@ public class ModuleMain extends XposedModule {
     }
 
     // Check if extra film filters are enabled in the main module's settings
+    private boolean leicaUiEnabled() {
+        try {
+            android.content.SharedPreferences prefs = getRemotePreferences("hypercameramod");
+            if (prefs != null) {
+                return prefs.getBoolean("leica_ui_enabled", true);
+            }
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot read leica_ui_enabled preference: " + t);
+        }
+        return true;
+    }
+
     private boolean extraFiltersEnabled() {
         try {
             android.content.SharedPreferences prefs = getRemotePreferences("hypercameramod");

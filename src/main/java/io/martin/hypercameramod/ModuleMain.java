@@ -1160,6 +1160,7 @@ public class ModuleMain extends XposedModule {
             java.util.concurrent.ConcurrentHashMap.newKeySet();
     private static final String LOOKS_ENTRIES_KEY = "looks_entries_enabled";
     private volatile boolean looksEntriesHooked;
+    private volatile boolean uiHooksInstalled;
     private volatile boolean lookTextHooked;
 
     private boolean looksEntriesEnabled() {
@@ -1174,8 +1175,36 @@ public class ModuleMain extends XposedModule {
         return false;
     }
 
+    private static final String LEICA_UI_KEY = "leica_ui_enabled";
+
+    private boolean leicaUiEnabled() {
+        try {
+            android.content.SharedPreferences p = getRemotePreferences("hypercameramod");
+            if (p != null) {
+                return p.getBoolean(LEICA_UI_KEY, true);
+            }
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot read " + LEICA_UI_KEY + ": " + t);
+        }
+        return true;
+    }
+
     private void installLeicaLooksEntries(ClassLoader loader) {
-        if (looksEntriesHooked || loader == null || !looksEntriesEnabled()) {
+        if (loader == null) {
+            return;
+        }
+        // Capture and preview hooks must run on every UI, including the standard FILTER strip.
+        if (!uiHooksInstalled) {
+            installLookLutHooks(loader);
+            installPreviewLutHook(loader);
+            uiHooksInstalled = true;
+        }
+
+        boolean leicaUi = leicaUiEnabled();
+        if (looksEntriesHooked || !looksEntriesEnabled() || !leicaUi) {
+            if (!leicaUi) {
+                log(Log.INFO, TAG, "Leica UI disabled; skipping the M3/M9 Looks panel");
+            }
             return;
         }
         try {
@@ -1255,8 +1284,6 @@ public class ModuleMain extends XposedModule {
                 }
                 return result;
             });
-            installLookLutHooks(loader);
-            installPreviewLutHook(loader);
             looksEntriesHooked = true;
             log(Log.INFO, TAG, "installed M3/M9 Looks entries");
         } catch (Throwable t) {

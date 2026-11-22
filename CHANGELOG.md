@@ -2,6 +2,30 @@
 
 All notable changes to HyperCameraMod. The module follows a simple scheme: stable releases are tagged `v<version>`, development builds are published as the `CI-Release` pre-release.
 
+## [1.2.2] - 2026-11-22
+
+### Added
+
+- The **Leica UI (Looks)** toggle now controls the Leica Looks panel. When on,
+  the module adds M3/M9 and the film filters to the Leica Looks tables
+  (`E9.h.c` and `E9.h.d`). When off, it only modifies the standard FILTER
+  strip. The camera chooses which UI to build; both paths are supported.
+
+### Changed
+
+- The M3/M9 look-name and preview hooks are installed on every UI and no
+  longer depend on the Looks-entries or Leica UI toggles.
+- The Leica UI summary now describes the actual behavior and asks for a Camera
+  restart after changing.
+
+### Notes
+
+- On the Xiaomi 14 Ultra the camera builds the standard FILTER strip, not the
+  Leica Looks panel, so the switch has no visible effect there. On devices
+  that use the Leica UI, the panel now follows the switch.
+- The KernelSU LUT module is unchanged from 1.2.0
+  (`camera-mod-ksu-v1.2.0-306.zip`).
+
 ## [1.2.1] - 2026-11-22
 
 ### Removed
