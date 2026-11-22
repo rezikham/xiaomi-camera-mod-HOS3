@@ -61,15 +61,6 @@ public class ModuleMain extends XposedModule {
     // 2. Original colour style
     private static final String STYLIZATION_KEY = "xiaomi.capabilities.stylizationTypeMask";
     private static final int STYLIZATION_ORIGINAL = 1 << 3;
-    private static final String LEGEND_MODE_KEY = "com.xiaomi.sessionparams.legendMode";
-    private static final String STYLIZATION_TYPE_KEY = "com.xiaomi.sessionparams.stylizationType";
-    private static final ThreadLocal<Byte> BRIDGE_LEGEND = new ThreadLocal<>();
-    // Last Legendary style seen in a request: 1 = M9, 2 = M3. Used by the LUT fallback and by
-    // the optional Essential pipeline. The timestamp lets the pipeline ignore a stale selection.
-    private static volatile byte lastLegend;
-    private static volatile long lastLegendTime;
-    private static final ThreadLocal<Boolean> BRIDGE_SETTING = ThreadLocal.withInitial(() -> false);
-
     // 3. M10R. The Leica Essential style list builds M3 (B&W) and M9 (CCD); a profile names where
     // that list and its item class live in one camera layout.
     private record LegendProfile(String name, String listClass, String itemClass,
@@ -102,11 +93,6 @@ public class ModuleMain extends XposedModule {
     // settings toggle decides (see originalPortraitEnabled()).
     private static final int MODE_PORTRAIT = 171;
     private static final String ORIGINAL_PORTRAIT_KEY = "original_portrait_enabled";
-    private static final String COMPAT_FALLBACK_KEY = "compat_fallback_enabled";
-    // Genuine Moment App M3/M9 pipeline. Off by default. Runs all native work in the
-    // module's private :essential process (EssentialService), never in the camera process.
-    private static final String ESSENTIAL_PIPELINE_KEY = "essential_pipeline_enabled";
-    private static final String ESSENTIAL_PIPELINE_PROP = "camera.feature.essential_pipeline";
     private static final long ESSENTIAL_LEGEND_FRESH_MS = 180_000;
     private static final String ORIGINAL_PORTRAIT_PROP = "camera.feature.original_portrait";
     private static final int ASSET_ORIGINAL_BADGE = 3;
@@ -135,8 +121,6 @@ public class ModuleMain extends XposedModule {
     private volatile boolean modeListHooked;
     private volatile boolean nameStyleHooked;
     private volatile boolean stylizationHooked;
-    private volatile boolean legendBridgeHooked;
-    private volatile boolean legendObserverHooked;
     private volatile boolean legendHooked;
     private volatile boolean assetsHooked;
     private volatile boolean styleHooked;
@@ -178,10 +162,7 @@ public class ModuleMain extends XposedModule {
         installModeListHook(loader);
         installNameStyleHook(loader);
         installStylizationHook();
-        installLegendBridgeHook();
-        installLegendObserver();
         installOriginalPortraitCaptureHook();
-        installLutFallbackHook(loader);
         installLutFileWatcher();
         installBlurRadiusHook(loader);
         installLegendHook(loader);
@@ -623,14 +604,7 @@ public class ModuleMain extends XposedModule {
     }
 
     private volatile boolean blurRadiusHooked;
-    private volatile boolean lutHooked;
-    private final java.util.Map<String, LeicaLut> lutCache =
-            new java.util.concurrent.ConcurrentHashMap<>();
-
-    // Applies the reproduced Leica 64^3 LUT to the full-size bitmap right before JPEG encoding.
-    // Only active when the compatibility fallback is enabled and the app requested M9/M3.
     private volatile boolean watcherStarted;
-    private static final ThreadLocal<Boolean> IN_LUT = new ThreadLocal<>();
 
     // Post-process the saved JPEG when the camera app writes it. This avoids depending on the
     // app's internal encoder, which does not use Bitmap.compress on this build.
@@ -704,71 +678,6 @@ public class ModuleMain extends XposedModule {
                 }
             }
 
-            // The genuine pipeline is an additional path. When it is on it owns the file; the
-            // LUT fallback is only used when the pipeline is off.
-            byte latest = lastLegend;
-            if (essentialPipelineEnabled()) {
-                long age = android.os.SystemClock.elapsedRealtime() - lastLegendTime;
-                if (latest == 0 || age > ESSENTIAL_LEGEND_FRESH_MS) {
-                    log(Log.INFO, TAG, "Moment App pipeline skipped " + file.getName()
-                            + ": no fresh M3/M9 selection (legend=" + latest + ", age=" + age + " ms)");
-                    return;
-                }
-                log(Log.INFO, TAG, "Moment App candidate " + file.getName() + " legend=" + latest);
-                EssentialPipeline.handle(file, latest);
-                // One selection, one file: a later normal capture must not inherit this look.
-                lastLegend = 0;
-                lastLegendTime = 0;
-                return;
-            }
-            if (!compatFallbackEnabled()) {
-                return;
-            }
-            byte legend = legendFromPrefs();
-            log(Log.INFO, TAG, "LUT candidate " + file.getName() + " legend=" + legend
-                    + " apk=" + (moduleApk != null) + " size=" + file.length());
-            legend = legendFromPrefs();
-            String asset = legend == 1 ? "leica_luts/130_LeicaNatural.png"
-                    : legend == 2 ? "leica_luts/M3_Monopan.png" : null;
-            if (asset == null || moduleApk == null) {
-                return;
-            }
-            if (file.length() < 500_000L) {
-                return;
-            }
-            Thread.sleep(800);
-            android.graphics.Bitmap bm = android.graphics.BitmapFactory.decodeFile(file.getAbsolutePath());
-            log(Log.INFO, TAG, "LUT decoded " + (bm == null ? "null" : bm.getWidth() + "x" + bm.getHeight()));
-            if (bm == null || bm.getWidth() < 2000) {
-                return;
-            }
-            LeicaLut lut = lutCache.get(asset);
-            if (lut == null) {
-                lut = LeicaLut.loadFromApk(moduleApk, asset);
-                log(Log.INFO, TAG, "LUT load " + (lut != null));
-                if (lut == null) {
-                    return;
-                }
-                lutCache.put(asset, lut);
-            }
-            log(Log.INFO, TAG, "LUT applying " + asset);
-            android.graphics.Bitmap out = lut.apply(bm, 1.0f);
-            log(Log.INFO, TAG, "LUT bitmap ready " + (out != null));
-            if (out == null) {
-                return;
-            }
-            java.io.File tmp = new java.io.File(file.getParentFile(), file.getName() + ".hcm.tmp");
-            try (java.io.FileOutputStream fos = new java.io.FileOutputStream(tmp)) {
-                out.compress(android.graphics.Bitmap.CompressFormat.JPEG, 95, fos);
-            }
-            out.recycle();
-            bm.recycle();
-            if (!tmp.renameTo(file)) {
-                tmp.delete();
-                log(Log.WARN, TAG, "could not replace " + file.getName());
-                return;
-            }
-            log(Log.INFO, TAG, "applied Leica LUT to " + file.getName());
         } catch (Throwable t) {
             log(Log.WARN, TAG, "LUT file post-process failed: " + t);
         }
@@ -870,267 +779,6 @@ public class ModuleMain extends XposedModule {
         } catch (Throwable t) {
             log(Log.WARN, TAG, "Failed to create mock capture result: " + t);
             return null;
-        }
-    }
-
-    // Fallback for builds that never send com.xiaomi.sessionparams.legendMode: read the style the
-    // app has stored for the rear camera. M9 = 1, M3 = 2.
-    private static byte legendFromPrefs() {
-        // Stage LUT files on first M3/M9 selection so the stock filter node can render them.
-        ensureLutFiles();
-        try {
-            Class<?> sp = Class.forName("android.os.SystemProperties");
-            String forced = (String) sp.getMethod("get", String.class, String.class)
-                    .invoke(null, "camera.feature.lut_style", "");
-            if ("M9".equalsIgnoreCase(forced)) {
-                return 1;
-            }
-            if ("M3".equalsIgnoreCase(forced)) {
-                return 2;
-            }
-            // An explicit property always wins, including "off": without this, a build that
-            // always starts the watcher would still resolve the style from the camera's saved
-            // preference and post-process a capture the HAL already rendered.
-            if (!forced.isEmpty()) {
-                return 0;
-            }
-        } catch (Throwable ignored) {
-        }
-        try {
-            Class<?> at = Class.forName("android.app.ActivityThread");
-            Object app = at.getMethod("currentApplication").invoke(null);
-            if (app instanceof android.content.Context) {
-                android.content.SharedPreferences p = ((android.content.Context) app)
-                        .getSharedPreferences("camera_settings_simple_mode_local_0", 0);
-                String v = p.getString("pref_legendary_mode_key", "");
-                if ("M9".equalsIgnoreCase(v)) {
-                    return 1;
-                }
-                if ("M3".equalsIgnoreCase(v)) {
-                    return 2;
-                }
-            }
-        } catch (Throwable ignored) {
-        }
-        return 0;
-    }
-
-    private void installLutFallbackHook(ClassLoader loader) {
-        if (lutHooked) {
-            return;
-        }
-        try {
-            Method compress = android.graphics.Bitmap.class.getDeclaredMethod("compress",
-                    android.graphics.Bitmap.CompressFormat.class, int.class,
-                    java.io.OutputStream.class);
-            compress.setAccessible(true);
-            hook(compress).intercept(chain -> {
-                if (Boolean.TRUE.equals(IN_LUT.get())) {
-                    return chain.proceed();
-                }
-                if (!compatFallbackEnabled()) {
-                    return chain.proceed();
-                }
-                try {
-                    android.graphics.Bitmap bm = (android.graphics.Bitmap) chain.getThisObject();
-                    if (bm == null || bm.getWidth() < 2000) {
-                        return chain.proceed();
-                    }
-                    byte legend = lastLegend;
-                    if (legend == 0) {
-                        legend = legendFromPrefs();
-                    }
-                    String asset = legend == 1 ? "leica_luts/130_LeicaNatural.png"
-                            : legend == 2 ? "leica_luts/M3_Monopan.png" : null;
-                    if (asset == null) {
-                        return chain.proceed();
-                    }
-                    if (moduleApk == null) {
-                        return chain.proceed();
-                    }
-                    LeicaLut lut = lutCache.get(asset);
-                    if (lut == null) {
-                        lut = LeicaLut.loadFromApk(moduleApk, asset);
-                        if (lut == null) {
-                            return chain.proceed();
-                        }
-                        lutCache.put(asset, lut);
-                    }
-                    log(Log.INFO, TAG, "LUT applying " + asset);
-            android.graphics.Bitmap out = lut.apply(bm, 1.0f);
-            log(Log.INFO, TAG, "LUT bitmap ready " + (out != null));
-                    if (out == null) {
-                        return chain.proceed();
-                    }
-                    out.compress((android.graphics.Bitmap.CompressFormat) chain.getArg(0),
-                            (Integer) chain.getArg(1), (java.io.OutputStream) chain.getArg(2));
-                    out.recycle();
-                    log(Log.INFO, TAG, "applied Leica LUT " + asset);
-                    return true;
-                } catch (Throwable t) {
-                    log(Log.WARN, TAG, "LUT fallback failed: " + t);
-                    return chain.proceed();
-                }
-            });
-            lutHooked = true;
-            log(Log.INFO, TAG, "installed the Leica LUT compatibility fallback");
-        } catch (Throwable t) {
-            log(Log.WARN, TAG, "cannot hook Bitmap.compress: " + t);
-        }
-    }
-
-    private boolean compatFallbackEnabled() {
-        // Explicit property wins; used for testing and for managed deployments.
-        if (propertyOn("camera.feature.compat_fallback")) {
-            return true;
-        }
-        try {
-            android.content.SharedPreferences p = getRemotePreferences("hypercameramod");
-            if (p != null && p.contains(COMPAT_FALLBACK_KEY)) {
-                return p.getBoolean(COMPAT_FALLBACK_KEY, false);
-            }
-        } catch (Throwable t) {
-            log(Log.WARN, TAG, "cannot read " + COMPAT_FALLBACK_KEY + ": " + t);
-        }
-        return propertyOn("camera.feature.compat_fallback");
-    }
-
-    // Genuine Moment App pipeline (from Moment App). Off by default; all native work
-    // happens in the module's :essential process.
-    private boolean essentialPipelineEnabled() {
-        if (propertyOn(ESSENTIAL_PIPELINE_PROP)) {
-            return true;
-        }
-        try {
-            android.content.SharedPreferences p = getRemotePreferences("hypercameramod");
-            if (p != null && p.contains(ESSENTIAL_PIPELINE_KEY)) {
-                return p.getBoolean(ESSENTIAL_PIPELINE_KEY, false);
-            }
-        } catch (Throwable t) {
-            log(Log.WARN, TAG, "cannot read " + ESSENTIAL_PIPELINE_KEY + ": " + t);
-        }
-        return false;
-    }
-
-    // ---- 2b. Legendary request bridge -----------------------------------------------------------
-    // The 6.7 app sends com.xiaomi.sessionparams.legendMode (M9=1, M3=2). The Aurora engine has no
-    // code to copy that key into MiMetadata tag 508, so a ported plugin would see 0 and disable
-    // itself. The port patches the plugin to read stylizationType instead; this hook makes the
-    // request carry the Legendary byte in that key. It only runs when the port's marker file is
-    // present, so a stock camera is never changed.
-    private void installLegendBridgeHook() {
-        // The marker means the real Nezha plugin is installed. Without it, the optional
-        // compatibility fallback still forwards the M9/M3 choice as stylizationType, which
-        // makes the stock Leica Authentic/Vibrant colour path approximate the look. It is
-        // not the real Legendary plugin.
-        boolean realBridge = HalCapabilities.hasLegendBridge();
-        if (legendBridgeHooked || (!realBridge && !compatFallbackEnabled())) {
-            return;
-        }
-        try {
-            Class<?> builder = Class.forName("android.hardware.camera2.CaptureRequest$Builder");
-            Class<?> keyClass = Class.forName("android.hardware.camera2.CaptureRequest$Key");
-            Method set = null;
-            for (Method m : builder.getDeclaredMethods()) {
-                if (m.getName().equals("set") && m.getParameterCount() == 2
-                        && m.getParameterTypes()[0] == keyClass) {
-                    set = m;
-                }
-            }
-            if (set == null) {
-                log(Log.WARN, TAG, "CaptureRequest.Builder.set(Key, Object) not found");
-                return;
-            }
-            Object stylizationKey = keyClass.getConstructor(String.class, Class.class)
-                    .newInstance(STYLIZATION_TYPE_KEY, Byte.class);
-            Method setMethod = builder.getMethod("set", keyClass, Object.class);
-            Method build = builder.getMethod("build");
-
-            hook(set).intercept(chain -> {
-                Object key = chain.getArg(0);
-                if (!(key instanceof CaptureRequest.Key<?> requestKey)) {
-                    return chain.proceed();
-                }
-                String name = requestKey.getName();
-                if (LEGEND_MODE_KEY.equals(name)) {
-                    byte legend = chain.getArg(1) instanceof Number number
-                            ? number.byteValue() : 0;
-                    BRIDGE_LEGEND.set(legend);
-                    if (legend != 0) {
-                        lastLegend = legend;
-                        lastLegendTime = android.os.SystemClock.elapsedRealtime();
-                    }
-                    Object result = chain.proceed();
-                    if (legend != 0 && !BRIDGE_SETTING.get()) {
-                        BRIDGE_SETTING.set(true);
-                        try {
-                            setMethod.invoke(chain.getThisObject(), stylizationKey, legend);
-                        } catch (Throwable t) {
-                            log(Log.WARN, TAG, "cannot add stylizationType to the request: " + t);
-                        } finally {
-                            BRIDGE_SETTING.set(false);
-                        }
-                    }
-                    return result;
-                }
-                if (STYLIZATION_TYPE_KEY.equals(name) && !BRIDGE_SETTING.get()) {
-                    Byte legend = BRIDGE_LEGEND.get();
-                    if (legend != null && legend != 0) {
-                        return chain.proceed(new Object[]{key, legend});
-                    }
-                }
-                return chain.proceed();
-            });
-            hook(build).intercept(chain -> {
-                try {
-                    return chain.proceed();
-                } finally {
-                    BRIDGE_LEGEND.remove();
-                }
-            });
-            legendBridgeHooked = true;
-            log(Log.INFO, TAG, "installed the Legendary -> stylizationType request bridge"
-                    + (realBridge ? " (HAL plugin)" : " (compatibility fallback)"));
-        } catch (Throwable t) {
-            log(Log.WARN, TAG, "cannot install the Legendary request bridge: " + t);
-        }
-    }
-
-    // Records the M3/M9 choice even when the real HAL bridge or the compatibility fallback is off,
-    // so the optional Essential pipeline knows which look the user selected. It does not modify
-    // the request: stock filters and LUT slots stay exactly as they were.
-    private void installLegendObserver() {
-        if (legendObserverHooked || legendBridgeHooked || !essentialPipelineEnabled()) {
-            return;
-        }
-        try {
-            Class<?> builder = Class.forName("android.hardware.camera2.CaptureRequest$Builder");
-            Class<?> keyClass = Class.forName("android.hardware.camera2.CaptureRequest$Key");
-            Method set = null;
-            for (Method m : builder.getDeclaredMethods()) {
-                if (m.getName().equals("set") && m.getParameterCount() == 2
-                        && m.getParameterTypes()[0] == keyClass) {
-                    set = m;
-                }
-            }
-            if (set == null) {
-                return;
-            }
-            hook(set).intercept(chain -> {
-                Object key = chain.getArg(0);
-                if (key instanceof CaptureRequest.Key<?> requestKey
-                        && LEGEND_MODE_KEY.equals(requestKey.getName())
-                        && chain.getArg(1) instanceof Number number
-                        && number.byteValue() != 0) {
-                    lastLegend = number.byteValue();
-                    lastLegendTime = android.os.SystemClock.elapsedRealtime();
-                }
-                return chain.proceed();
-            });
-            legendObserverHooked = true;
-            log(Log.INFO, TAG, "observing " + LEGEND_MODE_KEY + " for the Moment App pipeline");
-        } catch (Throwable t) {
-            log(Log.WARN, TAG, "cannot observe the Legendary style: " + t);
         }
     }
 

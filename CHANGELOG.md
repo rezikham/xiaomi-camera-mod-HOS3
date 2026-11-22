@@ -6,11 +6,14 @@ All notable changes to HyperCameraMod. The module follows a simple scheme: stabl
 
 ### Removed
 
-- The **Render M3/M9 in the camera engine (HAL LUT slot)** settings toggle.
-  The HAL LUT slot belongs to the separate HAL backport branch; its engine hook
-  is not part of this APK, so the switch could not render M3/M9 here.
-- The HAL gate `SystemProperties` hook and the "skip the Moment App pipeline"
-  condition that were tied to that toggle.
+- The **Render M3/M9 in the camera engine (HAL LUT slot)** toggle. The HAL LUT
+  slot belongs to the separate HAL backport branch; its engine hook is not part
+  of this APK.
+- The **Compatibility fallback (M9/M3 approximation)** toggle and the app-side
+  LUT rewrite of saved JPEGs. M3/M9 use the native filter LUT slots instead.
+- The **Leica Essential pipeline (real M3/M9)** toggle, the private
+  `:essential` service, and the Moment App post-processing path.
+- The HAL gate `SystemProperties` hook and the tied Moment App pipeline skip.
 
 ### Changed
 

@@ -49,16 +49,6 @@
             </intent-filter>
         </activity-alias>
 
-        <!--
-            Genuine Leica Essential pipeline. Runs in its own process so a native SIGSEGV can
-            never take down the camera. The camera process binds explicitly and sends the JPEG
-            through a pipe; the service checks the caller UID before doing any work.
-        -->
-        <service
-            android:name=".EssentialService"
-            android:exported="true"
-            android:process=":essential" />
-
     </application>
 
 </manifest>
