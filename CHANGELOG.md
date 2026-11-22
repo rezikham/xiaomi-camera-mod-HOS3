@@ -2,6 +2,33 @@
 
 All notable changes to HyperCameraMod. The module follows a simple scheme: stable releases are tagged `v<version>`, development builds are published as the `CI-Release` pre-release.
 
+## [1.2.3] - 2026-11-22
+
+### Added
+
+- **Leica UI theme (17U style)** switch. It chooses between the Leica Looks UI
+  (LCC) and the standard FILTER strip and follows the device default until the
+  user changes it. The camera process is overridden for
+  `ro.theme_customize` / `camera.debug.theme_customize.disabled`; no root and no
+  reboot are needed, only a Camera restart.
+- The M3/M9 cards in the Leica Looks panel now use the stock
+  `legendary_leica_m3` / `legendary_leica_m9` icon, template and text-icon
+  resources, so they show proper "M3" / "M9" labels and previews.
+
+### Changed
+
+- Renamed the entry toggle to **M3/M9 and films in Leica Looks** to distinguish
+  it from the new UI theme switch.
+- Film labels use a fallback typeface for characters missing from the embedded
+  Leica font (D, G, 2, etc.), keeping the longer film codes readable.
+
+### Notes
+
+- The Leica Looks panel currently lists M9 before M3; the standard FILTER strip
+  keeps M3, M9.
+- The KernelSU LUT module is unchanged from 1.2.0
+  (`camera-mod-ksu-v1.2.0-306.zip`).
+
 ## [1.2.2] - 2026-11-22
 
 ### Added

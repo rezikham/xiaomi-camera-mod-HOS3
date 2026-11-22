@@ -13,6 +13,7 @@ import android.graphics.ColorFilter;
 import android.graphics.PixelFormat;
 import android.graphics.PorterDuff;
 import android.graphics.PorterDuffColorFilter;
+import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.VectorDrawable;
 import android.os.Handler;
@@ -210,6 +211,9 @@ public class ModuleMain extends XposedModule {
     // out as the light gray of the native labels (#C1C1C1), and over a dark panel it is hardly
     // visible, as on the native labels.
     private static final int LABEL_RING_ALPHA = 56;
+    private static final Typeface FALLBACK_TYPEFACE =
+            Typeface.create("sans-serif-condensed", Typeface.NORMAL);
+    private static final Paint FALLBACK_MEASURE = new Paint(Paint.ANTI_ALIAS_FLAG);
     private static final String LABEL_TOP_LINE = "FLM";
     private static final float HYPHEN_LENGTH = 0.5f;    // hyphen length, as a share of letter height
     private static final Map<Character, Bitmap> GLYPH_CACHE = new HashMap<>();
@@ -1353,11 +1357,20 @@ public class ModuleMain extends XposedModule {
         float letters = 0;
         for (char c : text.toCharArray()) {
             Bitmap glyph = c == '-' ? null : glyph(c);
-            letters += c == '-' ? hyphen : glyph == null ? 0 : glyph.getWidth() * scale;
+            letters += c == '-' ? hyphen
+                    : glyph == null ? fallbackWidth(c, height) : glyph.getWidth() * scale;
         }
-        // Never wider than the label with its outline: tighten the gap when a text would not fit.
+        // Never wider than the label with its outline: first condense a long line, then
+        // tighten the gap if there is still no room.
         if (text.length() > 1) {
             float room = width - 1 - 2 * LABEL_RING_DP * density;
+            if (letters > room && letters > 0) {
+                float shrink = room / letters;
+                scale *= shrink;
+                letters *= shrink;
+                height *= shrink;
+                hyphen *= shrink;
+            }
             gap = Math.min(gap, (room - letters) / (text.length() - 1));
         }
         float total = letters + gap * (text.length() - 1);
@@ -1376,6 +1389,20 @@ public class ModuleMain extends XposedModule {
                     float glyphWidth = glyph.getWidth() * scale;
                     drawSpread(canvas, glyph, x, y, glyphWidth, height, spread, paint);
                     x += glyphWidth;
+                } else {
+                    Paint fallback = new Paint(paint);
+                    fallback.setTypeface(FALLBACK_TYPEFACE);
+                    fallback.setTextSize(height);
+                    fallback.setTextAlign(Paint.Align.LEFT);
+                    if (spread > 0) {
+                        fallback.setStyle(Paint.Style.STROKE);
+                        fallback.setStrokeWidth(spread * 2f);
+                    }
+                    String ch = String.valueOf(c);
+                    Paint.FontMetrics fm = fallback.getFontMetrics();
+                    float baseline = y + (height - (fm.descent - fm.ascent)) / 2f - fm.ascent;
+                    canvas.drawText(ch, x, baseline, fallback);
+                    x += fallback.measureText(ch);
                 }
             }
             x += gap;
@@ -1398,6 +1425,12 @@ public class ModuleMain extends XposedModule {
                         new RectF(x + dx, y + dy, x + dx + w, y + dy + h), paint);
             }
         }
+    }
+
+    private static synchronized float fallbackWidth(char c, float height) {
+        FALLBACK_MEASURE.setTypeface(FALLBACK_TYPEFACE);
+        FALLBACK_MEASURE.setTextSize(height);
+        return FALLBACK_MEASURE.measureText(String.valueOf(c));
     }
 
     private static synchronized Bitmap glyph(char c) {

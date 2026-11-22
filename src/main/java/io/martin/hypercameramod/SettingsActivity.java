@@ -22,16 +22,17 @@ public class SettingsActivity extends AppCompatActivity {
     // The camera process reads these through libxposed remote preferences.
     private static final String PREFS_GROUP = "hypercameramod";
     private static final String ORIGINAL_PORTRAIT_KEY = "original_portrait_enabled";
+    private static final String LEICA_THEME_KEY = "leica_theme_enabled";
     // One-shot marker: older builds persisted Original portrait as on for every device.
     private static final String MIGRATION_KEY = "device_defaults_migrated_v2";
     private static final String[] SETTING_KEYS = {
-            "essential_mode_enabled", "leica_ui_enabled", "m10r_enabled", "extra_filters_enabled",
-            "looks_entries_enabled", ORIGINAL_PORTRAIT_KEY
+            "essential_mode_enabled", LEICA_THEME_KEY, "leica_ui_enabled", "m10r_enabled",
+            "extra_filters_enabled", "looks_entries_enabled", ORIGINAL_PORTRAIT_KEY
     };
     // Original portrait is only offered by default on phones whose camera hardware layer can
     // preview it (17 Ultra, 18 Pro Max); on the 14 Ultra it deadlocks the preview.
     private static final boolean[] SETTING_DEFAULTS = {
-            true, true, false, true, true, DeviceSupport.originalPortraitDefault()
+            true, false, true, false, true, true, DeviceSupport.originalPortraitDefault()
     };
 
     private SharedPreferences modulePrefs;
@@ -87,6 +88,22 @@ public class SettingsActivity extends AppCompatActivity {
             local.edit()
                     .putBoolean(ORIGINAL_PORTRAIT_KEY, DeviceSupport.originalPortraitDefault())
                     .apply();
+        }
+        if (!local.contains(LEICA_THEME_KEY)) {
+            local.edit()
+                    .putBoolean(LEICA_THEME_KEY, "LCC".equals(readProp("ro.theme_customize")))
+                    .apply();
+        }
+    }
+
+    private static String readProp(String key) {
+        try {
+            Process process = new ProcessBuilder("getprop", key).redirectErrorStream(true).start();
+            String value = new String(process.getInputStream().readAllBytes()).trim();
+            process.waitFor();
+            return value;
+        } catch (Throwable t) {
+            return "";
         }
     }
 

@@ -7,6 +7,12 @@
         android:defaultValue="true" />
 
     <SwitchPreferenceCompat
+        android:key="@string/pref_leica_theme_key"
+        android:title="@string/pref_leica_theme_title"
+        android:summary="@string/pref_leica_theme_summary"
+        android:defaultValue="false" />
+
+    <SwitchPreferenceCompat
         android:key="@string/pref_leica_ui_key"
         android:title="@string/pref_leica_ui_title"
         android:summary="@string/pref_leica_ui_summary"

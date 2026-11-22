@@ -8,8 +8,12 @@
     <string name="pref_essential_mode_summary">Show Leica Essential mode (M3/M9) in the standard UI mode strip. Real M3/M9 processing needs the 17 Ultra/18 Pro Max HAL; on other devices enable the compatibility fallback below.</string>
     <string name="pref_essential_mode_key">essential_mode_enabled</string>
 
-    <string name="pref_leica_ui_title">Leica UI (Looks)</string>
-    <string name="pref_leica_ui_summary">Expose M3/M9 and the film filters in the Leica Looks panel on devices that use the Leica UI. When off, the module only modifies the standard FILTER strip. Restart Camera after changing. Both UIs are supported; the camera decides which one to show.</string>
+    <string name="pref_leica_theme_title">Leica UI theme (17U style)</string>
+    <string name="pref_leica_theme_summary">Use the Leica Looks UI instead of the standard FILTER strip. The default follows this device (off on the 14 Ultra, on for LCC/17U). Restart Camera after changing.</string>
+    <string name="pref_leica_theme_key">leica_theme_enabled</string>
+
+    <string name="pref_leica_ui_title">M3/M9 and films in Leica Looks</string>
+    <string name="pref_leica_ui_summary">Add M3/M9 and the film filters to the Leica Looks panel. This only affects devices that use the Leica UI theme; the standard FILTER strip is modified regardless.</string>
     <string name="pref_leica_ui_key">leica_ui_enabled</string>
 
     <string name="pref_m10r_title">CMOS (M10R) Style</string>
