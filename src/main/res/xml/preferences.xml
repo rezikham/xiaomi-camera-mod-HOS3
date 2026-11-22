@@ -36,12 +36,6 @@
         android:defaultValue="false" />
 
     <SwitchPreferenceCompat
-        android:key="@string/pref_hal_lut_slot_key"
-        android:title="@string/pref_hal_lut_slot_title"
-        android:summary="@string/pref_hal_lut_slot_summary"
-        android:defaultValue="false" />
-
-    <SwitchPreferenceCompat
         android:key="@string/pref_looks_entries_key"
         android:title="@string/pref_looks_entries_title"
         android:summary="@string/pref_looks_entries_summary"

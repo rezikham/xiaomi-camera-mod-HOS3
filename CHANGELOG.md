@@ -2,6 +2,25 @@
 
 All notable changes to HyperCameraMod. The module follows a simple scheme: stable releases are tagged `v<version>`, development builds are published as the `CI-Release` pre-release.
 
+## [1.2.1] - 2026-11-22
+
+### Removed
+
+- The **Render M3/M9 in the camera engine (HAL LUT slot)** settings toggle.
+  The HAL LUT slot belongs to the separate HAL backport branch; its engine hook
+  is not part of this APK, so the switch could not render M3/M9 here.
+- The HAL gate `SystemProperties` hook and the "skip the Moment App pipeline"
+  condition that were tied to that toggle.
+
+### Changed
+
+- The **M3 and M9 as their own Looks entries** toggle is unchanged and still
+  controls the M3/M9 chips in the Leica Looks panel and FILM filter strip.
+- The Leica UI (Looks) toggle is unchanged; it is still used on non-Ultra
+  phones that show the Leica Looks panel.
+- The KernelSU LUT module is unchanged from 1.2.0
+  (`camera-mod-ksu-v1.2.0-306.zip`).
+
 ## [1.2.0] - 2026-11-22
 
 Stable release: all twelve Camera 5.3 film filters, M3/M9 Leica Looks with a

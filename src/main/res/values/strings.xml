@@ -25,16 +25,12 @@
     <string name="pref_compat_fallback_key">compat_fallback_enabled</string>
 
     <string name="pref_essential_pipeline_title">Leica Essential pipeline (real M3/M9)</string>
-    <string name="pref_essential_pipeline_summary">Apply the genuine Leica filter from Essential Moments to saved JPEGs when M3 or M9 is selected. Native code runs in a private module process, so a crash cannot take down Camera. Off by default; restart Camera after changing. Do not combine with the HAL LUT slot. M3 uses the app\'s grayscale fallback unless the optional Monopan libs are bundled.</string>
+    <string name="pref_essential_pipeline_summary">Apply the genuine Leica filter from Essential Moments to saved JPEGs when M3 or M9 is selected. Native code runs in a private module process, so a crash cannot take down Camera. Off by default; restart Camera after changing. M3 uses the app\'s grayscale fallback unless the optional Monopan libs are bundled.</string>
     <string name="pref_essential_pipeline_key">essential_pipeline_enabled</string>
 
     <string name="pref_extra_filters_title">Extra Film Filters</string>
     <string name="pref_extra_filters_summary">Expose all 12 film simulation filters: 600F, BF70, R600, P100F, F-50, KC64, V250, H400, KP160, FC400, C-50D, KG200. Existing entries are reused and renamed to the film code.</string>
     <string name="pref_extra_filters_key">extra_filters_enabled</string>
-
-    <string name="pref_hal_lut_slot_title">Render M3/M9 in the camera engine (HAL LUT slot)</string>
-    <string name="pref_hal_lut_slot_summary">Hand the look to the stock filter node instead of post-processing the photo. Requires the LUT file installed in /data/vendor/camera (tools/hal-port/engine/leica_look.sh) and the Negative filter selected. Restart Camera and the camera provider after changing this or the LUT.</string>
-    <string name="pref_hal_lut_slot_key">hal_lut_slot_enabled</string>
 
     <string name="pref_looks_entries_title">M3 and M9 as their own Looks entries</string>
     <string name="pref_looks_entries_summary">Add M3 and M9 chips to the Leica Looks panel. They render the module LUTs (lut_m3.png / lut_m9.png in /data/vendor/camera) through the stock filter node; every stock filter and look stays untouched. Install the two files with tools/hal-port/engine/leica_look.sh look-m3 / look-m9, then restart Camera.</string>
