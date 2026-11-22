@@ -1,44 +1,27 @@
 #!/system/bin/sh
-# HyperCameraMod module installer customization script
-# This script is SOURCED by the KernelSU module installer (update-binary)
-# after all files are extracted. Do NOT execute directly.
+# HyperCameraMod customize.sh -- LUT stage
+# Sourced by the KernelSU installer after extraction.
 
-# KernelSU installer provides these variables:
-#   MODPATH - where module files should be installed
-#   ZIPFILE - path to the module ZIP
-#   ARCH    - device architecture (arm64, etc.)
-#   API     - Android API level
-#   KSU_VER - KernelSU version
-#   TMPDIR  - temporary directory
+ui_print "HyperCameraMod installer: LUT stage"
+ui_print ""
 
-# ui_print and abort are available as functions
+MODPATH_HAS_LUTS=1
+for lut in lut_m3.png lut_m9.png lut_600f.png lut_bf70.png lut_r600.png lut_p100f.png lut_f50.png lut_kc64.png lut_v250.png lut_h400.png lut_kp160.png lut_fc400.png lut_c50d.png lut_kg200.png; do
+    if [ ! -f "$MODPATH/data/vendor/camera/$lut" ]; then
+        ui_print "WARNING: $lut missing from module ZIP"
+        MODPATH_HAS_LUTS=0
+    fi
+done
 
-ui_print "HyperCameraMod installer: preparing module..."
-
-# Check if APK exists in the extracted files
-APK_PATH="$MODPATH/HyperCameraMod.apk"
-if [ ! -f "$APK_PATH" ]; then
-    abort "ERROR: HyperCameraMod.apk not found in module ZIP"
+if [ "$MODPATH_HAS_LUTS" -eq 1 ]; then
+    ui_print "All 14 LUTs present (M3/M9 + 12 film filters)."
+else
+    ui_print "Some LUTs are missing - module may not work as expected."
 fi
 
-# Module will be installed to /data/adb/modules/hypercameramod (MODPATH)
-# APK is already in the right place at $MODPATH/HyperCameraMod.apk
-# post-fs-data.sh will handle installation on first boot
-
-ui_print "HyperCameraMod module files prepared."
-ui_print ""
-ui_print "IMPORTANT: After installation completes and you reboot:"
-ui_print "1. Open KernelSU app (or your root manager)"
-ui_print "2. Go to App List / Superuser settings"
-ui_print "3. Find 'HyperCameraMod' (io.rezikham.hypercameramod)"
-ui_print "4. Grant root / Allow superuser access"
-ui_print ""
-ui_print "Then enable the module in LSPosed/Vector,"
-ui_print "scope 'com.android.camera', force-stop Camera."
+ui_print "This build stages LUTs only - no libraries, no mounts, no APK install."
 ui_print ""
 
-# Request hot install if possible (apply without reboot)
-# Only if we're not changing system/ files (we removed system/)
 export MODULE_HOT_INSTALL_REQUEST=true
 export MODULE_HOT_RUN_SCRIPT=hotinstall.sh
 

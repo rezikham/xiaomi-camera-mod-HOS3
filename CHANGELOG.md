@@ -2,6 +2,58 @@
 
 All notable changes to HyperCameraMod. The module follows a simple scheme: stable releases are tagged `v<version>`, development builds are published as the `CI-Release` pre-release.
 
+## [1.2.0] - 2026-11-22
+
+Stable release: all twelve Camera 5.3 film filters, M3/M9 Leica Looks with a
+working live preview, the authentic 17U M3 LUT, and a LUT-only KernelSU module.
+
+### Added
+
+- **All 12 film filters**: 600F, BF70, R600, P100F, F-50, KC64, V250, H400,
+  KP160, FC400, C-50D, KG200. Every entry is displayed by its film code.
+- **M3 and M9 Leica Looks** as separate entries on the hidden enum slots
+  `91` (`N_NEUTRAL`) and `92` (`N_SOFT`), so V250 and H400 are not hijacked.
+- **LUT-only KernelSU module** that stages the M3/M9 and all twelve film LUTs
+  at `/data/vendor/camera`; it contains no libraries, plugin mounts, or
+  `/odm`/`/vendor` changes and does not install the APK.
+
+### Changed
+
+- Film filters reuse an existing camera entry (matched by ordinal, display-name
+  resource, strip key, or cloud id) instead of adding a duplicate. Existing
+  entries are renamed to the film code, so a 6.7/6.8 camera shows the stock
+  code instead of an artistic name.
+- The M3 LUT is the authentic 17U `M3_Monopan.png` (md5
+  `c4ff65cebdcd8edfa7146c6ab2f838f9`). The simulated fallback
+  (`167c769a022945ea5bce80985b344209`) is rejected by validation.
+- The KernelSU module is now the LUT stage only; APK installation is done
+  manually and is no longer part of the module.
+
+### Fixed
+
+- **M3/M9 live preview**: the render engine asks for the neutral fallback
+  `lut_nc` for slots 91/92, not `lut_m3`/`lut_m9`. `OpenGl3dUtils.a` and
+  `Xu.g` now return a freshly decoded M3/M9 bitmap for that name while
+  `EffectController.h` reports filter `91`/`92`.
+- **Preview crash**: cached bitmaps were handed to native consumers that
+  recycle them. The next upload then called `AndroidBitmap_lockPixels` on a
+  recycled bitmap and `CandySDK_setLutBitmap` read an uninitialized pixel
+  pointer. Every preview request now decodes a fresh 512x512 bitmap, which
+  removes the SIGSEGV on repeated M3/M9 switching.
+
+### Verified
+
+- Xiaomi 14 Ultra `aurora`, HyperOS `3.0.304.0.WNAMIXM`, Camera `6.7.000280.0`:
+  M3 preview saturation `0.0` (exact monochrome), M9 about `7.0` versus `8.7`
+  for Original on the same scene; nine live M3/M9/Original switches completed
+  with the camera process alive and no fatal signal.
+- M3 capture still reports `FilterId 91` and produces a monochrome image.
+
+### Notes
+
+- The HAL backport and the Madrid Gallery re-edit plugin port remain on the
+  `hal-re` branch and are not part of this release.
+
 ## [1.1.0] - 2026-11-17
 
 Major feature release adding Original Portrait software implementation, Moment App terminology unification, and complete documentation.

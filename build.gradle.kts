@@ -87,37 +87,3 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("com.google.android.material:material:1.11.0")
 }
-
-// Task to generate KSU module.prop with correct version
-tasks.register("generateKsuModuleProp") {
-    group = "build"
-    description = "Generates camera-mod-ksu/module.prop with version from version.properties"
-    doLast {
-        val versionProps = Properties()
-        val versionFile = rootProject.file("version.properties")
-        if (versionFile.exists()) {
-            versionProps.load(FileInputStream(versionFile))
-        }
-        val baseVersion = versionProps.getProperty("baseVersion", "1.0.0")
-        val versionCode = versionProps.getProperty("versionCode", "100")
-        val versionName = "$baseVersion-$versionCode"
-
-        val modulePropFile = file("camera-mod-ksu/module.prop")
-        val content = """
-            id=hypercameramod
-            name=HyperCameraMod
-            version=$versionName
-            versionCode=$versionCode
-            author=rezikham
-            description=HyperCameraMod $versionName - M3/M9 Leica looks + Original Portrait software for Aurora (14 Ultra). LSPosed module for Xiaomi Camera 6.7. Stages M3/M9 LUTs, enables HAL engine gate. Includes APK auto-install as user app (grant root in KernelSU after install). Compatible with nomount/zeromount/mountify metamodules. No ChiX plugin.
-        """.trimIndent()
-
-        modulePropFile.writeText(content)
-        println("Generated camera-mod-ksu/module.prop with version $versionName")
-    }
-}
-
-// Ensure generateKsuModuleProp runs before assembleRelease
-tasks.withType<com.android.build.gradle.tasks.PackageAndroidArtifact>().configureEach {
-    finalizedBy("generateKsuModuleProp")
-}

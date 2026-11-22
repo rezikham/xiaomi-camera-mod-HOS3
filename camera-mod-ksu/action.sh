@@ -1,55 +1,33 @@
 #!/system/bin/sh
-# HyperCameraMod action.sh
-# Runs when user clicks the Action button in KernelSU app
+# HyperCameraMod action.sh -- LUT stage
+# Shows the state of all staged LUTs when the Action button is pressed.
 
-MODDIR=${0%/*}
-PACKAGE="io.rezikham.hypercameramod"
-
-# Print to KernelSU app UI (captured by installer)
 echo ""
 echo "============================================"
-echo "  HyperCameraMod Actions"
+echo "  HyperCameraMod - LUT stage"
 echo "============================================"
 echo ""
-echo "Installed package: $PACKAGE"
-echo ""
 
-# Check if APK is installed
-if pm list packages | grep -q "^package:$PACKAGE$"; then
-    echo "✓ APK is installed as user app"
-    # Check version
-    VERSION=$(pm dump "$PACKAGE" 2>/dev/null | grep versionName | head -1 | sed 's/.*versionName=//')
-    if [ -n "$VERSION" ]; then
-        echo "  Version: $VERSION"
+LUTS="lut_m3.png lut_m9.png
+lut_600f.png lut_bf70.png lut_r600.png lut_p100f.png
+lut_f50.png lut_kc64.png lut_v250.png lut_h400.png
+lut_kp160.png lut_fc400.png lut_c50d.png lut_kg200.png"
+
+for lut in $LUTS; do
+    dst="/data/vendor/camera/$lut"
+    if [ -f "$dst" ]; then
+        echo "OK   $lut ($(wc -c < "$dst" | tr -d ' ') bytes)"
+    else
+        echo "MISS $lut"
     fi
-else
-    echo "✗ APK NOT installed"
-    echo "  Run post-fs-data.sh or reboot to install"
-fi
+done
 
-# Check root permission
-ROOT_STATUS="Unknown"
-if [ -f /data/adb/ksu/bin/ksud ]; then
-    ROOT_STATUS="KernelSU"
-elif [ -f /data/adb/magisk/magisk ]; then
-    ROOT_STATUS="Magisk"
-elif [ -f /data/adb/ap/bin/apd ]; then
-    ROOT_STATUS="APatch"
-fi
 echo ""
-echo "Root manager: $ROOT_STATUS"
+echo "HAL gate camera.debug.mivi3.output.jpeg = $(getprop camera.debug.mivi3.output.jpeg)"
 echo ""
-echo "To grant root permission to HyperCameraMod:"
-echo "1. Open $ROOT_STATUS app"
-echo "2. Go to App List / Superuser settings"
-echo "3. Find 'HyperCameraMod' (io.rezikham.hypercameramod)"
-echo "4. Grant root / Allow superuser access"
-echo ""
-echo "Then enable module in LSPosed/Vector:"
-echo "  Scope: com.android.camera"
-echo "  Force-stop Camera after enabling"
+echo "This build stages LUTs only. No libraries are mounted."
 echo "============================================"
 echo ""
 
-log -t HyperCameraMod "Action button pressed, status shown"
+log -t HyperCameraMod "Action button: LUT status shown"
 exit 0

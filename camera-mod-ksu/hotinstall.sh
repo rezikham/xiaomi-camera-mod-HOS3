@@ -1,67 +1,30 @@
 #!/system/bin/sh
-# HyperCameraMod hotinstall.sh
-# Runs during KernelSU hot install (module update without reboot)
-# Handles APK update by reinstalling if version changed
+# HyperCameraMod hotinstall.sh -- LUT stage
+# Re-stage all bundled LUTs when the module is hot-installed (no reboot).
+# No APK install, no library mounts.
 
 MODDIR=${0%/*}
-PACKAGE="io.rezikham.hypercameramod"
-APK_PATH="$MODDIR/HyperCameraMod.apk"
 
-log -t HyperCameraMod "Hot install: checking for APK update..."
+log -t HyperCameraMod "hotinstall: LUT stage"
 
-if [ ! -f "$APK_PATH" ]; then
-    log -t HyperCameraMod "Hot install: APK not found, skipping"
-    exit 0
-fi
+mkdir -p /data/vendor/camera
 
-# Check if package is installed
-if ! pm list packages | grep -q "^package:$PACKAGE$"; then
-    log -t HyperCameraMod "Hot install: APK not installed yet, will install on boot"
-    exit 0
-fi
+LUTS="lut_m3.png lut_m9.png
+lut_600f.png lut_bf70.png lut_r600.png lut_p100f.png
+lut_f50.png lut_kc64.png lut_v250.png lut_h400.png
+lut_kp160.png lut_fc400.png lut_c50d.png lut_kg200.png"
 
-# Get current installed version code
-INSTALLED_VERSION=$(dumpsys package $PACKAGE 2>/dev/null | grep versionCode | head -1 | sed 's/.*versionCode=\([0-9]*\).*/\1/')
-
-# Get new APK version code from module.prop (versionCode field)
-NEW_VERSION=$(grep "^versionCode=" "$MODDIR/module.prop" 2>/dev/null | cut -d'=' -f2)
-
-if [ -n "$INSTALLED_VERSION" ] && [ -n "$NEW_VERSION" ]; then
-    if [ "$INSTALLED_VERSION" -lt "$NEW_VERSION" ]; then
-        log -t HyperCameraMod "Hot install: updating APK from version $INSTALLED_VERSION to $NEW_VERSION"
-        pm install -r -g "$APK_PATH" >/dev/null 2>&1
-        if [ $? -eq 0 ]; then
-            log -t HyperCameraMod "Hot install: APK updated successfully to version $NEW_VERSION"
-        else
-            log -t HyperCameraMod "Hot install: APK update failed"
-        fi
-    else
-        log -t HyperCameraMod "Hot install: APK already at version $INSTALLED_VERSION (new: $NEW_VERSION), no update needed"
+for lut in $LUTS; do
+    src="$MODDIR/data/vendor/camera/$lut"
+    dst="/data/vendor/camera/$lut"
+    if [ -f "$src" ]; then
+        cp -f "$src" "$dst"
+        chmod 0644 "$dst"
+        chcon u:object_r:vendor_camera_data_file:s0 "$dst" 2>/dev/null
     fi
-else
-    # Fallback: just reinstall
-    log -t HyperCameraMod "Hot install: version check failed, reinstalling APK"
-    pm install -r -g "$APK_PATH" >/dev/null 2>&1
-    if [ $? -eq 0 ]; then
-        log -t HyperCameraMod "Hot install: APK reinstalled"
-    fi
-fi
+done
 
-# Also re-stage LUTs in case they changed
-MODDIR=${0%/*}
-if [ -f "$MODDIR/data/vendor/camera/lut_m3.png" ]; then
-    cp -f "$MODDIR/data/vendor/camera/lut_m3.png" /data/vendor/camera/lut_m3.png
-    chmod 0644 /data/vendor/camera/lut_m3.png 2>/dev/null
-    chcon u:object_r:vendor_camera_data_file:s0 /data/vendor/camera/lut_m3.png 2>/dev/null
-fi
-if [ -f "$MODDIR/data/vendor/camera/lut_m9.png" ]; then
-    cp -f "$MODDIR/data/vendor/camera/lut_m9.png" /data/vendor/camera/lut_m9.png
-    chmod 0644 /data/vendor/camera/lut_m9.png 2>/dev/null
-    chcon u:object_r:vendor_camera_data_file:s0 /data/vendor/camera/lut_m9.png 2>/dev/null
-fi
-
-# Reset HAL gate property
 resetprop -n camera.debug.mivi3.output.jpeg true
 
-log -t HyperCameraMod "Hot install complete"
+log -t HyperCameraMod "hotinstall: LUTs staged"
 exit 0

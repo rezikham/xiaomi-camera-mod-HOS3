@@ -232,23 +232,26 @@ public class ModuleMain extends XposedModule {
         is.close();
         zip.close();
 
-        // Copy to system location using su: pipe LUT bytes through su stdin,
-        // write to /data/vendor/camera/<name>, chmod 0644.
-        Process su = Runtime.getRuntime().exec("su");
-        OutputStream os = su.getOutputStream();
-        PrintWriter pw = new PrintWriter(os);
-        pw.println("cp /dev/stdin " + destPath);
-        pw.println("chmod 0644 " + destPath);
-        pw.println("exit");
-        pw.flush();
+        // Base64 encode for safe transmission through su stdin
+        String base64 = android.util.Base64.encodeToString(data, android.util.Base64.DEFAULT);
 
-        // Write LUT bytes to su's stdin after the commands
-        os.write(data);
+        // Copy to system location using su:
+        //   su -c "base64 -d > /data/vendor/camera/lut_m3.png"
+        // su runs the shell command with stdin connected to our OutputStream.
+        // base64 reads from stdin (su's stdin), decodes, writes to destPath.
+        Process su = Runtime.getRuntime().exec(new String[]{"su", "-c", "base64 -d > " + destPath});
+        OutputStream os = su.getOutputStream();
+        os.write(base64.getBytes(java.nio.charset.StandardCharsets.UTF_8));
         os.flush();
         int exitCode = su.waitFor();
+
         if (exitCode != 0) {
             throw new Exception("su exit code: " + exitCode);
         }
+
+        // Set permissions
+        Process chmod = Runtime.getRuntime().exec(new String[]{"su", "-c", "chmod 0644 " + destPath});
+        chmod.waitFor();
     }
 
     private void installPropertyHook() {
@@ -1572,11 +1575,19 @@ public class ModuleMain extends XposedModule {
     // build, and their look name - which MIVIRenderTag puts into "lutNames" and MIVILutSaver
     // writes out - is redirected to our own files in Di.k.d.
     private static final int LOOK_TEXT_BASE = 0x7e030000;   // made-up ids for the chip labels
-    private static final int LOOK_M3 = 86;                  // enum entry N_H_400, hidden here
-    private static final int LOOK_M9 = 85;                  // enum entry N_V_250, hidden here
+    private static final int LOOK_M3 = 91;                  // enum entry N_NEUTRAL, unused in Photo
+    private static final int LOOK_M9 = 92;                  // enum entry N_SOFT, unused in Photo
+    // Authentic 17U M3 Monopan extraction. The old 167c769a... file was the
+    // earlier reproduced fallback and must be replaced.
+    private static final String M3_MD5 = "c4ff65cebdcd8edfa7146c6ab2f838f9";
+    private static final String M9_MD5 = "ecbafbf8130ba7340749e95ace25616b";
+    private static volatile int ACTIVE_LOOK = 0;
+    private static volatile long ACTIVE_LOOK_AT = 0L;
+    private static volatile java.lang.reflect.Method EFFECT_CONTROLLER_GET;
+    private static volatile java.lang.reflect.Field EFFECT_CONTROLLER_FILTER;
+    private static final java.util.Set<String> PREVIEW_LOGGED =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
     private static final String LOOKS_ENTRIES_KEY = "looks_entries_enabled";
-    private static final java.util.Map<String, android.graphics.Bitmap> LOOK_BITMAPS =
-            new java.util.concurrent.ConcurrentHashMap<>();
     private volatile boolean looksEntriesHooked;
     private volatile boolean lookTextHooked;
 
@@ -1674,6 +1685,7 @@ public class ModuleMain extends XposedModule {
                 return result;
             });
             installLookLutHooks(loader);
+            installPreviewLutHook(loader);
             looksEntriesHooked = true;
             log(Log.INFO, TAG, "installed M3/M9 Looks entries");
         } catch (Throwable t) {
@@ -1896,6 +1908,8 @@ public class ModuleMain extends XposedModule {
                 if (name == null || result == null) {
                     return result;
                 }
+                ACTIVE_LOOK = ordinal;
+                ACTIVE_LOOK_AT = System.currentTimeMillis();
                 log(Log.INFO, TAG, "look resolve: id=" + id + " ordinal=" + ordinal
                         + " name=" + name);
                 writeLegendStyle(ordinal == LOOK_M3 ? 2 : 1);
@@ -1906,11 +1920,21 @@ public class ModuleMain extends XposedModule {
                 Object result = chain.proceed();
                 try {
                     Object self = chain.getThisObject();
-                    android.graphics.Bitmap bm = lookBitmap((String) nameField.get(self));
+                    String lookName = (String) nameField.get(self);
+                    if (!"lut_m3".equals(lookName) && !"lut_m9".equals(lookName)) {
+                        return result;
+                    }
+                    ensureLookFile(lookName);
+                    android.graphics.Bitmap bm = freshLookBitmap(lookName);
                     if (bm != null) {
+                        if (PREVIEW_LOGGED.add("bean:" + lookName)) {
+                            log(Log.INFO, TAG, "look bitmap " + lookName + " -> "
+                                    + bm.getWidth() + "x" + bm.getHeight());
+                        }
                         return bm;
                     }
-                } catch (Throwable ignored) {
+                } catch (Throwable t) {
+                    log(Log.WARN, TAG, "look bitmap substitution failed: " + t);
                 }
                 return result;
             });
@@ -1918,6 +1942,258 @@ public class ModuleMain extends XposedModule {
         } catch (Throwable t) {
             log(Log.WARN, TAG, "cannot install M3/M9 look names: " + t);
         }
+    }
+
+    // The preview renderer loads the native enum LUT through Xu.g.b(context, name) (or
+    // Xu.g.a(path)). M3/M9 use slots 91/92, whose native names are lut_normal_neutral and
+    // lut_normal_soft, so the preview was showing those stock LUTs. Return our own bitmap for
+    // those two names.
+    private void installPreviewLutHook(ClassLoader loader) {
+        try {
+            Class<?> loaderClass = Class.forName("Xu.g", false, loader);
+            Method fromRaw = loaderClass.getDeclaredMethod("b",
+                    android.content.Context.class, String.class);
+            Method fromFile = loaderClass.getDeclaredMethod("a", String.class);
+            hook(fromRaw).intercept(chain -> {
+                String name = (String) chain.getArg(1);
+                Bitmap bm = previewLut(name);
+                return bm != null ? bm : chain.proceed();
+            });
+            hook(fromFile).intercept(chain -> {
+                String path = (String) chain.getArg(0);
+                Bitmap bm = previewLutFromPath(path);
+                return bm != null ? bm : chain.proceed();
+            });
+            // The GL renderer's own LUT resolver is the path that actually runs
+            // in the camera app UID. It cannot read /data/vendor/camera, so give
+            // it the APK asset bitmap directly.
+            Class<?> gl = Class.forName("com.xiaomi.utils.OpenGl3dUtils", false, loader);
+            Method resolve = gl.getDeclaredMethod("a",
+                    android.content.Context.class, String.class,
+                    boolean.class, boolean.class);
+            hook(resolve).intercept(chain -> {
+                String name = (String) chain.getArg(1);
+                Bitmap bm = previewLut(name);
+                if (PREVIEW_LOGGED.add("gl:" + name)) {
+                    log(Log.INFO, TAG, "OpenGl3dUtils LUT " + name
+                            + " active=" + currentFilterOrdinal()
+                            + " -> " + describeBitmap(bm));
+                }
+                return bm != null ? bm : chain.proceed();
+            });
+            installPreviewLutSaverHook(loader);
+            installFilterSelectHook(loader);
+            installCandyProbeHook(loader);
+            log(Log.INFO, TAG, "installed M3/M9 preview LUT hook");
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot hook Xu.g: " + t);
+        }
+    }
+
+    private void installFilterSelectHook(ClassLoader loader) {
+        try {
+            Class<?> ec = Class.forName("com.xiaomi.camera.effect.EffectController",
+                    false, loader);
+            Method setEffect = ec.getDeclaredMethod("e0", int.class, int.class);
+            EFFECT_CONTROLLER_GET = ec.getDeclaredMethod("u");
+            EFFECT_CONTROLLER_FILTER = ec.getDeclaredField("h");
+            EFFECT_CONTROLLER_FILTER.setAccessible(true);
+            hook(setEffect).intercept(chain -> {
+                int id = (Integer) chain.getArg(0);
+                int ordinal = id & 0xFFFF;
+                if (ordinal == LOOK_M3 || ordinal == LOOK_M9) {
+                    ACTIVE_LOOK = ordinal;
+                    ACTIVE_LOOK_AT = System.currentTimeMillis();
+                    log(Log.INFO, TAG, "effect filter id=" + id
+                            + " ordinal=" + ordinal);
+                } else if (ACTIVE_LOOK != 0) {
+                    ACTIVE_LOOK = 0;
+                    log(Log.INFO, TAG, "effect filter cleared by e0 id=" + id);
+                }
+                return chain.proceed();
+            });
+            log(Log.INFO, TAG, "installed filter selection hook");
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot hook EffectController.e0: " + t);
+        }
+    }
+
+    // Logging-only probe: record the LUT bitmap shape CandySDK receives,
+    // without changing it. Used to match the native preview LUT format safely.
+    private void installCandyProbeHook(ClassLoader loader) {
+        try {
+            Class<?> candy = Class.forName("com.xiaomi.milab.filtersdk.CandySDK",
+                    false, loader);
+            Method setIndexed = candy.getDeclaredMethod("f", int.class, Bitmap.class);
+            Method setSingle = candy.getDeclaredMethod("g", Bitmap.class);
+            hook(setIndexed).intercept(chain -> {
+                Bitmap bm = (Bitmap) chain.getArg(1);
+                if (PREVIEW_LOGGED.add("probe-f")) {
+                    log(Log.INFO, TAG, "CandySDK f index=" + chain.getArg(0)
+                            + " bmp=" + describeBitmap(bm));
+                }
+                return chain.proceed();
+            });
+            hook(setSingle).intercept(chain -> {
+                Bitmap bm = (Bitmap) chain.getArg(0);
+                if (PREVIEW_LOGGED.add("probe-g")) {
+                    log(Log.INFO, TAG, "CandySDK g bmp=" + describeBitmap(bm));
+                }
+                return chain.proceed();
+            });
+            log(Log.INFO, TAG, "installed CandySDK LUT probe");
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot probe CandySDK: " + t);
+        }
+    }
+
+    private static String describeBitmap(Bitmap bm) {
+        if (bm == null) {
+            return "null";
+        }
+        return bm.getWidth() + "x" + bm.getHeight() + "/" + bm.getConfig()
+                + "/recycled=" + bm.isRecycled();
+    }
+
+    // The live preview in some builds reads the native Neutral/Soft file that
+    // MIVILutSaver writes. Replace that writer for slots 91/92 only, so the native
+    // preview name resolves to the same LUT as capture.
+    private void installPreviewLutSaverHook(ClassLoader loader) {
+        try {
+            Class<?> saver = Class.forName("com.xiaomi.camera.mivi.filter.MIVILutSaver",
+                    false, loader);
+            Method save = saver.getDeclaredMethod("saveLutByFilterId", int.class);
+            Class<?> cache = Class.forName("com.xiaomi.camera.mivi.filter.MIVILutCache",
+                    false, loader);
+            Object instance = cache.getMethod("getInstance").invoke(null);
+            Method add = cache.getMethod("addLutName", String.class);
+            Method remove = cache.getMethod("removeLutName", String.class);
+            hook(save).intercept(chain -> {
+                int id = (Integer) chain.getArg(0);
+                int ordinal = id & 0xFFFF;
+                if (ordinal != LOOK_M3 && ordinal != LOOK_M9) {
+                    return chain.proceed();
+                }
+                String ourName = ordinal == LOOK_M3 ? "lut_m3" : "lut_m9";
+                String nativeName = ordinal == LOOK_M3
+                        ? "lut_normal_neutral" : "lut_normal_soft";
+                try {
+                    java.nio.file.Path dst = java.nio.file.Paths.get(
+                            "/data/vendor/camera/" + nativeName + ".png");
+                    if (!writeLookAsset(ourName, dst)) {
+                        throw new java.io.IOException("asset write failed");
+                    }
+                    dst.toFile().setReadable(true, false);
+                    remove.invoke(instance, nativeName);
+                    add.invoke(instance, nativeName);
+                    if (PREVIEW_LOGGED.add("native:" + nativeName)) {
+                        log(Log.INFO, TAG, "preview native LUT " + nativeName
+                                + " <- APK asset " + ourName);
+                    }
+                } catch (Throwable t) {
+                    log(Log.WARN, TAG, "native preview LUT failed for "
+                            + nativeName + ": " + t);
+                }
+                return null;
+            });
+            log(Log.INFO, TAG, "installed M3/M9 native preview LUT hook");
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot hook MIVILutSaver: " + t);
+        }
+    }
+
+    private Bitmap freshLookBitmap(String name) {
+        String asset = "lut_m3".equals(name) ? "leica_luts/M3_Monopan.png"
+                : "leica_luts/130_LeicaNatural.png";
+        if (moduleApk == null) {
+            return null;
+        }
+        try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(moduleApk)) {
+            java.util.zip.ZipEntry entry = zip.getEntry("assets/" + asset);
+            if (entry == null) {
+                return null;
+            }
+            try (java.io.InputStream in = zip.getInputStream(entry)) {
+                return BitmapFactory.decodeStream(in);
+            }
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot decode fresh look " + name + ": " + t);
+            return null;
+        }
+    }
+
+    private static int currentFilterOrdinal() {
+        try {
+            java.lang.reflect.Method get = EFFECT_CONTROLLER_GET;
+            java.lang.reflect.Field filter = EFFECT_CONTROLLER_FILTER;
+            if (get != null && filter != null) {
+                Object controller = get.invoke(null);
+                if (controller != null) {
+                    return ((Integer) filter.get(controller)) & 0xFFFF;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return ACTIVE_LOOK;
+    }
+
+    private Bitmap previewLut(String name) {
+        if (name == null) {
+            return null;
+        }
+        // The preview GL renderer asks the enum LUT name. Slots 91/92 are not in the
+        // render engine's filter table, so it requests the neutral "lut_nc" LUT instead
+        // of lut_normal_neutral/lut_normal_soft. While M3/M9 is selected, answer with
+        // our own bitmap for that neutral name.
+        //
+        // Always decode a fresh bitmap: OpenGl3dUtils.c() recycles the bitmap after the
+        // GL upload, so a cached instance would be recycled on the next upload and the
+        // native side would read freed pixels.
+        if (name.contains("lut_m3")) {
+            if (PREVIEW_LOGGED.add(name)) {
+                log(Log.INFO, TAG, "preview LUT " + name + " -> lut_m3");
+            }
+            return freshLookBitmap("lut_m3");
+        }
+        if (name.contains("lut_m9")) {
+            if (PREVIEW_LOGGED.add(name)) {
+                log(Log.INFO, TAG, "preview LUT " + name + " -> lut_m9");
+            }
+            return freshLookBitmap("lut_m9");
+        }
+        if ("lut_normal_neutral".equals(name)) {
+            return freshLookBitmap("lut_m3");
+        }
+        if ("lut_normal_soft".equals(name)) {
+            return freshLookBitmap("lut_m9");
+        }
+        if ("lut_nc".equals(name) || "0".equals(name)
+                || "lut_debug_blank_lut".equals(name)) {
+            int look = currentFilterOrdinal();
+            if (look == LOOK_M3 || look == LOOK_M9) {
+                Bitmap bm = freshLookBitmap(look == LOOK_M3 ? "lut_m3" : "lut_m9");
+                if (bm != null && PREVIEW_LOGGED.add("neutral:" + name + ":" + look)) {
+                    log(Log.INFO, TAG, "preview LUT " + name + " -> "
+                            + (look == LOOK_M3 ? "lut_m3" : "lut_m9"));
+                }
+                return bm;
+            }
+            return null;
+        }
+        return null;
+    }
+
+    private Bitmap previewLutFromPath(String path) {
+        if (path == null) {
+            return null;
+        }
+        if (path.contains("lut_m3")) {
+            return freshLookBitmap("lut_m3");
+        }
+        if (path.contains("lut_m9")) {
+            return freshLookBitmap("lut_m9");
+        }
+        return null;
     }
 
     // The HAL wrapper node (LegendFilterInstance0) reads this to pick the parameter table: the
@@ -1948,13 +2224,21 @@ public class ModuleMain extends XposedModule {
             return;
         }
         try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(moduleApk)) {
-            java.util.zip.ZipEntry entry = zip.getEntry(asset);
+            java.util.zip.ZipEntry entry = zip.getEntry("assets/" + asset);
             if (entry == null) {
                 return;
             }
             java.io.File target = new java.io.File("/data/vendor/camera", name + ".png");
-            if (target.length() == entry.getSize()) {
-                return;
+            // Accept only the known-good staged LUTs. A stale or partial file from an
+            // earlier experiment must never win over the authoritative APK/KSU copy.
+            if (target.length() > 0) {
+                String md5 = md5(target);
+                boolean valid = "lut_m9".equals(name) ? M9_MD5.equals(md5)
+                        : "lut_m3".equals(name) && M3_MD5.equals(md5);
+                if (valid) {
+                    return;
+                }
+                log(Log.WARN, TAG, "replacing invalid " + target + " md5=" + md5);
             }
             try (java.io.InputStream in = zip.getInputStream(entry);
                  java.io.FileOutputStream out = new java.io.FileOutputStream(target)) {
@@ -1970,33 +2254,49 @@ public class ModuleMain extends XposedModule {
         }
     }
 
-    private static android.graphics.Bitmap lookBitmap(String name) {
+    private boolean writeLookAsset(String name, java.nio.file.Path dst) {
         String asset = "lut_m3".equals(name) ? "leica_luts/M3_Monopan.png"
-                : "lut_m9".equals(name) ? "leica_luts/130_LeicaNatural.png" : null;
-        if (asset == null || moduleApk == null) {
-            return null;
-        }
-        android.graphics.Bitmap cached = LOOK_BITMAPS.get(asset);
-        if (cached != null) {
-            return cached;
+                : "leica_luts/130_LeicaNatural.png";
+        if (moduleApk == null) {
+            return false;
         }
         try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(moduleApk)) {
-            java.util.zip.ZipEntry entry = zip.getEntry(asset);
+            java.util.zip.ZipEntry entry = zip.getEntry("assets/" + asset);
             if (entry == null) {
-                return null;
+                return false;
             }
-            try (java.io.InputStream in = zip.getInputStream(entry)) {
-                android.graphics.Bitmap bm = android.graphics.BitmapFactory.decodeStream(in);
-                if (bm != null) {
-                    LOOK_BITMAPS.put(asset, bm);
+            try (java.io.InputStream in = zip.getInputStream(entry);
+                 java.io.OutputStream out = java.nio.file.Files.newOutputStream(dst)) {
+                byte[] buf = new byte[16384];
+                int n;
+                while ((n = in.read(buf)) > 0) {
+                    out.write(buf, 0, n);
                 }
-                return bm;
             }
+            return true;
         } catch (Throwable t) {
-            return null;
+            log(Log.WARN, TAG, "cannot write " + dst + " from " + asset + ": " + t);
+            return false;
         }
     }
 
+    private static String md5(java.io.File file) {
+        try (java.io.InputStream in = new java.io.FileInputStream(file)) {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("MD5");
+            byte[] buf = new byte[16384];
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                md.update(buf, 0, n);
+            }
+            StringBuilder sb = new StringBuilder();
+            for (byte b : md.digest()) {
+                sb.append(String.format("%02x", b & 0xff));
+            }
+            return sb.toString();
+        } catch (Throwable t) {
+            return "";
+        }
+    }
 
     private void installStyleHook(ClassLoader loader) {
         if (styleHooked) {
