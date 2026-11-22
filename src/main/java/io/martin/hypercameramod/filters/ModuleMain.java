@@ -7,18 +7,15 @@ import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
-import android.graphics.BitmapFactory;
 import android.graphics.RectF;
 import android.graphics.ColorFilter;
 import android.graphics.PixelFormat;
 import android.graphics.PorterDuff;
 import android.graphics.PorterDuffColorFilter;
-import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.VectorDrawable;
 import android.os.Handler;
 import android.os.Looper;
-import android.util.Base64;
 import android.util.Log;
 import android.widget.ImageView;
 import android.widget.Toast;
@@ -197,12 +194,12 @@ public class ModuleMain extends XposedModule {
     // native "LEICA" line as measured on screen (26 px tall, 4 px stroke, letters 3-4 px apart,
     // 5 px between the two lines, at about 2.65 px per dp).
     private static final float LABEL_SIZE_DP = 36f;
-    private static final float LABEL_CAP_DP = 9.45f;
-    private static final float LABEL_GAP_DP = 1.05f;    // gap between the letters of the top line, as native
-    private static final float LABEL_NAME_GAP_DP = 1.25f; // same for the film code: its letters sat tighter than native
-    private static final float LABEL_LINE_GAP_DP = 2.25f; // gap between the two lines (31 px pitch at 2.65 px/dp), as native
+    private static final float LABEL_CAP_DP = 9.7f;
+    private static final float LABEL_GAP_DP = 0.9f;    // gap between the letters of the top line, as native
+    private static final float LABEL_NAME_GAP_DP = 1.2f; // same for the film code: its letters sat tighter than native
+    private static final float LABEL_LINE_GAP_DP = 2.3f; // gap between the two lines (31 px pitch at 2.65 px/dp), as native
     private static final float LABEL_BLOCK_SHIFT_DP = -0.4f; // moves both lines up, as native (outer edges incl. the ring)
-    private static final float LABEL_GLYPH_HEIGHT_DP = 9.1f; // letter height; the widths stay those of LABEL_CAP_DP
+    private static final float LABEL_GLYPH_HEIGHT_DP = 9.7f; // letter height; the widths stay those of LABEL_CAP_DP
     // The native labels have a light gray outline around the letters (about 1.75 px at 2.65 px per
     // dp): white letters keep a gray rim on a bright background, and gray (unselected) letters get
     // that much heavier. The outline is not tinted, only the letters are.
@@ -211,46 +208,9 @@ public class ModuleMain extends XposedModule {
     // out as the light gray of the native labels (#C1C1C1), and over a dark panel it is hardly
     // visible, as on the native labels.
     private static final int LABEL_RING_ALPHA = 56;
-    private static volatile Typeface labelTypeface;
     private static final Paint FALLBACK_MEASURE = new Paint(Paint.ANTI_ALIAS_FLAG);
-
-    // Use the camera's own LG1056 Regular for characters missing from the embedded
-    // subset. The font already ships in the camera APK, so nothing is redistributed.
-    private static Typeface labelTypeface() {
-        Typeface typeface = labelTypeface;
-        if (typeface != null) {
-            return typeface;
-        }
-        Application app = currentApplication();
-        if (app != null) {
-            String[] paths = {
-                    "watermarks/leica/111/lg1056_regular.otf",
-                    "watermarks/leica/92/lg1056_regular.otf",
-                    "watermarks/leica/90/lg1056_regular.otf",
-                    "watermarks/leica/88/lg1056_regular.otf"
-            };
-            for (String path : paths) {
-                try {
-                    typeface = Typeface.createFromAsset(app.getAssets(), path);
-                    break;
-                } catch (Throwable ignored) {
-                }
-            }
-        }
-        if (typeface == null) {
-            typeface = Typeface.create("sans-serif-condensed", Typeface.NORMAL);
-        }
-        labelTypeface = typeface;
-        return typeface;
-    }
-
-    private static float labelTextSize(float height) {
-        // LG1056 cap height is about 0.72 em; the extracted glyphs are cap-height bitmaps.
-        return height / 0.72f;
-    }
     private static final String LABEL_TOP_LINE = "FLM";
     private static final float HYPHEN_LENGTH = 0.5f;    // hyphen length, as a share of letter height
-    private static final Map<Character, Bitmap> GLYPH_CACHE = new HashMap<>();
 
     private final Set<String> loggedCategories = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private volatile boolean hooked;
@@ -1341,6 +1301,7 @@ public class ModuleMain extends XposedModule {
     // height and line positions are whole pixels, so the top and bottom edges of both lines are
     // equally sharp (a fractional position blurs one edge and makes the line look shorter).
     private static Drawable nameDrawable(Resources resources, int ordinal) {
+        LabelFont.init(currentApplication());
         String label = "";
         for (Film film : ALL_FILMS) {
             if (film.ordinal() == ordinal) {
@@ -1353,7 +1314,7 @@ public class ModuleMain extends XposedModule {
         int letterWidthBasis = Math.round(LABEL_CAP_DP * density);   // glyph widths, weight and spacing are those of this height
         int pitch = Math.round((LABEL_CAP_DP + LABEL_LINE_GAP_DP) * density);   // line 1 top to line 2 top
         int top = Math.round((size - (letterHeight + pitch)) / 2f + LABEL_BLOCK_SHIFT_DP * density);
-        float scale = letterWidthBasis / (float) LeicaFont.CAP_HEIGHT;
+        float scale = letterWidthBasis / (float) LabelFont.CAP_HEIGHT;
 
         // Report the current screen density so the drawables are exactly size x size pixels
         // (a vector of 36 dp is, whatever display-size setting is in use).
@@ -1384,7 +1345,7 @@ public class ModuleMain extends XposedModule {
     private static void drawLine(Canvas canvas, Paint paint, String text, int width, float y,
                                  float scale, float height, float gapDp, float density,
                                  float spread) {
-        float cap = LeicaFont.CAP_HEIGHT;
+        float cap = LabelFont.CAP_HEIGHT;
         float gap = gapDp * density;
         float hyphen = HYPHEN_LENGTH * cap * scale;
 
@@ -1411,7 +1372,7 @@ public class ModuleMain extends XposedModule {
         float x = (width - total) / 2f;
         for (char c : text.toCharArray()) {
             if (c == '-') {
-                float thick = LeicaFont.STROKE * scale;
+                float thick = LabelFont.STROKE * scale;
                 float mid = y + height / 2f;
                 float grown = thick / 2f + spread;
                 canvas.drawRoundRect(new RectF(x - spread, mid - grown, x + hyphen + spread,
@@ -1425,8 +1386,8 @@ public class ModuleMain extends XposedModule {
                     x += glyphWidth;
                 } else {
                     Paint fallback = new Paint(paint);
-                    fallback.setTypeface(labelTypeface());
-                    fallback.setTextSize(labelTextSize(height));
+                    fallback.setTypeface(LabelFont.typeface(false));
+                    fallback.setTextSize(LabelFont.textSize(height));
                     fallback.setTextAlign(Paint.Align.LEFT);
                     if (spread > 0) {
                         fallback.setStyle(Paint.Style.STROKE);
@@ -1462,23 +1423,13 @@ public class ModuleMain extends XposedModule {
     }
 
     private static synchronized float fallbackWidth(char c, float height) {
-        FALLBACK_MEASURE.setTypeface(labelTypeface());
-        FALLBACK_MEASURE.setTextSize(labelTextSize(height));
+        FALLBACK_MEASURE.setTypeface(LabelFont.typeface(false));
+        FALLBACK_MEASURE.setTextSize(LabelFont.textSize(height));
         return FALLBACK_MEASURE.measureText(String.valueOf(c));
     }
 
-    private static synchronized Bitmap glyph(char c) {
-        Bitmap glyph = GLYPH_CACHE.get(c);
-        if (glyph == null) {
-            for (String[] entry : LeicaFont.GLYPHS) {
-                if (entry[0].charAt(0) == c) {
-                    byte[] data = Base64.decode(entry[1], Base64.DEFAULT);
-                    glyph = BitmapFactory.decodeByteArray(data, 0, data.length);
-                    GLYPH_CACHE.put(c, glyph);
-                }
-            }
-        }
-        return glyph;
+    private static Bitmap glyph(char c) {
+        return LabelFont.glyph(c);
     }
 
     // The Leica UI lists "Looks" from a separate fixed table. Add the same film items there,
@@ -1602,7 +1553,7 @@ public class ModuleMain extends XposedModule {
         Toast.makeText(app, TAG + " (camera " + version + "): " + text, Toast.LENGTH_LONG).show();
     }
 
-    private static Application currentApplication() {
+    static Application currentApplication() {
         try {
             return (Application) Class.forName("android.app.ActivityThread")
                     .getMethod("currentApplication").invoke(null);
