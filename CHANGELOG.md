@@ -24,8 +24,7 @@ All notable changes to HyperCameraMod. The module follows a simple scheme: stabl
 
 ### Notes
 
-- The Leica Looks panel currently lists M9 before M3; the standard FILTER strip
-  keeps M3, M9.
+- The Leica Looks panel and the standard FILTER strip both list M3 before M9.
 - The KernelSU LUT module is unchanged from 1.2.0
   (`camera-mod-ksu-v1.2.0-306.zip`).
 
