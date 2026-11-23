@@ -1375,6 +1375,7 @@ public class ModuleMain extends XposedModule {
                 try {
                     @SuppressWarnings("unchecked")
                     java.util.List<Object> target = (java.util.List<Object>) list;
+                    Object[] specialEntries = new Object[4]; // M3, M9, POS, NEG
                     String[] names = {"M3", "M9"};
                     int[] ordinals = {LOOK_M3, LOOK_M9};
                     android.content.Context ctx = currentApplication();
@@ -1398,7 +1399,7 @@ public class ModuleMain extends XposedModule {
                     }
                     // The Looks panel inserts an unknown item at position 1, so add M9
                     // first and M3 last to display "M3, M9".
-                    for (int i = ordinals.length - 1; i >= 0; i--) {
+                    for (int i = 0; i < ordinals.length; i++) {
                         int lookIcon = lookIcons[i] != 0 ? lookIcons[i] : foIcon;
                         int lookNameIcon = STRIP_ICON_BASE | (i + 1);
                         java.util.ArrayList<Integer> effects = new java.util.ArrayList<>();
@@ -1418,11 +1419,13 @@ public class ModuleMain extends XposedModule {
                         java.util.ArrayList<Integer> effectLabels = new java.util.ArrayList<>();
                         effectLabels.add(lookNameIcon);
                         effectLabels.add(lookIcon);
-                        int order = i == 0 ? 14 : 13;   // descending: M3 then M9
+                        int order = i == 0 ? 20 : 19;   // descending: M3, M9, POS, NEG
                         Object cfg = makeConfig.newInstance(order, -1, -1,
                                 LOOK_TEXT_BASE | (i + 1), lookIcon, lookNameIcon, 0, null, -1,
                                 effects, effectLabels);
-                        target.add(build.invoke(null, values[ordinals[i]], 10, cfg));
+                        Object specialEntry = build.invoke(null, values[ordinals[i]], 10, cfg);
+                        target.add(specialEntry);
+                        specialEntries[i == 0 ? 0 : 1] = specialEntry;
                         log(Log.INFO, TAG, "looks: added " + names[i] + " entry (ordinal "
                                 + ordinals[i] + ", icon=" + lookIcon + ", nameIcon="
                                 + lookNameIcon + ")");
@@ -1430,7 +1433,7 @@ public class ModuleMain extends XposedModule {
                     if (values.length > 231 && stockFields[1] != null) {
                         // The Looks panel inserts an unknown item at position 1, so add the
                         // Negative first and Positive last to display "POS, NEG".
-                        for (int si = 1; si >= 0; si--) {
+                        for (int si = 0; si < 2; si++) {
                             Object src = stockItems[si];
                             if (src == null) {
                                 continue;
@@ -1464,11 +1467,14 @@ public class ModuleMain extends XposedModule {
                                 }
                                 effectLabels.clear();
                                 effectLabels.add(stockNameIcon);
-                                Object cfg = makeConfig.newInstance(20 + si, -1, -1,
+                                int stockOrder = si == 0 ? 18 : 17;
+                                Object cfg = makeConfig.newInstance(stockOrder, -1, -1,
                                         stockTitle, stockIcon, stockNameIcon, 0, null, -1,
                                         effects, effectLabels);
                                 int ordinal = si == 0 ? 230 : 231;
-                                target.add(build.invoke(null, values[ordinal], 10, cfg));
+                                Object stockEntry = build.invoke(null, values[ordinal], 10, cfg);
+                                target.add(stockEntry);
+                                specialEntries[si == 0 ? 2 : 3] = stockEntry;
                                 log(Log.INFO, TAG, "looks: added stock "
                                         + (si == 0 ? "Positive" : "Negative")
                                         + " entry (ordinal " + ordinal + ")");
@@ -1641,16 +1647,12 @@ public class ModuleMain extends XposedModule {
         paint.setColor(Color.WHITE);
         paint.setTextAlign(Paint.Align.CENTER);
         paint.setTypeface(stripTypeface());
-        if (which == 3 || which == 4) {
-            paint.setTextSize(size * 0.38f);
-            canvas.drawText(which == 3 ? "POS" : "NEG", size / 2f, size * 0.60f, paint);
-        } else {
-            String top = "ESTL";
-            String bottom = which == 1 ? "M3" : "M9";
-            paint.setTextSize(size * 0.335f);
-            canvas.drawText(top, size / 2f, size * 0.47f, paint);
-            canvas.drawText(bottom, size / 2f, size * 0.80f, paint);
-        }
+        String top = which == 3 || which == 4 ? "FLM" : "ESTL";
+        String bottom = which == 1 ? "M3" : which == 2 ? "M9"
+                : which == 3 ? "POS" : "NEG";
+        paint.setTextSize(size * 0.335f);
+        canvas.drawText(top, size / 2f, size * 0.47f, paint);
+        canvas.drawText(bottom, size / 2f, size * 0.80f, paint);
         return new BitmapDrawable(res, bitmap);
     }
 
