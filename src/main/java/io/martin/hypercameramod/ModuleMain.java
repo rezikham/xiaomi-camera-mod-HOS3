@@ -1370,7 +1370,7 @@ public class ModuleMain extends XposedModule {
                     // first and M3 last to display "M3, M9".
                     for (int i = ordinals.length - 1; i >= 0; i--) {
                         int lookIcon = lookIcons[i] != 0 ? lookIcons[i] : foIcon;
-                        int lookNameIcon = lookNameIcons[i] != 0 ? lookNameIcons[i] : foIcon;
+                        int lookNameIcon = STRIP_ICON_BASE | (i + 1);
                         java.util.ArrayList<Integer> effects = new java.util.ArrayList<>();
                         if (lookTemplates[i] != 0) {
                             effects.add(lookTemplates[i]);
@@ -1493,15 +1493,14 @@ public class ModuleMain extends XposedModule {
             int order = proto == null ? 100 : Math.max(100, orderField.getInt(proto) + 90);
             // The strip inserts a filter it does not know yet at position 1, so the item added
             // last ends up first: add M9 first, M3 last, to get "M3, M9".
-            // The name icon is the stock one: the palette editor draws that field large, and
-            // a generated label there shows up as text over a transparency checkerboard.
+            // The chip label is two lines: ESTL above, M3/M9 below, like LEICA IA / FLM FC400.
             if (!hasM9) {
-                target.add(stripItem(make, LOOK_M9, LOOK_TEXT_BASE | 2, nameIcon,
+                target.add(stripItem(make, LOOK_M9, LOOK_TEXT_BASE | 2, STRIP_ICON_BASE | 2,
                         icon, nameIcon, samples, labels, desc, order, ordinalField,
                         samplesField, labelsField, descField, cloudField));
             }
             if (!hasM3) {
-                target.add(stripItem(make, LOOK_M3, LOOK_TEXT_BASE | 1, nameIcon,
+                target.add(stripItem(make, LOOK_M3, LOOK_TEXT_BASE | 1, STRIP_ICON_BASE | 1,
                         icon, nameIcon, samples, labels, desc, order + 1, ordinalField,
                         samplesField, labelsField, descField, cloudField));
             }
@@ -1553,19 +1552,33 @@ public class ModuleMain extends XposedModule {
     }
 
     private static Drawable stripLabel(Resources res, int which) {
-        String text = which == 1 ? "M3" : "M9";
+        String top = "ESTL";
+        String bottom = which == 1 ? "M3" : "M9";
         float density = res == null ? 2.75f : res.getDisplayMetrics().density;
         int size = Math.round(36 * density);
         Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bitmap);
-        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
         paint.setColor(Color.WHITE);
-        paint.setTextSize(size * 0.42f);
+        paint.setTextSize(size * 0.335f);
         paint.setTextAlign(Paint.Align.CENTER);
-        paint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        Paint.FontMetrics metrics = paint.getFontMetrics();
-        canvas.drawText(text, size / 2f, size / 2f - (metrics.ascent + metrics.descent) / 2f, paint);
+        paint.setTypeface(stripTypeface());
+        canvas.drawText(top, size / 2f, size * 0.47f, paint);
+        canvas.drawText(bottom, size / 2f, size * 0.80f, paint);
         return new BitmapDrawable(res, bitmap);
+    }
+
+    private static android.graphics.Typeface stripTypeface() {
+        try {
+            Application app = currentApplication();
+            if (app != null) {
+                return android.graphics.Typeface.createFromAsset(app.getAssets(),
+                        "watermarks/leica/111/lg1056_regular.otf");
+            }
+        } catch (Throwable ignored) {
+        }
+        return android.graphics.Typeface.create("sans-serif-condensed",
+                android.graphics.Typeface.NORMAL);
     }
 
     private static Field configField(Class<?> config, String name) throws NoSuchFieldException {
@@ -1585,14 +1598,14 @@ public class ModuleMain extends XposedModule {
                 if ((id & 0xFFFF0000) != LOOK_TEXT_BASE) {
                     return chain.proceed();
                 }
-                return (id & 0xFFFF) == 1 ? "M3" : "M9";
+                return (id & 0xFFFF) == 1 ? "ESTL\nM3" : "ESTL\nM9";
             });
             hook(Resources.class.getDeclaredMethod("getString", int.class)).intercept(chain -> {
                 int id = (Integer) chain.getArg(0);
                 if ((id & 0xFFFF0000) != LOOK_TEXT_BASE) {
                     return chain.proceed();
                 }
-                return (id & 0xFFFF) == 1 ? "M3" : "M9";
+                return (id & 0xFFFF) == 1 ? "ESTL\nM3" : "ESTL\nM9";
             });
             lookTextHooked = true;
         } catch (Throwable t) {
