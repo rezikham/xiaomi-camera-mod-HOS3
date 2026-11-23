@@ -253,9 +253,13 @@ public class EssentialPipelineExtension {
             confidenceBytes = BitmapUtils.createConfidenceMap(depthFloat, bitmap.getWidth(), bitmap.getHeight());
         }
         
-        // Render bokeh if depth available
+        // The camera's Master portrait already has real depth-based bokeh. The
+        // synthetic renderer is kept for the real-depth experiment but must not
+        // double-blur the image; it will be enabled again when the vendor depth
+        // container is decoded.
+        final boolean useSyntheticBokeh = false;
         Bitmap resultBitmap = bitmap;
-        if (depthFloat != null) {
+        if (useSyntheticBokeh && depthFloat != null) {
             // Initialize renderer if needed
             if (bokehRenderer == null) {
                 bokehRenderer = new BokehRenderer();

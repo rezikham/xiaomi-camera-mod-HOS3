@@ -119,7 +119,8 @@ Verified on the 14 Ultra (`1c4e4dec`, Camera 6.7.000280.0):
 - the camera EXIF is copied to the processed JPEG (Make, Model, GPS,
   DateTimeOriginal, F-number, ISO);
 - the OpenGL ES 3.1 bokeh renderer loads and runs (JNI bridge, immutable
-  image textures, radial focus falloff).
+  image textures), but the shipping path now relies on the camera's Master
+  portrait bokeh and only applies the Original colour profile.
 
 Remaining gap: the bokeh uses the module's synthetic radial depth, not the
 camera's real depth map, and the preview is Master rather than the native
@@ -145,6 +146,7 @@ The container's `MCBOKEHDEPTH` section is compressed; the decoder is
 (`MialgoCaptureMdbokehProcess`). `portraitRawData` is the unprocessed portrait
 JPEG, not a depth map.
 
-Until that vendor decoder is wired up, the software path uses a radial focus
-falloff: the subject region stays sharp and the rest of the frame receives the
-bokeh shader.
+Until that vendor decoder is wired up, the software path uses the camera's own
+Master portrait bokeh (real depth processing) and applies the Original colour
+profile; the synthetic OpenGL bokeh renderer is kept but disabled so it does not
+double-blur the frame.

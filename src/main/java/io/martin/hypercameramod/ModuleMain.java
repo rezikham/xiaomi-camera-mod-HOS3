@@ -878,16 +878,13 @@ public class ModuleMain extends XposedModule {
                 return;
             }
             
-            int w = bm.getWidth();
-            int h = bm.getHeight();
-            float[] depthMap = createSyntheticDepthMap(w, h);
-            
-            // Prepare capture result metadata
+            // The camera's Master portrait already has real depth-based bokeh;
+            // no synthetic depth map is needed for the current software path.
             android.hardware.camera2.CaptureResult result = createMockCaptureResult();
             
             // Process with EssentialPipelineExtension
             final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
-            ext.handlePortraitOriginal(file, depthMap, result, processedFile -> {
+            ext.handlePortraitOriginal(file, null, result, processedFile -> {
                 if (processedFile != file) {
                     // Replace original file with processed version
                     try {
