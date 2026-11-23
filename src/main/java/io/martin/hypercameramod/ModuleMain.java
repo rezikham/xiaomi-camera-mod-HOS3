@@ -1234,53 +1234,32 @@ public class ModuleMain extends XposedModule {
     private static volatile java.lang.reflect.Field EFFECT_CONTROLLER_FILTER;
     private static final java.util.Set<String> PREVIEW_LOGGED =
             java.util.concurrent.ConcurrentHashMap.newKeySet();
-    private static final String LOOKS_ENTRIES_KEY = "looks_entries_enabled";
     private volatile boolean looksEntriesHooked;
     private volatile boolean uiHooksInstalled;
     private volatile boolean lookTextHooked;
-
-    private boolean looksEntriesEnabled() {
-        try {
-            android.content.SharedPreferences p = getRemotePreferences("hypercameramod");
-            if (p != null) {
-                return p.getBoolean(LOOKS_ENTRIES_KEY, true);
-            }
-        } catch (Throwable t) {
-            log(Log.WARN, TAG, "cannot read " + LOOKS_ENTRIES_KEY + ": " + t);
-        }
-        return false;
-    }
-
-    private static final String LEICA_UI_KEY = "leica_ui_enabled";
-
-    private boolean leicaUiEnabled() {
-        try {
-            android.content.SharedPreferences p = getRemotePreferences("hypercameramod");
-            if (p != null) {
-                return p.getBoolean(LEICA_UI_KEY, true);
-            }
-        } catch (Throwable t) {
-            log(Log.WARN, TAG, "cannot read " + LEICA_UI_KEY + ": " + t);
-        }
-        return true;
-    }
 
     private void installLeicaLooksEntries(ClassLoader loader) {
         if (loader == null) {
             return;
         }
-        // Capture and preview hooks must run on every UI, including the standard FILTER strip.
+        // Capture, preview and label hooks must run on every UI: both the standard FILTER
+        // strip and the Leica Looks panel use the module's own two-line label drawables.
         if (!uiHooksInstalled) {
             installLookLutHooks(loader);
             installPreviewLutHook(loader);
+            installStripIconHooks();
             uiHooksInstalled = true;
         }
 
-        boolean leicaUi = leicaUiEnabled();
-        if (looksEntriesHooked || !looksEntriesEnabled() || !leicaUi) {
-            if (!leicaUi) {
-                log(Log.INFO, TAG, "Leica UI disabled; skipping the M3/M9 Looks panel");
-            }
+        if (looksEntriesHooked) {
+            return;
+        }
+        if (!essentialStdEnabled()) {
+            log(Log.INFO, TAG, "M3/M9 disabled; skipping the Leica Looks entries");
+            return;
+        }
+        if (!leicaThemeEnabled()) {
+            log(Log.INFO, TAG, "standard UI; skipping the Leica Looks entries");
             return;
         }
         try {
@@ -1370,12 +1349,13 @@ public class ModuleMain extends XposedModule {
             hook(back).intercept(chain -> {
                 Object result = chain.proceed();
                 if (!(result instanceof java.util.List<?> list)) {
+                    log(Log.INFO, TAG, "looks: c() returned " + result);
                     return result;
                 }
+                log(Log.INFO, TAG, "looks: c() returned " + list.size() + " items");
                 try {
                     @SuppressWarnings("unchecked")
                     java.util.List<Object> target = (java.util.List<Object>) list;
-                    Object[] specialEntries = new Object[4]; // M3, M9, POS, NEG
                     String[] names = {"M3", "M9"};
                     int[] ordinals = {LOOK_M3, LOOK_M9};
                     android.content.Context ctx = currentApplication();
@@ -1425,7 +1405,6 @@ public class ModuleMain extends XposedModule {
                                 effects, effectLabels);
                         Object specialEntry = build.invoke(null, values[ordinals[i]], 10, cfg);
                         target.add(specialEntry);
-                        specialEntries[i == 0 ? 0 : 1] = specialEntry;
                         log(Log.INFO, TAG, "looks: added " + names[i] + " entry (ordinal "
                                 + ordinals[i] + ", icon=" + lookIcon + ", nameIcon="
                                 + lookNameIcon + ")");
@@ -1474,7 +1453,6 @@ public class ModuleMain extends XposedModule {
                                 int ordinal = si == 0 ? 230 : 231;
                                 Object stockEntry = build.invoke(null, values[ordinal], 10, cfg);
                                 target.add(stockEntry);
-                                specialEntries[si == 0 ? 2 : 3] = stockEntry;
                                 log(Log.INFO, TAG, "looks: added stock "
                                         + (si == 0 ? "Positive" : "Negative")
                                         + " entry (ordinal " + ordinal + ")");
@@ -1503,7 +1481,15 @@ public class ModuleMain extends XposedModule {
     private volatile boolean stripEntriesHooked;
 
     private void installFilterStripEntries(ClassLoader loader) {
-        if (stripEntriesHooked || loader == null || !looksEntriesEnabled()) {
+        if (stripEntriesHooked || loader == null) {
+            return;
+        }
+        if (!essentialStdEnabled()) {
+            log(Log.INFO, TAG, "M3/M9 disabled; skipping the standard filter strip entries");
+            return;
+        }
+        if (leicaThemeEnabled()) {
+            log(Log.INFO, TAG, "Leica UI; skipping the standard filter strip entries");
             return;
         }
         try {
@@ -1610,7 +1596,12 @@ public class ModuleMain extends XposedModule {
         return item;
     }
 
+    private volatile boolean stripIconHooksInstalled;
+
     private void installStripIconHooks() {
+        if (stripIconHooksInstalled) {
+            return;
+        }
         try {
             hook(ImageView.class.getDeclaredMethod("setImageResource", int.class)).intercept(chain -> {
                 int id = (Integer) chain.getArg(0);
@@ -1636,6 +1627,7 @@ public class ModuleMain extends XposedModule {
         } catch (Throwable t) {
             log(Log.WARN, TAG, "strip: no getDrawable hook: " + t);
         }
+        stripIconHooksInstalled = true;
     }
 
     private static Drawable stripLabel(Resources res, int which) {

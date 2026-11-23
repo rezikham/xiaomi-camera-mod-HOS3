@@ -23,16 +23,21 @@ public class SettingsActivity extends AppCompatActivity {
     private static final String PREFS_GROUP = "hypercameramod";
     private static final String ORIGINAL_PORTRAIT_KEY = "original_portrait_enabled";
     private static final String LEICA_THEME_KEY = "leica_theme_enabled";
+    private static final String ESSENTIAL_MODE_KEY = "essential_mode_enabled";
+    private static final String OLD_LOOKS_ENTRIES_KEY = "looks_entries_enabled";
+    private static final String OLD_LEICA_UI_KEY = "leica_ui_enabled";
+    // One-shot marker: the standard-strip and Leica-Looks M3/M9 switches are now one setting.
+    private static final String M3M9_MERGE_KEY = "m3m9_settings_merged_v1";
     // One-shot marker: older builds persisted Original portrait as on for every device.
     private static final String MIGRATION_KEY = "device_defaults_migrated_v2";
     private static final String[] SETTING_KEYS = {
-            "essential_mode_enabled", LEICA_THEME_KEY, "leica_ui_enabled", "m10r_enabled",
-            "extra_filters_enabled", "looks_entries_enabled", ORIGINAL_PORTRAIT_KEY
+            ESSENTIAL_MODE_KEY, LEICA_THEME_KEY, "m10r_enabled",
+            "extra_filters_enabled", ORIGINAL_PORTRAIT_KEY
     };
     // Original portrait is only offered by default on phones whose camera hardware layer can
     // preview it (17 Ultra, 18 Pro Max); on the 14 Ultra it deadlocks the preview.
     private static final boolean[] SETTING_DEFAULTS = {
-            true, false, true, false, true, true, DeviceSupport.originalPortraitDefault()
+            true, false, false, true, DeviceSupport.originalPortraitDefault()
     };
 
     private SharedPreferences modulePrefs;
@@ -83,6 +88,19 @@ public class SettingsActivity extends AppCompatActivity {
                 local.edit().putBoolean(ORIGINAL_PORTRAIT_KEY, false).apply();
             }
             local.edit().putBoolean(MIGRATION_KEY, true).apply();
+        }
+        if (!local.getBoolean(M3M9_MERGE_KEY, false)) {
+            // The old builds had a separate switch per UI. Keep M3/M9 on if either was on.
+            boolean merged = local.getBoolean(ESSENTIAL_MODE_KEY, true);
+            if (local.contains(OLD_LOOKS_ENTRIES_KEY)) {
+                merged |= local.getBoolean(OLD_LOOKS_ENTRIES_KEY, true);
+            }
+            local.edit()
+                    .putBoolean(ESSENTIAL_MODE_KEY, merged)
+                    .remove(OLD_LOOKS_ENTRIES_KEY)
+                    .remove(OLD_LEICA_UI_KEY)
+                    .putBoolean(M3M9_MERGE_KEY, true)
+                    .apply();
         }
         if (!local.contains(ORIGINAL_PORTRAIT_KEY)) {
             local.edit()

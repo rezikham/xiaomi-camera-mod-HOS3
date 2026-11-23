@@ -291,10 +291,10 @@ public class ModuleMain extends XposedModule {
             log(Log.INFO, TAG, stage + ": camera layout " + profile.name() + ", hooked "
                     + profile.listClass() + "." + profile.listMethod());
             installPanelHook(profile, loader);
-            if (leicaUiEnabled()) {
+            if (extraFiltersEnabled()) {
                 installLooksHook(profile, loader, resolved);
             } else {
-                log(Log.INFO, TAG, "Leica UI disabled; skipping the Leica Looks injection");
+                log(Log.INFO, TAG, "film filters disabled; skipping the Leica Looks injection");
             }
             installCategoryHook(profile, loader, resolved);
             installComponentHook(loader, resolved);
@@ -579,19 +579,6 @@ public class ModuleMain extends XposedModule {
         }
     }
 
-    // Check if extra film filters are enabled in the main module's settings
-    private boolean leicaUiEnabled() {
-        try {
-            android.content.SharedPreferences prefs = getRemotePreferences("hypercameramod");
-            if (prefs != null) {
-                return prefs.getBoolean("leica_ui_enabled", true);
-            }
-        } catch (Throwable t) {
-            log(Log.WARN, TAG, "cannot read leica_ui_enabled preference: " + t);
-        }
-        return true;
-    }
-
     private boolean extraFiltersEnabled() {
         try {
             android.content.SharedPreferences prefs = getRemotePreferences("hypercameramod");
@@ -600,20 +587,6 @@ public class ModuleMain extends XposedModule {
             }
         } catch (Throwable t) {
             log(Log.WARN, TAG, "cannot read extra_filters_enabled preference: " + t);
-        }
-        return true; // Default to enabled
-    }
-
-    // M3/M9 as separate Looks/film-strip entries. While this is on, ordinals 85/86 are
-    // reserved for M3/M9, so the film pass must not expose V250/H400 there.
-    private boolean looksEntriesEnabled() {
-        try {
-            android.content.SharedPreferences prefs = getRemotePreferences("hypercameramod");
-            if (prefs != null && prefs.contains("looks_entries_enabled")) {
-                return prefs.getBoolean("looks_entries_enabled", true);
-            }
-        } catch (Throwable t) {
-            log(Log.WARN, TAG, "cannot read looks_entries_enabled preference: " + t);
         }
         return true; // Default to enabled
     }

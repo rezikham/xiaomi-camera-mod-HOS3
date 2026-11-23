@@ -4,17 +4,13 @@
     <string name="m10r_title">Modern vintage</string>
 
     <string name="settings_title">HyperCameraMod Settings</string>
-    <string name="pref_essential_mode_title">Leica Essential Mode in Standard UI</string>
-    <string name="pref_essential_mode_summary">Show Leica Essential mode (M3/M9) in the standard UI mode strip. Real M3/M9 processing needs the 17 Ultra/18 Pro Max HAL; on other devices enable the compatibility fallback below.</string>
+    <string name="pref_essential_mode_title">M3/M9 in the current UI</string>
+    <string name="pref_essential_mode_summary">Add M3/M9 to the UI in use: the Leica Looks panel when the Leica UI theme is on, or the standard FILTER strip when it is off. Real M3/M9 processing needs the 17 Ultra/18 Pro Max HAL; on other devices enable the compatibility fallback.</string>
     <string name="pref_essential_mode_key">essential_mode_enabled</string>
 
     <string name="pref_leica_theme_title">Leica UI theme (17U style)</string>
     <string name="pref_leica_theme_summary">Use the Leica Looks UI instead of the standard FILTER strip. The default follows this device (off on the 14 Ultra, on for LCC/17U). Restart Camera after changing.</string>
     <string name="pref_leica_theme_key">leica_theme_enabled</string>
-
-    <string name="pref_leica_ui_title">M3/M9 and films in Leica Looks</string>
-    <string name="pref_leica_ui_summary">Add M3/M9 and the film filters to the Leica Looks panel. This only affects devices that use the Leica UI theme; the standard FILTER strip is modified regardless.</string>
-    <string name="pref_leica_ui_key">leica_ui_enabled</string>
 
     <string name="pref_m10r_title">CMOS (M10R) Style</string>
     <string name="pref_m10r_summary">Add the CMOS (M10R) style to the photography styles picker. Requires Leica UI enabled.</string>
@@ -27,10 +23,6 @@
     <string name="pref_extra_filters_title">Extra Film Filters</string>
     <string name="pref_extra_filters_summary">Expose all 12 film simulation filters: 600F, BF70, R600, P100F, F-50, KC64, V250, H400, KP160, FC400, C-50D, KG200. Existing entries are reused and renamed to the film code.</string>
     <string name="pref_extra_filters_key">extra_filters_enabled</string>
-
-    <string name="pref_looks_entries_title">M3 and M9 as their own Looks entries</string>
-    <string name="pref_looks_entries_summary">Add M3 and M9 chips to the Leica Looks panel. They render the module LUTs (lut_m3.png / lut_m9.png in /data/vendor/camera) through the stock filter node; every stock filter and look stays untouched. Install the two files with tools/hal-port/engine/leica_look.sh look-m3 / look-m9, then restart Camera.</string>
-    <string name="pref_looks_entries_key">looks_entries_enabled</string>
 
     <string name="menu_force_stop_camera">Force Stop Camera</string>
     <string name="menu_hide_launcher">Hide launcher icon</string>
