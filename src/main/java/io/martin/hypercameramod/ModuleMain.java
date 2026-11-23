@@ -177,6 +177,8 @@ public class ModuleMain extends XposedModule {
         try {
             moduleInfo = getModuleApplicationInfo();
             moduleApk = moduleInfo.sourceDir;
+            io.martin.hypercameramod.originalportrait.BokehRenderer
+                    .setNativeLibraryDir(moduleInfo.nativeLibraryDir);
         } catch (Throwable t) {
             log(Log.WARN, TAG, "cannot find the module APK: " + t);
         }
@@ -188,7 +190,7 @@ public class ModuleMain extends XposedModule {
         installStylizationHook();
         installLegendBridgeHook();
         installLegendObserver();
-        installOriginalPortraitCaptureHook();
+        installOriginalPortraitCaptureHook(loader);
         installLutFallbackHook(loader);
         installLutFileWatcher();
         installBlurRadiusHook(loader);
@@ -1215,7 +1217,7 @@ public class ModuleMain extends XposedModule {
     // Intercepts filterId for Portrait mode when Original is selected, forces Master for capture,
     // and stores the Original selection for post-processing via EssentialPipelineExtension.
 
-    private void installOriginalPortraitCaptureHook() {
+    private void installOriginalPortraitCaptureHook(ClassLoader loader) {
         if (originalPortraitCaptureHooked) {
             return;
         }
@@ -1233,10 +1235,6 @@ public class ModuleMain extends XposedModule {
                 log(Log.WARN, TAG, "CaptureRequest.Builder.set for Original Portrait not found");
                 return;
             }
-            Object filterIdKey = keyClass.getConstructor(String.class, Class.class)
-                    .newInstance("com.xiaomi.sessionparams.filterId", Byte.class);
-            Object stylizationKey = keyClass.getConstructor(String.class, Class.class)
-                    .newInstance("com.xiaomi.sessionparams.stylizationType", Byte.class);
 
             hook(set).intercept(chain -> {
                 Object key = chain.getArg(0);
@@ -1244,29 +1242,44 @@ public class ModuleMain extends XposedModule {
                     return chain.proceed();
                 }
                 String name = requestKey.getName();
-                // Intercept filterId for Portrait mode when Original is selected
-                if ("com.xiaomi.sessionparams.filterId".equals(name)
-                        && chain.getArg(1) instanceof Number filterNum
-                        && filterNum.byteValue() == 2  // STYLE_ORIGINAL = "2"
-                        && originalPortraitEnabled()) {
-                    // Force Master style for capture to avoid native HAL hang
-                    // Store Original selection for post-processing
-                    lastOriginalPortrait = true;
-                    lastOriginalPortraitTime = android.os.SystemClock.elapsedRealtime();
-                    log(Log.INFO, TAG, "Original Portrait selected -> forcing Master style for capture, will post-process");
-                    return chain.proceed(new Object[]{filterIdKey, (byte) 1}); // STYLE_MASTER = "1"
-                }
-                // Also handle stylizationType for Portrait mode
+                // The portrait style reaches the HAL as stylizationType, not filterId:
+                // 0 = Master, 1 = Leica, 2 = Original. Original starts the algorithm-up
+                // SAT preview that the Aurora DSP bokeh engine cannot serve, so map it to
+                // Master for preview and capture and remember it for post-processing.
                 if ("com.xiaomi.sessionparams.stylizationType".equals(name)
                         && chain.getArg(1) instanceof Number stylNum
-                        && stylNum.byteValue() == 171  // MODE_PORTRAIT
-                        && originalPortraitEnabled()
-                        && lastOriginalPortrait) {
-                    // Ensure stylizationType is set correctly
-                    return chain.proceed();
+                        && stylNum.byteValue() == 2
+                        && currentModuleId == MODE_PORTRAIT
+                        && originalPortraitEnabled()) {
+                    lastOriginalPortrait = true;
+                    lastOriginalPortraitTime = android.os.SystemClock.elapsedRealtime();
+                    log(Log.INFO, TAG, "Original Portrait selected -> using Master in the HAL, will post-process");
+                    return chain.proceed(new Object[]{key, (byte) 0});
                 }
                 return chain.proceed();
             });
+            // Track which camera module is active. The portrait style hook needs to know
+            // that stylizationType 2 means Original portrait and not the Photo colour style.
+            try {
+                Class<?> moduleBase = Class.forName("z3.a", false, loader);
+                Class<?> moduleInterface = Class.forName("z3.r", false, loader);
+                Method getModuleId = moduleInterface.getMethod("getModuleId");
+                for (Method m : moduleBase.getDeclaredMethods()) {
+                    if (!m.getName().equals("s") || m.getParameterCount() != 1) {
+                        continue;
+                    }
+                    hook(m).intercept(chain -> {
+                        try {
+                            currentModuleId = (Integer) getModuleId.invoke(chain.getThisObject());
+                        } catch (Throwable ignored) {
+                        }
+                        return chain.proceed();
+                    });
+                }
+                log(Log.INFO, TAG, "tracking the active camera module for Original Portrait");
+            } catch (Throwable t) {
+                log(Log.WARN, TAG, "cannot track the active camera module: " + t);
+            }
             originalPortraitCaptureHooked = true;
             log(Log.INFO, TAG, "installed Original Portrait capture hook (forces Master, post-processes)");
         } catch (Throwable t) {
@@ -1278,6 +1291,7 @@ public class ModuleMain extends XposedModule {
     private volatile boolean lastOriginalPortrait = false;
     private volatile long lastOriginalPortraitTime = 0;
     private volatile boolean originalPortraitCaptureHooked = false;
+    private volatile int currentModuleId = -1;
 
     // ---- 3. Leica Essential CMOS (M10R) ---------------------------------------------------------
 

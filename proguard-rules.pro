@@ -12,3 +12,6 @@
     public <init>();
 }
 
+
+# The native bokeh renderer reads these fields by name through JNI.
+-keep class io.martin.hypercameramod.originalportrait.OriginalPortraitParams { *; }

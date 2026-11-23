@@ -189,15 +189,19 @@ public class EssentialPipelineExtension {
      */
     public void handlePortraitOriginal(@NonNull File jpegFile,
                                         @Nullable Object depthMap,
-                                        @NonNull CaptureResult result,
+                                        @Nullable CaptureResult result,
                                         @NonNull OnProcessedCallback callback) {
         if (!enabled) {
             callback.onResult(jpegFile); // Return original
             return;
         }
         
-        // Extract parameters
-        OriginalPortraitParams params = extractParams(result);
+        // Extract parameters. The camera-app process cannot always build a CaptureResult,
+        // so fall back to the defaults instead of failing the whole post-process.
+        OriginalPortraitParams params = result == null
+                ? new OriginalPortraitParams()
+                : extractParams(result);
+        params.computeFocalLengthFromRole();
         
         // Apply intensity scaling to f_number
         params.fNumber = applyIntensity(params.fNumber);
@@ -207,7 +211,7 @@ public class EssentialPipelineExtension {
             try {
                 File processedFile = processPortraitOriginal(jpegFile, depthMap, params);
                 mainHandler.post(() -> callback.onResult(processedFile));
-            } catch (Exception e) {
+            } catch (Throwable e) {
                 Log.e(TAG, "Original portrait processing failed", e);
                 mainHandler.post(() -> callback.onResult(jpegFile)); // Return original on failure
             }

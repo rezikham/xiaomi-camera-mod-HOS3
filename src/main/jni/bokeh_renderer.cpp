@@ -20,14 +20,15 @@ namespace original_portrait {
 // -----------------------------------------------------------------------------
 static const char* kComputeShaderSource = R"GLSL(
 #version 310 es
-#extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable
+
+precision highp float;
+precision highp int;
 
 layout(local_size_x = 16, local_size_y = 16) in;
 
-layout(rgba8, binding = 0) uniform image2D srcImage;
-layout(r32f, binding = 1) uniform image2D depthMap;
-layout(r8ui, binding = 2) uniform uimage2D confidenceMap;
-layout(rgba8, binding = 3) uniform image2D dstImage;
+layout(rgba8, binding = 0) readonly uniform highp image2D srcImage;
+layout(r32f, binding = 1) readonly uniform highp image2D depthMap;
+layout(rgba8, binding = 3) writeonly uniform highp image2D dstImage;
 
 layout(std140, binding = 0) uniform Params {
     float fNumber;
@@ -36,10 +37,10 @@ layout(std140, binding = 0) uniform Params {
     int bokehStyle;
     float zoomRate;
     int cameraRole;
-    bool isAutoFNumber;
-    bool isStaticScene;
+    int isAutoFNumber;
+    int isStaticScene;
     float motionSpeed;
-    bool bypass;
+    int bypass;
 } params;
 
 const float MAX_COC_PIXELS = 64.0;
@@ -92,7 +93,7 @@ float diskWeight_Polygon(vec2 offset, float cocRadius) {
     if (normalizedDist > 1.0) return 0.0;
     float sides = 7.0;
     float angle = atan(offset.y, offset.x);
-    float polygonR = cocRadius / cos(fmod(abs(angle), 2.0 * 3.14159265 / sides) - 3.14159265 / sides);
+    float polygonR = cocRadius / cos(mod(abs(angle), 2.0 * 3.14159265 / sides) - 3.14159265 / sides);
     float edgeDist = polygonR - dist;
     return smoothstep(-2.0, 2.0, edgeDist);
 }
@@ -133,11 +134,8 @@ void main() {
     vec4 srcColor = imageLoad(srcImage, pos);
     float depth = imageLoad(depthMap, pos).r;
     float confidence = 255.0;
-    if (gl_IsBoundTextureUnit(2)) {
-        confidence = float(imageLoad(confidenceMap, pos).r);
-    }
     
-    if (params.bypass || depth <= 0.0) {
+    if (params.bypass != 0 || depth <= 0.0) {
         imageStore(dstImage, pos, srcColor);
         return;
     }
@@ -402,7 +400,7 @@ private:
         
         // Source texture (RGBA8)
         glBindTexture(GL_TEXTURE_2D, srcTexture_);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width_, height_, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, width_, height_);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -410,7 +408,7 @@ private:
         
         // Depth texture (R32F)
         glBindTexture(GL_TEXTURE_2D, depthTexture_);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, width_, height_, 0, GL_RED, GL_FLOAT, nullptr);
+        glTexStorage2D(GL_TEXTURE_2D, 1, GL_R32F, width_, height_);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -426,7 +424,7 @@ private:
         
         // Destination texture (RGBA8)
         glBindTexture(GL_TEXTURE_2D, dstTexture_);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width_, height_, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, width_, height_);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -434,6 +432,10 @@ private:
         
         glBindTexture(GL_TEXTURE_2D, 0);
         
+        GLint maxImageUnits = 0;
+        glGetIntegerv(GL_MAX_IMAGE_UNITS, &maxImageUnits);
+        LOGD("textures src=%u depth=%u dst=%u maxImageUnits=%d",
+             srcTexture_, depthTexture_, dstTexture_, maxImageUnits);
         checkGLError("createTextures");
         return true;
     }
@@ -535,25 +537,28 @@ private:
     // Compute Dispatch
     // -------------------------------------------------------------------------
     void dispatchCompute() {
+        while (glGetError() != GL_NO_ERROR) {
+        }
         glUseProgram(computeProgram_);
+        checkGLError("useProgram");
         
         // Bind textures to image units
         glBindImageTexture(0, srcTexture_, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
+        checkGLError("bind srcImage");
         glBindImageTexture(1, depthTexture_, 0, GL_FALSE, 0, GL_READ_ONLY, GL_R32F);
-        if (config_.useConfidenceMap) {
-            glBindImageTexture(2, confidenceTexture_, 0, GL_FALSE, 0, GL_READ_ONLY, GL_R8UI);
-        }
+        checkGLError("bind depthMap");
         glBindImageTexture(3, dstTexture_, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
+        checkGLError("bind dstImage");
         
         // Dispatch work groups (16x16 local size)
         int numGroupsX = (width_ + 15) / 16;
         int numGroupsY = (height_ + 15) / 16;
         glDispatchCompute(numGroupsX, numGroupsY, 1);
+        checkGLError("dispatch");
         
         // Memory barrier for image writes
         glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
-        
-        checkGLError("dispatchCompute");
+        checkGLError("barrier");
     }
     
     void readbackTexture(GLuint texture, uint8_t* dst) {
@@ -809,6 +814,73 @@ void checkGLError(const char* operation) {
     if (error != GL_NO_ERROR) {
         LOGE("GL Error after %s: 0x%04x", operation, error);
     }
+}
+
+
+// -----------------------------------------------------------------------------
+// JNI entry points
+// -----------------------------------------------------------------------------
+extern "C" JNIEXPORT jlong JNICALL
+Java_io_martin_hypercameramod_originalportrait_BokehRenderer_nativeCreate(
+        JNIEnv*, jclass) {
+    auto* renderer = new BokehRenderer();
+    return reinterpret_cast<jlong>(renderer);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_io_martin_hypercameramod_originalportrait_BokehRenderer_nativeDestroy(
+        JNIEnv*, jclass, jlong ptr) {
+    delete reinterpret_cast<BokehRenderer*>(ptr);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_io_martin_hypercameramod_originalportrait_BokehRenderer_nativeInitialize(
+        JNIEnv*, jclass, jlong ptr, jint width, jint height, jint qualityOrdinal) {
+    auto* renderer = reinterpret_cast<BokehRenderer*>(ptr);
+    if (renderer == nullptr) {
+        return JNI_FALSE;
+    }
+    RendererConfig config;
+    config.quality = static_cast<QualityPreset>(qualityOrdinal);
+    return renderer->initialize(width, height, config) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_io_martin_hypercameramod_originalportrait_BokehRenderer_nativeRender(
+        JNIEnv* env, jclass, jlong ptr,
+        jobject srcRGBA, jobject depthMap, jobject confidenceMap,
+        jobject params, jobject dstRGBA) {
+    auto* renderer = reinterpret_cast<BokehRenderer*>(ptr);
+    if (renderer == nullptr || srcRGBA == nullptr || depthMap == nullptr
+            || dstRGBA == nullptr) {
+        return JNI_FALSE;
+    }
+    auto* src = static_cast<uint8_t*>(env->GetDirectBufferAddress(srcRGBA));
+    auto* depth = static_cast<float*>(env->GetDirectBufferAddress(depthMap));
+    auto* confidence = confidenceMap == nullptr ? nullptr
+            : static_cast<uint8_t*>(env->GetDirectBufferAddress(confidenceMap));
+    auto* dst = static_cast<uint8_t*>(env->GetDirectBufferAddress(dstRGBA));
+    if (src == nullptr || depth == nullptr || dst == nullptr) {
+        return JNI_FALSE;
+    }
+    OriginalParams cppParams = jniParamsToCpp(env, params);
+    return renderer->render(src, depth, confidence, cppParams, dst)
+            ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_io_martin_hypercameramod_originalportrait_BokehRenderer_nativeRenderBitmaps(
+        JNIEnv* env, jclass, jlong ptr,
+        jobject srcBitmap, jobject depthBitmap, jobject confidenceBitmap,
+        jobject params, jobject dstBitmap) {
+    auto* renderer = reinterpret_cast<BokehRenderer*>(ptr);
+    if (renderer == nullptr || srcBitmap == nullptr || depthBitmap == nullptr
+            || dstBitmap == nullptr) {
+        return JNI_FALSE;
+    }
+    OriginalParams cppParams = jniParamsToCpp(env, params);
+    return renderer->renderBitmaps(env, srcBitmap, depthBitmap,
+            confidenceBitmap, cppParams, dstBitmap) ? JNI_TRUE : JNI_FALSE;
 }
 
 } // namespace original_portrait
