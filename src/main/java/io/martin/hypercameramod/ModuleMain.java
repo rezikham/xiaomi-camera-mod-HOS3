@@ -1337,6 +1337,36 @@ public class ModuleMain extends XposedModule {
             }
             installLookTextHook();
             final int foIcon = monochromeIcon;
+            // Capture the stock Positive/Negative items before installing the Looks hook.
+            // Calling EffectController.q(10) from inside E9.h.c recurses into Looks and
+            // overflows the stack; the static Ii.i0.d() list is safe to read here.
+            final Object[] stockItems = new Object[2];
+            final Field[] stockFields = new Field[6];
+            try {
+                Class<?> standardList = Class.forName("Ii.i0", false, loader);
+                Method d = standardList.getDeclaredMethod("d");
+                d.setAccessible(true);
+                Object source = d.invoke(null);
+                if (source instanceof java.util.List<?> list) {
+                    Class<?> stockItem = Class.forName("j3.b", false, loader);
+                    stockFields[0] = field(stockItem, "b");
+                    stockFields[1] = field(stockItem, "c");
+                    stockFields[2] = field(stockItem, "e");
+                    stockFields[3] = field(stockItem, "f");
+                    stockFields[4] = field(stockItem, "g");
+                    stockFields[5] = field(stockItem, "h");
+                    for (Object entry : list) {
+                        int ord = stockFields[0].getInt(entry);
+                        if (ord == 230) {
+                            stockItems[0] = entry;
+                        } else if (ord == 231) {
+                            stockItems[1] = entry;
+                        }
+                    }
+                }
+            } catch (Throwable t) {
+                log(Log.WARN, TAG, "looks: cannot capture Positive/Negative: " + t);
+            }
             hook(back).intercept(chain -> {
                 Object result = chain.proceed();
                 if (!(result instanceof java.util.List<?> list)) {
@@ -1396,6 +1426,57 @@ public class ModuleMain extends XposedModule {
                         log(Log.INFO, TAG, "looks: added " + names[i] + " entry (ordinal "
                                 + ordinals[i] + ", icon=" + lookIcon + ", nameIcon="
                                 + lookNameIcon + ")");
+                    }
+                    if (values.length > 231 && stockFields[1] != null) {
+                        // The Looks panel inserts an unknown item at position 1, so add the
+                        // Negative first and Positive last to display "POS, NEG".
+                        for (int si = 1; si >= 0; si--) {
+                            Object src = stockItems[si];
+                            if (src == null) {
+                                continue;
+                            }
+                            try {
+                                int stockTitle = stockFields[1].getInt(src);
+                                int stockIcon = stockFields[2].getInt(src);
+                                int stockNameIcon = STRIP_ICON_BASE | (3 + si);
+                                java.util.ArrayList<Integer> effects =
+                                        new java.util.ArrayList<>();
+                                Object sampleValue = stockFields[4].get(src);
+                                if (sampleValue instanceof java.util.List<?> sampleList) {
+                                    for (Object sample : sampleList) {
+                                        if (sample instanceof Integer id) {
+                                            effects.add(id);
+                                        }
+                                    }
+                                }
+                                java.util.ArrayList<Integer> effectLabels =
+                                        new java.util.ArrayList<>();
+                                Object labelValue = stockFields[5].get(src);
+                                if (labelValue instanceof java.util.List<?> labelList) {
+                                    for (Object label : labelList) {
+                                        if (label instanceof Integer id) {
+                                            effectLabels.add(id);
+                                        }
+                                    }
+                                }
+                                if (effects.isEmpty()) {
+                                    effects.add(stockIcon);
+                                }
+                                effectLabels.clear();
+                                effectLabels.add(stockNameIcon);
+                                Object cfg = makeConfig.newInstance(20 + si, -1, -1,
+                                        stockTitle, stockIcon, stockNameIcon, 0, null, -1,
+                                        effects, effectLabels);
+                                int ordinal = si == 0 ? 230 : 231;
+                                target.add(build.invoke(null, values[ordinal], 10, cfg));
+                                log(Log.INFO, TAG, "looks: added stock "
+                                        + (si == 0 ? "Positive" : "Negative")
+                                        + " entry (ordinal " + ordinal + ")");
+                            } catch (Throwable t) {
+                                log(Log.WARN, TAG, "looks: cannot add stock "
+                                        + (si == 0 ? "Positive" : "Negative") + ": " + t);
+                            }
+                        }
                     }
                 } catch (Throwable t) {
                     log(Log.WARN, TAG, "looks: cannot add M3/M9 entries: " + t);
@@ -1552,19 +1633,24 @@ public class ModuleMain extends XposedModule {
     }
 
     private static Drawable stripLabel(Resources res, int which) {
-        String top = "ESTL";
-        String bottom = which == 1 ? "M3" : "M9";
         float density = res == null ? 2.75f : res.getDisplayMetrics().density;
         int size = Math.round(36 * density);
         Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bitmap);
         Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
         paint.setColor(Color.WHITE);
-        paint.setTextSize(size * 0.335f);
         paint.setTextAlign(Paint.Align.CENTER);
         paint.setTypeface(stripTypeface());
-        canvas.drawText(top, size / 2f, size * 0.47f, paint);
-        canvas.drawText(bottom, size / 2f, size * 0.80f, paint);
+        if (which == 3 || which == 4) {
+            paint.setTextSize(size * 0.38f);
+            canvas.drawText(which == 3 ? "POS" : "NEG", size / 2f, size * 0.60f, paint);
+        } else {
+            String top = "ESTL";
+            String bottom = which == 1 ? "M3" : "M9";
+            paint.setTextSize(size * 0.335f);
+            canvas.drawText(top, size / 2f, size * 0.47f, paint);
+            canvas.drawText(bottom, size / 2f, size * 0.80f, paint);
+        }
         return new BitmapDrawable(res, bitmap);
     }
 
