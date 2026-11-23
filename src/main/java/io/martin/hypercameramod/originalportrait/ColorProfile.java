@@ -40,7 +40,7 @@ public class ColorProfile {
     
     // 3D LUT (optional)
     private Bitmap lutBitmap = null;
-    private int lutSize = 32; // 32^3 = 32768 entries
+    private int lutSize = 64; // 64^3 = 262144 entries
     
     // Mode
     private boolean useLut = false;
@@ -51,6 +51,11 @@ public class ColorProfile {
      * Load color profile from assets.
      */
     public static @Nullable ColorProfile load(@NonNull Context context, @NonNull String profileName) {
+        return load(context, profileName, null);
+    }
+
+    public static @Nullable ColorProfile load(@NonNull Context context, @NonNull String profileName,
+                                              @Nullable String moduleApk) {
         ColorProfile profile = new ColorProfile();
         
         // Try parametric first
@@ -60,8 +65,9 @@ public class ColorProfile {
             return profile;
         }
         
-        // Try LUT
-        if (profile.loadLut(context, profileName)) {
+        // Try LUT from the camera assets, then from the module APK.
+        if (profile.loadLut(context, profileName)
+                || profile.loadLutFromApk(moduleApk)) {
             profile.useLut = true;
             Log.d(TAG, "Loaded LUT profile: " + profileName);
             return profile;
@@ -111,6 +117,27 @@ public class ColorProfile {
         return false;
     }
     
+    private boolean loadLutFromApk(@Nullable String apkPath) {
+        if (apkPath == null) {
+            return false;
+        }
+        try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(apkPath)) {
+            java.util.zip.ZipEntry entry = zip.getEntry("assets/" + LUT_ASSET);
+            if (entry == null) {
+                Log.d(TAG, "LUT asset not in module APK: " + LUT_ASSET);
+                return false;
+            }
+            try (InputStream is = zip.getInputStream(entry)) {
+                lutBitmap = android.graphics.BitmapFactory.decodeStream(is);
+            }
+            return lutBitmap != null && lutBitmap.getWidth() == 512
+                    && lutBitmap.getHeight() == 512;
+        } catch (IOException e) {
+            Log.d(TAG, "LUT asset not readable from module APK: " + e);
+            return false;
+        }
+    }
+
     /**
      * Set default parametric values (identity-ish).
      * These should be replaced with fitted values from donor captures.
@@ -347,19 +374,73 @@ public class ColorProfile {
      */
     private @NonNull Bitmap applyLut(@NonNull Bitmap src) {
         if (lutBitmap == null) return src;
-        
-        Bitmap dst = src.copy(Bitmap.Config.ARGB_8888, true);
-        
-        // LUT application requires pixel shader or RenderScript
-        // For now, return parametric result
-        // Full LUT implementation:
-        // 1. Normalize RGB to [0,1]
-        // 2. Compute 3D texture coordinates
-        // 3. Sample LUT texture (trilinear interpolation)
-        // 4. Write result
-        
-        Log.w(TAG, "LUT application not fully implemented, using parametric");
-        return applyParametric(src);
+
+        final int w = src.getWidth();
+        final int h = src.getHeight();
+        final int[] in = new int[w * h];
+        final int[] out = new int[w * h];
+        src.getPixels(in, 0, w, 0, 0, w, h);
+
+        final int[] lut = new int[512 * 512];
+        lutBitmap.getPixels(lut, 0, 512, 0, 0, 512, 512);
+
+        for (int i = 0; i < in.length; i++) {
+            int color = in[i];
+            float r = ((color >> 16) & 0xff) / 255f;
+            float g = ((color >> 8) & 0xff) / 255f;
+            float b = (color & 0xff) / 255f;
+
+            float rs = r * 63f;
+            float gs = g * 63f;
+            float bs = b * 63f;
+            int r0 = Math.min(63, (int) rs);
+            int g0 = Math.min(63, (int) gs);
+            int b0 = Math.min(63, (int) bs);
+            int r1 = Math.min(63, r0 + 1);
+            int g1 = Math.min(63, g0 + 1);
+            int b1 = Math.min(63, b0 + 1);
+            float rt = rs - r0;
+            float gt = gs - g0;
+            float bt = bs - b0;
+
+            int c000 = lutAt(lut, b0, r0, g0);
+            int c100 = lutAt(lut, b0, r1, g0);
+            int c010 = lutAt(lut, b0, r0, g1);
+            int c110 = lutAt(lut, b0, r1, g1);
+            int c001 = lutAt(lut, b1, r0, g0);
+            int c101 = lutAt(lut, b1, r1, g0);
+            int c011 = lutAt(lut, b1, r0, g1);
+            int c111 = lutAt(lut, b1, r1, g1);
+
+            int c00 = lerpColor(c000, c100, rt);
+            int c01 = lerpColor(c010, c110, rt);
+            int c0 = lerpColor(c00, c01, gt);
+            int c10 = lerpColor(c001, c101, rt);
+            int c11 = lerpColor(c011, c111, rt);
+            int c1 = lerpColor(c10, c11, gt);
+            int rgb = lerpColor(c0, c1, bt);
+
+            out[i] = (color & 0xff000000) | (rgb & 0x00ffffff);
+        }
+
+        Bitmap dst = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        dst.setPixels(out, 0, w, 0, 0, w, h);
+        return dst;
+    }
+
+    private static int lutAt(int[] lut, int blue, int red, int green) {
+        int tileX = (blue & 7) * 64;
+        int tileY = (blue >> 3) * 64;
+        return lut[(tileY + green) * 512 + tileX + red];
+    }
+
+    private static int lerpColor(int a, int b, float t) {
+        int ar = (a >> 16) & 0xff, ag = (a >> 8) & 0xff, ab = a & 0xff;
+        int br = (b >> 16) & 0xff, bg = (b >> 8) & 0xff, bb = b & 0xff;
+        int r = Math.round(ar + (br - ar) * t);
+        int g = Math.round(ag + (bg - ag) * t);
+        int bl = Math.round(ab + (bb - ab) * t);
+        return (r << 16) | (g << 8) | bl;
     }
     
     // Getters

@@ -131,6 +131,10 @@ public class ModuleMain extends XposedModule {
     private static final Map<Integer, Bitmap> ASSET_CACHE = new HashMap<>();
     private static volatile String moduleApk;
 
+    public static String getModuleApkPath() {
+        return moduleApk;
+    }
+
     // What did not work, shown to the user once per camera version.
     private static final String MSG_LEGEND =
             "The Leica Essential style list is different on this camera version, so the CMOS "

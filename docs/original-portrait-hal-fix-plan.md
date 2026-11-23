@@ -147,6 +147,7 @@ The container's `MCBOKEHDEPTH` section is compressed; the decoder is
 JPEG, not a depth map.
 
 Until that vendor decoder is wired up, the software path uses the camera's own
-Master portrait bokeh (real depth processing) and applies the Original colour
-profile; the synthetic OpenGL bokeh renderer is kept but disabled so it does not
-double-blur the frame.
+Master portrait bokeh (real depth processing) and applies the camera's real
+Original 3D LUT (`assets/original_portrait_lut.png`, extracted from the Camera
+5.3 filter set). The synthetic OpenGL bokeh renderer is kept but disabled so it
+does not double-blur the frame.

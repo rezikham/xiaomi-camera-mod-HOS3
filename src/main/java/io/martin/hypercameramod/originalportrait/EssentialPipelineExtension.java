@@ -94,7 +94,8 @@ public class EssentialPipelineExtension {
         BitmapUtils.initRenderScript(context);
         
         // Load color profile
-        colorProfile = ColorProfile.load(context, "original_portrait");
+        colorProfile = ColorProfile.load(context, "original_portrait",
+                io.martin.hypercameramod.ModuleMain.getModuleApkPath());
         
         Log.d(TAG, "EssentialPipelineExtension initialized");
     }
