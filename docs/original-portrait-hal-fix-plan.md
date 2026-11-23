@@ -126,3 +126,25 @@ camera's real depth map, and the preview is Master rather than the native
 SAT preview. Real depth extraction and the native `libAncHumanPreviewBokeh`
 port remain the next steps.
 
+### Real depth buffer finding (2026-11-24)
+
+The camera does receive a real portrait depth buffer. It is reachable from the
+JPEG task `s7.c.a(di.t)`:
+
+```text
+ParallelTaskData.e        -> ExifData
+ExifData.getDepthData()   -> DepthData
+DepthData.getPortraitDepthData() -> gi.e
+gi.e.c()                  -> 25,165,824-byte buffer for a 12 MP portrait
+```
+
+The buffer is a 152-byte header followed by a `MCBOKEHSOT` container. Header
+fields include `2047x1536`, `4096x3072`, and a payload length of `8,047,692`.
+The container's `MCBOKEHDEPTH` section is compressed; the decoder is
+`MialgoDeCodeData` in `/odm/lib64/libmiphone_capture_mdbokeh.so`
+(`MialgoCaptureMdbokehProcess`). `portraitRawData` is the unprocessed portrait
+JPEG, not a depth map.
+
+Until that vendor decoder is wired up, the software path uses a radial focus
+falloff: the subject region stays sharp and the rest of the frame receives the
+bokeh shader.
