@@ -94,3 +94,35 @@ Allow `hal_camera_default` to load/access the new library and parameter files.
 ---
 
 **Status**: Workaround reverted. Ready for proper HAL porting.
+
+## Software path status (2026-11-24)
+
+The app sends the portrait style as `com.xiaomi.sessionparams.stylizationType`,
+not `filterId`:
+
+| Value | Style |
+| --- | --- |
+| 0 | Master |
+| 1 | Leica |
+| 2 | Original |
+
+The module now intercepts value `2` while the portrait module is active
+(`z3.a.s` tracks the module id), maps it to `0` (Master) for preview and
+capture, and post-processes the saved JPEG. This avoids the algorithm-up SAT
+preview that deadlocks the Aurora DSP bokeh engine.
+
+Verified on the 14 Ultra (`1c4e4dec`, Camera 6.7.000280.0):
+
+- no `WaitForSemaphore` timeout or camera-provider recovery when Original is
+  selected;
+- the capture is saved and post-processed;
+- the camera EXIF is copied to the processed JPEG (Make, Model, GPS,
+  DateTimeOriginal, F-number, ISO);
+- the OpenGL ES 3.1 bokeh renderer loads and runs (JNI bridge, immutable
+  image textures, radial focus falloff).
+
+Remaining gap: the bokeh uses the module's synthetic radial depth, not the
+camera's real depth map, and the preview is Master rather than the native
+SAT preview. Real depth extraction and the native `libAncHumanPreviewBokeh`
+port remain the next steps.
+

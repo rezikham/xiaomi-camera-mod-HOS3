@@ -33,6 +33,7 @@ layout(rgba8, binding = 3) writeonly uniform highp image2D dstImage;
 layout(std140, binding = 0) uniform Params {
     float fNumber;
     float focalLength;
+    vec2 padding0;
     vec4 focusRect;
     int bokehStyle;
     float zoomRate;
@@ -135,12 +136,17 @@ void main() {
     float depth = imageLoad(depthMap, pos).r;
     float confidence = 255.0;
     
-    if (params.bypass != 0 || depth <= 0.0) {
+    if (params.bypass != 0) {
         imageStore(dstImage, pos, srcColor);
         return;
     }
     
-    float coc = computeCoC(depth);
+    // The 14 Ultra path has no real depth map yet, so use a radial focus falloff:
+    // the subject around the focus point stays sharp, the rest gets a soft bokeh.
+    vec2 uv = (vec2(pos) + 0.5) / vec2(dims);
+    vec2 aspect = vec2(1.0, float(dims.y) / float(dims.x));
+    float radial = length((uv - params.focusRect.xy) * aspect);
+    float coc = smoothstep(0.16, 0.55, radial) * 48.0;
     if (coc < MIN_COC_PIXELS) {
         imageStore(dstImage, pos, srcColor);
         return;
@@ -235,6 +241,7 @@ public:
         dispatchCompute();
         
         // Read back result
+        glFinish();
         readbackTexture(dstTexture_, dstRGBA);
         
         return true;
@@ -475,6 +482,7 @@ private:
     struct UniformParams {
         float fNumber;
         float focalLength;
+        float padding0[2];
         float focusRect[4];
         int bokehStyle;
         float zoomRate;
@@ -780,13 +788,24 @@ OriginalParams jniParamsToCpp(JNIEnv* env, jobject javaParams) {
     if (motionSpeedId) params.motionSpeed = env->GetFloatField(javaParams, motionSpeedId);
     if (bypassId) params.bypass = env->GetBooleanField(javaParams, bypassId);
     
-    // focusRect is float[4]
+    // focusRect is float[4]. Some release builds hand back a zeroed array;
+    // keep the centered default rather than blurring the whole frame.
     if (focusRectId) {
         jfloatArray arr = static_cast<jfloatArray>(env->GetObjectField(javaParams, focusRectId));
         if (arr) {
             jfloat* elements = env->GetFloatArrayElements(arr, nullptr);
             if (elements) {
-                for (int i = 0; i < 4; i++) params.focusRect[i] = elements[i];
+                bool nonzero = false;
+                for (int i = 0; i < 4; i++) {
+                    params.focusRect[i] = elements[i];
+                    nonzero |= elements[i] != 0.0f;
+                }
+                if (!nonzero) {
+                    params.focusRect[0] = 0.5f;
+                    params.focusRect[1] = 0.5f;
+                    params.focusRect[2] = 0.5f;
+                    params.focusRect[3] = 0.5f;
+                }
                 env->ReleaseFloatArrayElements(arr, elements, JNI_ABORT);
             }
         }

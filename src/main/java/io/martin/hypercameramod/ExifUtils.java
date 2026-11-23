@@ -2,9 +2,14 @@ package io.martin.hypercameramod;
 
 import android.util.Log;
 
+import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.file.Files;
 
 /**
  * EXIF tag injection for Gallery LEICA button recognition.
@@ -281,5 +286,111 @@ public final class ExifUtils {
         out.write(jpeg, 2, jpeg.length - 2);
 
         return out.toByteArray();
+    }
+
+    /**
+     * Writes the legendmode tag even when the value is 0 (Original).
+     * injectLegendMode() treats 0 as "off", which is right for the LUT path
+     * but not for Original Portrait.
+     */
+    public static byte[] setLegendMode(byte[] jpeg, int legendMode) {
+        if (jpeg == null || jpeg.length < 4
+                || (jpeg[0] & 0xFF) != 0xFF || (jpeg[1] & 0xFF) != 0xD8) {
+            return jpeg;
+        }
+        try {
+            return injectLegendModeIntoExif(jpeg, (byte) legendMode);
+        } catch (Throwable t) {
+            Log.w(TAG, "legendmode injection failed: " + t);
+            return jpeg;
+        }
+    }
+
+    /** Copy the source JPEG's EXIF APP1 segment into the processed JPEG. */
+    public static void copyExifFromFile(File source, File processed) {
+        try {
+            byte[] exif = readExifSegment(source);
+            if (exif == null) {
+                return;
+            }
+            byte[] data = Files.readAllBytes(processed.toPath());
+            if (data.length < 2 || (data[0] & 0xFF) != 0xFF || (data[1] & 0xFF) != 0xD8) {
+                return;
+            }
+            ByteArrayOutputStream out = new ByteArrayOutputStream(data.length + exif.length);
+            out.write(data, 0, 2);
+            out.write(exif);
+            out.write(data, 2, data.length - 2);
+            File tmp = new File(processed.getParentFile(), processed.getName() + ".exif");
+            Files.write(tmp.toPath(), out.toByteArray());
+            if (!tmp.renameTo(processed)) {
+                Files.move(tmp.toPath(), processed.toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "copyExifFromFile failed: " + t);
+        }
+    }
+
+    /** Set the legendmode tag in a JPEG file in place. */
+    public static void setLegendModeInFile(File file, int mode) {
+        try {
+            byte[] data = Files.readAllBytes(file.toPath());
+            byte[] out = setLegendMode(data, mode);
+            if (out != data) {
+                Files.write(file.toPath(), out);
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "setLegendModeInFile failed: " + t);
+        }
+    }
+
+    private static byte[] readExifSegment(File source) {
+        try (InputStream raw = new FileInputStream(source);
+             BufferedInputStream in = new BufferedInputStream(raw)) {
+            if (in.read() != 0xFF || in.read() != 0xD8) {
+                return null;
+            }
+            while (true) {
+                int b0 = in.read();
+                int b1 = in.read();
+                if (b0 != 0xFF || b1 < 0) {
+                    return null;
+                }
+                int marker = b1 & 0xFF;
+                if (marker == 0xDA || marker == 0xD9) {
+                    return null;
+                }
+                int hi = in.read();
+                int lo = in.read();
+                if (hi < 0 || lo < 0) {
+                    return null;
+                }
+                int length = (hi << 8) | lo;
+                if (length < 2) {
+                    return null;
+                }
+                byte[] segment = new byte[length + 2];
+                segment[0] = (byte) 0xFF;
+                segment[1] = (byte) marker;
+                segment[2] = (byte) hi;
+                segment[3] = (byte) lo;
+                int read = 4;
+                while (read < segment.length) {
+                    int n = in.read(segment, read, segment.length - read);
+                    if (n < 0) {
+                        return null;
+                    }
+                    read += n;
+                }
+                if (marker == 0xE1 && length >= 8
+                        && segment[4] == 'E' && segment[5] == 'x' && segment[6] == 'i'
+                        && segment[7] == 'f' && segment[8] == 0 && segment[9] == 0) {
+                    return segment;
+                }
+            }
+        } catch (Throwable t) {
+            return null;
+        }
     }
 }

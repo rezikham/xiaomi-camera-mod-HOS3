@@ -272,7 +272,13 @@ public class BokehRenderer {
         
         ByteBuffer dstBuf = BitmapUtils.bitmapToByteBuffer(dstBitmap);
         
-        return render(srcBuf, depthBuf, confBuf, params, dstBuf);
+        boolean success = render(srcBuf, depthBuf, confBuf, params, dstBuf);
+        if (success) {
+            // bitmapToByteBuffer() copies the pixels out; copy the rendered result back.
+            dstBuf.rewind();
+            dstBitmap.copyPixelsFromBuffer(dstBuf);
+        }
+        return success;
     }
     
     // Getters

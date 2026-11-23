@@ -11,6 +11,8 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 
+import io.martin.hypercameramod.ExifUtils;
+
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.WorkerThread;
@@ -284,8 +286,10 @@ public class EssentialPipelineExtension {
             throw new IOException("Failed to save processed JPEG");
         }
         
-        // Tag as Original Portrait for Gallery
-        tagAsOriginalPortrait(outputFile);
+        // Keep the camera's EXIF (time, location, orientation, maker notes). The custom
+        // legendmode tag injection is disabled until its IFD rebuild is fixed; corrupting
+        // the maker notes is worse than leaving the stock portrait metadata intact.
+        ExifUtils.copyExifFromFile(jpegFile, outputFile);
         
         // Cleanup
         if (resultBitmap != bitmap) {
@@ -343,12 +347,10 @@ public class EssentialPipelineExtension {
     // Helper: Tag JPEG as Original Portrait for Gallery
     private void tagAsOriginalPortrait(@NonNull File file) {
         try {
-            android.media.ExifInterface exif = new android.media.ExifInterface(file.getAbsolutePath());
             // EXIF tag 34992 (0x88B0) = legendmode
             // 0 = Original, 1 = M9, 2 = M3, 3 = M10R (per Camera 6.8)
-            exif.setAttribute("34992", "0");
-            exif.saveAttributes();
-        } catch (IOException e) {
+            ExifUtils.setLegendModeInFile(file, 0);
+        } catch (Throwable e) {
             Log.w(TAG, "Failed to write EXIF tag", e);
         }
     }
