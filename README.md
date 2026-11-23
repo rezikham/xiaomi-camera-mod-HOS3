@@ -11,7 +11,7 @@
 - Palette and Parameters panel
 - Original colour style (Photo)
 - **Original portrait style — software implementation on 14 Ultra** (opt-in toggle; off by default; uses post-capture depth map + OpenGL ES 3.1 bokeh renderer)
-- Leica Essential mode in the standard UI (M3/M9)
+- M3/M9 in the current UI (standard FILTER strip or Leica Looks)
 - Leica Essential CMOS (M10R) style
 - **Moment App pipeline** (real M3/M9 post-capture processing, off by default)
 - Film simulation filters: 600F, BF70, R600, P100F, F-50, KC64, V250, H400, KP160, FC400, C-50D, KG200 (existing entries are reused and renamed to the film code)
@@ -81,8 +81,8 @@ Open **HyperCameraMod** from the app drawer or from the module's entry in LSPose
 
 | Toggle | Default | What it changes |
 | ------ | ------- | --------------- |
-| Leica Essential Mode in Standard UI | off | Adds the Leica Essential mode (M3/M9) to the standard UI mode strip. |
-| Leica UI (Looks) | on | Shows the Leica Looks panel in the filter strip instead of the standard filter UI. |
+| M3/M9 in the current UI | on | Adds M3/M9 to the Leica Looks panel when the Leica UI theme is on, or to the standard FILTER strip when it is off. |
+| Leica UI theme (17U style) | off on 14 Ultra, on for LCC/17U | Uses the Leica Looks panel instead of the standard FILTER strip. Restart Camera after changing. |
 | CMOS (M10R) Style | off | Adds the CMOS (M10R) style to the Leica Essential style list. |
 | Extra Film Filters | on | Exposes all 12 film filters (600F through KG200). A filter the camera already has is reused and its name is changed to the film code instead of adding a duplicate. |
 | Original Portrait Style | on (17 Ultra / 18 Pro Max), off (14 Ultra) | Shows Original in the Portrait style picker. On 14 Ultra uses software post-capture (depth map + bokeh renderer). |

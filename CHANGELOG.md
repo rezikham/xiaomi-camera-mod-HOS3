@@ -2,6 +2,37 @@
 
 All notable changes to HyperCameraMod. The module follows a simple scheme: stable releases are tagged `v<version>`, development builds are published as the `CI-Release` pre-release.
 
+## [1.2.6] - 2026-11-23
+
+### Added
+
+- M3 and M9 now appear as **ESTL M3** / **ESTL M9** two-line cards in the
+  Leica Looks panel, using the same bundled LG1056 face as the film labels.
+- Stock **Positive** and **Negative** filters now appear in the Leica Looks
+  panel as **FLM NEG** / **FLM POS** cards, in addition to their existing
+  place in the standard FILTER strip.
+
+### Changed
+
+- The M3/M9 toggles for the standard FILTER strip and the Leica Looks panel
+  are merged into one **M3/M9 in the current UI** setting. The module reads
+  the Leica UI theme and installs only the matching hook.
+- Old `looks_entries_enabled` / `leica_ui_enabled` preferences are migrated
+  once: M3/M9 stay on if either old switch was on.
+- Film filters in the Leica Looks panel now follow **Extra Film Filters**
+  instead of the removed Looks switch.
+
+### Fixed
+
+- Two-line label drawables are installed for both UIs. Previously the label
+  hooks were only installed by the standard-strip path, so the Leica Looks
+  cards could disappear when only the Looks path was active.
+
+### Notes
+
+- The KernelSU LUT module is unchanged from 1.2.0
+  (`camera-mod-ksu-v1.2.0-306.zip`).
+
 ## [1.2.5] - 2026-11-23
 
 ### Changed
