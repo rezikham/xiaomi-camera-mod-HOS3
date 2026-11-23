@@ -18,29 +18,31 @@ android {
         versionProps.load(FileInputStream(versionFile))
     }
     val baseVersion = versionProps.getProperty("baseVersion", "1.0.0")
-    var versionCode = versionProps.getProperty("versionCode", "100").toInt()
+    // Keep the script variable distinct from the defaultConfig DSL property: using the same
+    // name made the assignment below a self-reference and shipped versionCode 0.
+    var computedVersionCode = versionProps.getProperty("versionCode", "100").toInt()
 
     // Allow CI override via -PversionCode
     val ciVersionCode = project.findProperty("versionCode")?.toString()?.toIntOrNull()
     if (ciVersionCode != null) {
-        versionCode = ciVersionCode
+        computedVersionCode = ciVersionCode
     }
 
     // Increment versionCode for next build (local builds only, not CI)
     val isCi = project.findProperty("CI") != null || System.getenv("CI") == "true" || System.getenv("GITHUB_ACTIONS") == "true"
     if (!isCi) {
-        versionCode++
-        versionProps.setProperty("versionCode", versionCode.toString())
+        computedVersionCode++
+        versionProps.setProperty("versionCode", computedVersionCode.toString())
         versionProps.store(versionFile.outputStream(), "Auto-incremented by Gradle")
     }
 
-    val computedVersionName = "$baseVersion-$versionCode"
+    val computedVersionName = "$baseVersion-$computedVersionCode"
 
     defaultConfig {
         applicationId = "io.rezikham.hypercameramod"
         minSdk = 26
         targetSdk = 37
-        versionCode = versionCode
+        versionCode = computedVersionCode
         versionName = computedVersionName
     }
 
