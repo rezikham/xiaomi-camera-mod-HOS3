@@ -99,6 +99,17 @@ public class ModuleMain extends XposedModule {
     // settings toggle decides (see originalPortraitEnabled()).
     private static final int MODE_PORTRAIT = 171;
     private static final String ORIGINAL_PORTRAIT_KEY = "original_portrait_enabled";
+    private static final String LEGEND_MODE_KEY = "com.xiaomi.sessionparams.legendMode";
+    private static final String STYLIZATION_TYPE_KEY = "com.xiaomi.sessionparams.stylizationType";
+    private static final ThreadLocal<Byte> BRIDGE_LEGEND = new ThreadLocal<>();
+    private static volatile byte lastLegend;
+    private static volatile long lastLegendTime;
+    private static final ThreadLocal<Boolean> BRIDGE_SETTING = ThreadLocal.withInitial(() -> false);
+    private static final String HAL_GATE_KEY = "camera.debug.mivi3.output.jpeg";
+    private static final String COMPAT_FALLBACK_KEY = "compat_fallback_enabled";
+    private static final String ESSENTIAL_PIPELINE_KEY = "essential_pipeline_enabled";
+    private static final String ESSENTIAL_PIPELINE_PROP = "camera.feature.essential_pipeline";
+    private static final String HAL_LUT_SLOT_KEY = "hal_lut_slot_enabled";
     private static final long ESSENTIAL_LEGEND_FRESH_MS = 180_000;
     private static final String ORIGINAL_PORTRAIT_PROP = "camera.feature.original_portrait";
     private static final int ASSET_ORIGINAL_BADGE = 3;
@@ -131,6 +142,9 @@ public class ModuleMain extends XposedModule {
     private volatile boolean modeListHooked;
     private volatile boolean nameStyleHooked;
     private volatile boolean stylizationHooked;
+    private volatile boolean legendBridgeHooked;
+    private volatile boolean legendObserverHooked;
+    private volatile boolean lutHooked;
     private volatile boolean legendHooked;
     private volatile boolean assetsHooked;
     private volatile boolean styleHooked;
@@ -689,6 +703,9 @@ public class ModuleMain extends XposedModule {
     }
 
     private volatile boolean blurRadiusHooked;
+    private final java.util.Map<String, LeicaLut> lutCache =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private static final ThreadLocal<Boolean> IN_LUT = new ThreadLocal<>();
     private volatile boolean watcherStarted;
 
     // Post-process the saved JPEG when the camera app writes it. This avoids depending on the
@@ -1150,6 +1167,18 @@ public class ModuleMain extends XposedModule {
 
     // Genuine Moment App pipeline (from Moment App). Off by default; all native work
     // happens in the module's :essential process.
+    private boolean halLutSlotEnabled() {
+        try {
+            android.content.SharedPreferences p = getRemotePreferences("hypercameramod");
+            if (p != null) {
+                return p.getBoolean(HAL_LUT_SLOT_KEY, false);
+            }
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot read " + HAL_LUT_SLOT_KEY + ": " + t);
+        }
+        return false;
+    }
+
     private boolean essentialPipelineEnabled() {
         if (propertyOn(ESSENTIAL_PIPELINE_PROP)) {
             return true;
@@ -1831,6 +1860,24 @@ public class ModuleMain extends XposedModule {
                     java.util.List<Object> target = (java.util.List<Object>) list;
                     String[] names = {"M3", "M9", "M10R"};
                     int[] ordinals = {LOOK_M3, LOOK_M9, LOOK_M10R};
+                    android.content.Context ctx = currentApplication();
+                    android.content.res.Resources res = ctx != null ? ctx.getResources() : null;
+                    int[] lookIcons = new int[3];
+                    int[] lookTemplates = new int[3];
+                    if (res != null) {
+                        lookIcons[0] = res.getIdentifier("legendary_leica_m3_icon",
+                                "drawable", CAMERA_PACKAGE);
+                        lookIcons[1] = res.getIdentifier("legendary_leica_m9_icon",
+                                "drawable", CAMERA_PACKAGE);
+                        lookIcons[2] = res.getIdentifier("legendary_leica_m10r_icon",
+                                "drawable", CAMERA_PACKAGE);
+                        lookTemplates[0] = res.getIdentifier("legendary_leica_m3_template",
+                                "drawable", CAMERA_PACKAGE);
+                        lookTemplates[1] = res.getIdentifier("legendary_leica_m9_template",
+                                "drawable", CAMERA_PACKAGE);
+                        lookTemplates[2] = res.getIdentifier("legendary_leica_m10r_template",
+                                "drawable", CAMERA_PACKAGE);
+                    }
                     for (int i = 0; i < ordinals.length; i++) {
                         int lookIcon = lookIcons[i] != 0 ? lookIcons[i] : foIcon;
                         int lookNameIcon = STRIP_ICON_BASE | (i + 1);
