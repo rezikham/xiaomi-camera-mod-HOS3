@@ -37,7 +37,7 @@ The 17 Ultra app decision point is `LegendaryPostProcessor.processStyled`:
 | Stage | 17 Ultra | 14 Ultra port |
 |---|---|---|
 | M3 parameter filter | `applyOriginalFilter(m3.bin)` | same, bundled `assets/essential/leica_filter_param_m3.bin` |
-| M3 grain | Monopan helper | attempted; falls back to saturation-0 |
+| M3 grain | Monopan helper | yes, with bundled OpenCL ICD + shim |
 | M9 colour grade | `applyWarmOriginalFilter(m9.bin, denoise, -0.95 EV, 0.3)` | same |
 | M9 tone | `B43Tone.apply(bitmap, false)` | same, `libb43tone.so` |
 | B12 reconciliation | `libleicamodelembed` wrapper | same wrapper, RUNPATH patched |
@@ -92,32 +92,51 @@ HCM-Essential: M9 scene lux=10.0 cct=4800.0 iso=2500.0 denoise=1.0 backend=B12
 LeicaM9M3B12: B12 look=M9_CLEAR_DENSITY_B12 applied=1 ...
 ```
 
-M3, `IMG_20261124_130603.jpg`:
+M3, `IMG_20261124_132910.jpg` (Monopan grain enabled):
 
 ```text
 Moment App using stored Essential style legend=2
-Moment App candidate IMG_20261124_130603.jpg legend=2
-HCM-Essential: libleicamodelembed loaded (B12 wrapper)
+Moment App candidate IMG_20261124_132910.jpg legend=2
+HCM-Essential: libc++_shared / libm9base / libleicamodelembed loaded
 HCM-Essential: M3 scene lux=10.0 cct=4800.0 iso=2500.0 denoise=1.0 backend=B12
-Monopan grain=false in 265 ms
-Moment App applied legend=2 IMG_20261124_130603.jpg
+HCM-Essential: Monopan grain=true in 959 ms
+Moment App applied legend=2 IMG_20261124_132910.jpg
 ```
+
+The earlier fallback capture `IMG_20261124_130603.jpg` logged
+`Monopan grain=false` and used the app's saturation-0 path.
 
 Pixel checks:
 
 ```text
 M9: 3072x4096, colour, max |r-g| 185, max |g-b| 155
-M3: 3072x4096, max |r-g| 0, max |g-b| 0 (true monochrome)
+M3 with Monopan: 3072x4096, max |r-g| 0, max |g-b| 0, wall stddev 11.7
+M3 fallback:     3072x4096, max |r-g| 0, max |g-b| 0, wall stddev 6.2
 ```
+
+## Monopan OpenCL shim
+
+`libmialgo_monopan.so` asks for `/system/vendor/lib64/libOpenCL.so`, but the
+runner's default linker namespace cannot read `/vendor/lib64`. The runner is
+launched with the module's native directory on `LD_LIBRARY_PATH`, so:
+
+* `libhcm_opencl_shim.so` is added as a `DT_NEEDED` of
+  `libmonopan_runner.so` and interposes `dlopen` / `android_dlopen_ext`.
+* It redirects the OpenCL request to `<nativeLibraryDir>/libOpenCL.so`,
+  writes a one-line `.icd` file under the camera cache, and sets
+  `OPENCL_VENDOR_PATH` before the Khronos loader runs.
+* The bundled `libOpenCL_adreno.so` is the Qualcomm ICD. It loads
+  `libCB.so` / `libgsl.so` through `android_load_sphal_library`, so the GPU
+  driver still comes from the vendor namespace.
+* The loader cannot write `/data/vendor/camera/mialgo_monopan_cl.cache`
+  (`vendor_camera_data_file` is denied to the camera); it recompiles the
+  kernel in memory and the grain still renders.
 
 ## Remaining gaps
 
-* Monopan grain: the payload loads, but `libmialgo_monopan.so` then
-  `dlopen`s `/system/vendor/lib64/libOpenCL.so` in the default linker
-  namespace, which does not permit `/vendor/lib64`. The runner cannot use
-  the `sphal` namespace for both its own libs and OpenCL. M3 therefore uses
-  the app's saturation-0 fallback.
 * M9 style transfer: the shipped model is QNN HTP V81 (SM8750); the 14 Ultra
   is HTP V75. The B12 warm grade runs without the style model.
 * `LeicaQuality` person correction, `FilmInput` tone, `LeicaDynamicRange`
   and the Leica container/watermark are not ported.
+* No matched 17 Ultra capture is available on this setup, so the look is
+  compared against the app's own stage order and local captures only.
