@@ -28,12 +28,31 @@ The M10R capture runs the app's M10R pipeline shape:
 
 1. decode the saved JPEG (sRGB), estimate lux/CCT/ISO;
 2. `applyWarmOriginalFilter(bitmap, m10r.bin, lux, cct, 1.0, phase,
-   denoise, -0.95 EV, 0.3)` through the B12 wrapper;
-3. `B43Tone` (M9/M10R branch);
-4. JPEG 95 + APP1 copy + appended-IFD0 `legendmode` tag.
+   denoise + 0.15, -0.95 EV, 0.3)` through the B12 wrapper
+   (the app's `M10rBin` soft);
+3. `M10rPost.after` — restore the input white balance, soften, then the
+   `M10rBin` vignette 0.3 / grain 0.3 (saturation 1.0);
+4. `B43Tone` (M9/M10R branch);
+5. JPEG 95 + APP1 copy + appended-IFD0 `legendmode` tag.
 
 FilmInput and Monopan are M3-only and are skipped. The M10R neural style
-transfer and `LeicaQuality` are not run (see below).
+transfer and `LeicaQuality` are not run (see below). The M10R post is the
+Essential Moments app's own local M10R reconstruction, not the 18 PM neural
+style/legendCT.
+
+Without the post the M10R filter bin alone is almost indistinguishable from
+M9 (the bins differ in one LUT block). The post makes CMOS visibly
+different. Same-scene pair from the 14 Ultra:
+
+```text
+M9   IMG_20261124_180935.jpg: R/B 0.465, edge stddev 14.9, 0x88b0=1
+M10R IMG_20261124_180953.jpg: R/B 0.602, edge stddev 23.1, 0x88b0=3
+M10rPost: balance before=1.0619,1.5581 after=0.9294,1.6321 gains=1.1125,0.9635
+M10rPost: finish saturation=1.0 vignette=0.3 grain=0.3
+```
+
+M10R is warmer and grainier, which is the intended CMOS/Modern vintage
+difference from CCD/M9.
 
 The asset used is the Essential Moments trimmed bin, **not** the 18 PM
 source bin. The 18 PM source bin is accepted by the 18 PM HAL plugin but the
@@ -100,7 +119,9 @@ color/LUT.
 * 18 PM M10R neural style transfer (`styletrans_high/low_m10r.minn`) is
   QNN HTP V81; the 14 Ultra V75 returns `m_interface is null` /
   `m_is_valid is invalid`. `legendCT` is an 18 PM HAL color-transform
-  plugin and is not ported.
+  plugin and is not ported. The local `M10rPost` (the app's M10R toggle
+  defaults: AWB 0.8, detail 0.3, vignette 0.3, grain 0.3) is the working
+  CMOS look, not the exact 18 PM neural style.
 * No 18 PM M10R reference capture exists in the dump: all 72 camera JPEGs
   are `filterName:"Original"`; the only other file is a video with an empty
   filter name. A matched comparison needs an 18 PM M10R capture or the 18 PM
