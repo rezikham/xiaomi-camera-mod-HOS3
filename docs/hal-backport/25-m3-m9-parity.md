@@ -149,6 +149,26 @@ launched with the module's native directory on `LD_LIBRARY_PATH`, so:
   (`vendor_camera_data_file` is denied to the camera); it recompiles the
   kernel in memory and the grain still renders.
 
+## Style-transfer blocker
+
+The M9 style runner is `libstyletrans_runner.so`. Its runtime strings load
+`libQnnHtpV81Stub.so`, `libQnnSystem.so`, `libQnnHtp.so` and use the `sphal`
+namespace. Its payload `libmialgo_styletrans.so` has these dependencies:
+
+```text
+NEEDED libLMSceneSeg.so
+NEEDED libcdsprpc.so
+NEEDED libOpenCL.so
+NEEDED libmialgo_utils.so
+```
+
+`libLMSceneSeg.so` is the same V81 person/scene library that segfaults in
+`libQnnHtp.so` on the 14 Ultra (see below). The style model is therefore
+compiled for HTP V81, and the runner's sphal/default namespace split cannot
+load the module's `/data/app` libs and the vendor DSP libs together. Without
+V75 models the style stage cannot run on this phone; the warm grade + B12 is
+the closest working M9 path.
+
 ## LeicaQuality person-correction blocker
 
 The person runner was staged with its 768 px segmentation model, the Adreno
