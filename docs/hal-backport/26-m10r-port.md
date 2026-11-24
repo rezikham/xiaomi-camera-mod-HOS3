@@ -1,6 +1,6 @@
 # 26 — M10R (CMOS) on the 14 Ultra
 
-Status: working on `1c4e4dec` with module `1.1.0-366` (test build).
+Status: working on `1c4e4dec` with module `1.1.0-369` (test build).
 
 ## What the 18 Pro Max does
 
@@ -50,10 +50,10 @@ With the trimmed bin the same engine completes:
 ```text
 HCM-Essential: M10R scene lux=20.0 cct=5500.0 iso=1250.0 denoise=0.388 backend=B12
 LeicaM9M3B12: B12 look=M9_CLEAR_DENSITY_B12 applied=1 ...
-HyperCameraMod: Moment App applied legend=3 IMG_20261124_165427.jpg
+HyperCameraMod: Moment App applied legend=3 IMG_20261124_172359.jpg
 ```
 
-Verified output `IMG_20261124_165427.jpg`:
+Verified output `IMG_20261124_172359.jpg`:
 
 ```text
 3072x4096, colour
@@ -70,18 +70,23 @@ The 18 PM `libmialgo_styletrans.so` (304,712 bytes) is a MAGE/OpenCL
 runtime (NEEDED `libmage.so`), not the 17 Ultra QNN lib. It exports the same
 `MialgoAi_DIPS_*` API as the 17 Ultra `libstyletrans_runner.so`, and the
 18 PM `styletrans_low_m10r.minn` model is 39,981,140 bytes. The runner was
-patched to the default namespace and given the Monopan OpenCL shim/ICD, and
-the 18 PM lib + `libmage.so` + the low M10R model were staged. The stage
-returned:
+patched to the default namespace and given the Monopan OpenCL shim/ICD; the
+18 PM lib, `libmage.so`, `libLMSceneSeg.so`, the QNN stub/system/htp,
+`libcdsprpc.so`, `libvmmem.so` and the DSP HIDL lib were staged. The runner
+then reached the 18 PM MAGE runtime:
 
 ```text
+StyletransDIPS: StyletransDIPS version 2.0.0.20260920
+Styletrans init=0
+Styletrans run=1140001 rotation=0 lux=20 cct=5500
 HCM-Essential: M10R style transfer=false
 LeicaM9M3B12: B12 upstream_failed stage=1 recovery=fresh_source_requested
 ```
 
-There was no `Styletrans init`/`run` log and no tombstone; the 18 PM
-MAGE/runner combination does not initialize with the 17 Ultra runner on the
-14 Ultra. The 18 PM model/legendCT remain the main M10R parity gap.
+The same `run=1140001` occurs with the genuine 18 PM `styletrans_low_m9.minn`
+model, so the failure is the 18 PM MAGE runtime/model on the 14 Ultra GPU,
+not the M10R model specifically. The 18 PM model/legendCT remain the main
+M10R parity gap.
 
 ## Remaining gaps
 
