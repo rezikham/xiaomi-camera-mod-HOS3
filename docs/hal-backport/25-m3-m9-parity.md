@@ -42,7 +42,7 @@ The 17 Ultra app decision point is `LegendaryPostProcessor.processStyled`:
 | M9 tone | `B43Tone.apply(bitmap, false)` | same, `libb43tone.so` |
 | B12 reconciliation | `libleicamodelembed` wrapper | same wrapper, RUNPATH patched |
 | M9 style transfer | `applyStyle` (QNN HTP V81) | not available on SM8650/HTP V75 |
-| Person correction | `LeicaQuality` | not ported |
+| Person correction | `LeicaQuality` | blocked: QNN HTP V81 person model |
 | M3 film tone | `FilmInput` GLES stage | ported, `FilmInput` + `FilmTone` |
 | EXIF | copy + `legendmode` | copy APP1 + append IFD0 tag |
 
@@ -149,11 +149,29 @@ launched with the module's native directory on `LD_LIBRARY_PATH`, so:
   (`vendor_camera_data_file` is denied to the camera); it recompiles the
   kernel in memory and the grain still renders.
 
+## LeicaQuality person-correction blocker
+
+The person runner was staged with its 768 px segmentation model, the Adreno
+ICD and the V81 QNN stack and invoked directly:
+
+```sh
+LD_LIBRARY_PATH=... ./libperson_runner.so .../lib .../leica-v4 in.rgb out.mask 768 576
+# rc=139 (SIGSEGV), no out.mask
+```
+
+`tombstone_29` shows the crash in `libQnnHtp.so`, called from
+`libLMSceneSeg.so`. The model is compiled for QNN HTP V81 (SM8750); the
+14 Ultra is V75, so porting the Java `LeicaQuality` wrapper would only spawn
+a crashing helper. M9 keeps the warm grade / B43 / B12 result without the
+person mask.
+
 ## Remaining gaps
 
 * M9 style transfer: the shipped model is QNN HTP V81 (SM8750); the 14 Ultra
   is HTP V75. The B12 warm grade runs without the style model.
-* `LeicaQuality` person correction, `LeicaDynamicRange` and the Leica
-  container/watermark are not ported.
+* `LeicaQuality` person correction is blocked by the same QNN generation
+  issue: its `libLMSceneSeg.so` person model runs on HTP V81 and segfaults
+  inside `libQnnHtp.so` on the 14 Ultra's V75 DSP.
+* `LeicaDynamicRange` and the Leica container/watermark are not ported.
 * No matched 17 Ultra capture is available on this setup, so the look is
   compared against the app's own stage order and local captures only.
