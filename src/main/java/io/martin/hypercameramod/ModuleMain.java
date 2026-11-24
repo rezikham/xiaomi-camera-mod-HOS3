@@ -862,7 +862,8 @@ public class ModuleMain extends XposedModule {
                     + " apk=" + (moduleApk != null) + " size=" + file.length());
             legend = legendFromPrefs();
             String asset = legend == 1 ? "leica_luts/130_LeicaNatural.png"
-                    : legend == 2 ? "leica_luts/M3_Monopan.png" : null;
+                    : legend == 2 ? "leica_luts/M3_Monopan.png"
+                    : legend == 3 ? "leica_luts/M10R_Cmos.png" : null;
             if (asset == null || moduleApk == null) {
                 return;
             }
@@ -1111,7 +1112,8 @@ public class ModuleMain extends XposedModule {
                         legend = legendFromPrefs();
                     }
                     String asset = legend == 1 ? "leica_luts/130_LeicaNatural.png"
-                            : legend == 2 ? "leica_luts/M3_Monopan.png" : null;
+                            : legend == 2 ? "leica_luts/M3_Monopan.png"
+                            : legend == 3 ? "leica_luts/M10R_Cmos.png" : null;
                     if (asset == null) {
                         return chain.proceed();
                     }
@@ -1709,10 +1711,14 @@ public class ModuleMain extends XposedModule {
     private static final int LOOK_TEXT_BASE = 0x7e030000;   // made-up ids for the chip labels
     private static final int LOOK_M3 = 91;                  // enum entry N_NEUTRAL, unused in Photo
     private static final int LOOK_M9 = 92;                  // enum entry N_SOFT, unused in Photo
+    private static final int LOOK_M10R = 93;                // enum entry N_WHITENING, unused in Photo
     // Authentic 17U M3 Monopan extraction. The old 167c769a... file was the
     // earlier reproduced fallback and must be replaced.
     private static final String M3_MD5 = "c4ff65cebdcd8edfa7146c6ab2f838f9";
     private static final String M9_MD5 = "ecbafbf8130ba7340749e95ace25616b";
+    // Derived warm-density LUT (the 18 PM ships the M10R 3D LUTs neutral), so this
+    // file is a bake of the -0.95 EV / warmth 0.3 grade, not a Xiaomi asset.
+    private static final String M10R_MD5 = "e5176c87c69877917b3d24e9b74f5348";
     private static volatile int ACTIVE_LOOK = 0;
     private static volatile long ACTIVE_LOOK_AT = 0L;
     private static volatile java.lang.reflect.Method EFFECT_CONTROLLER_GET;
@@ -1747,9 +1753,9 @@ public class ModuleMain extends XposedModule {
             Method back = looks.getDeclaredMethod("c");
             Method build = looks.getDeclaredMethod("b", enums, int.class, config);
             Object[] values = enums.getEnumConstants();
-            if (values == null || values.length <= LOOK_M9) {
+            if (values == null || values.length <= LOOK_M10R) {
                 log(Log.WARN, TAG, "looks: filter enum has only "
-                        + (values == null ? 0 : values.length) + " entries, M3/M9 skipped");
+                        + (values == null ? 0 : values.length) + " entries, M3/M9/M10R skipped");
                 return;
             }
             Object base = null;
@@ -1801,8 +1807,8 @@ public class ModuleMain extends XposedModule {
                 try {
                     @SuppressWarnings("unchecked")
                     java.util.List<Object> target = (java.util.List<Object>) list;
-                    String[] names = {"M3", "M9"};
-                    int[] ordinals = {LOOK_M3, LOOK_M9};
+                    String[] names = {"M3", "M9", "M10R"};
+                    int[] ordinals = {LOOK_M3, LOOK_M9, LOOK_M10R};
                     for (int i = 0; i < ordinals.length; i++) {
                         Object cfg = makeConfig.newInstance(13 + i, -1, -1,
                                 LOOK_TEXT_BASE | (i + 1), foIcon, foIcon, 0, null, -1,
@@ -1892,12 +1898,14 @@ public class ModuleMain extends XposedModule {
             java.util.List<Object> target = (java.util.List<Object>) list;
             boolean hasM3 = false;
             boolean hasM9 = false;
+            boolean hasM10R = false;
             for (Object o : target) {
                 int ord = ordinalField.getInt(o);
                 hasM3 |= ord == LOOK_M3;
                 hasM9 |= ord == LOOK_M9;
+                hasM10R |= ord == LOOK_M10R;
             }
-            if (hasM3 && hasM9) {
+            if (hasM3 && hasM9 && hasM10R) {
                 return;
             }
             Object proto = target.isEmpty() ? null : target.get(0);
@@ -1911,6 +1919,11 @@ public class ModuleMain extends XposedModule {
             // last ends up first: add M9 first, M3 last, to get "M3, M9".
             // The name icon is the stock one: the palette editor draws that field large, and
             // a generated label there shows up as text over a transparency checkerboard.
+            if (!hasM10R) {
+                target.add(stripItem(make, LOOK_M10R, LOOK_TEXT_BASE | 3, nameIcon,
+                        icon, nameIcon, samples, labels, desc, order - 1, ordinalField,
+                        samplesField, labelsField, descField, cloudField));
+            }
             if (!hasM9) {
                 target.add(stripItem(make, LOOK_M9, LOOK_TEXT_BASE | 2, nameIcon,
                         icon, nameIcon, samples, labels, desc, order, ordinalField,
@@ -1921,9 +1934,14 @@ public class ModuleMain extends XposedModule {
                         icon, nameIcon, samples, labels, desc, order + 1, ordinalField,
                         samplesField, labelsField, descField, cloudField));
             }
-            log(Log.INFO, TAG, "strip: M3/M9 entries added (" + target.size() + " items)");
+            log(Log.INFO, TAG, "strip: M3/M9/M10R entries added (" + target.size() + " items)");
+            StringBuilder ordinalList = new StringBuilder();
+            for (Object o : target) {
+                ordinalList.append(ordinalField.getInt(o)).append(' ');
+            }
+            log(Log.INFO, TAG, "strip: ordinals " + ordinalList);
         } catch (Throwable t) {
-            log(Log.WARN, TAG, "strip: cannot add M3/M9: " + t);
+            log(Log.WARN, TAG, "strip: cannot add M3/M9/M10R: " + t);
         }
     }
 
@@ -2001,14 +2019,16 @@ public class ModuleMain extends XposedModule {
                 if ((id & 0xFFFF0000) != LOOK_TEXT_BASE) {
                     return chain.proceed();
                 }
-                return (id & 0xFFFF) == 1 ? "M3" : "M9";
+                return (id & 0xFFFF) == 1 ? "M3"
+                        : (id & 0xFFFF) == 3 ? "M10R" : "M9";
             });
             hook(Resources.class.getDeclaredMethod("getString", int.class)).intercept(chain -> {
                 int id = (Integer) chain.getArg(0);
                 if ((id & 0xFFFF0000) != LOOK_TEXT_BASE) {
                     return chain.proceed();
                 }
-                return (id & 0xFFFF) == 1 ? "M3" : "M9";
+                return (id & 0xFFFF) == 1 ? "M3"
+                        : (id & 0xFFFF) == 3 ? "M10R" : "M9";
             });
             lookTextHooked = true;
         } catch (Throwable t) {
@@ -2036,7 +2056,8 @@ public class ModuleMain extends XposedModule {
                 int id = (Integer) chain.getArg(0);
                 int ordinal = id & 0xFFFF;
                 String name = ordinal == LOOK_M3 ? "lut_m3"
-                        : ordinal == LOOK_M9 ? "lut_m9" : null;
+                        : ordinal == LOOK_M9 ? "lut_m9"
+                        : ordinal == LOOK_M10R ? "lut_m10r" : null;
                 if (name == null || result == null) {
                     return result;
                 }
@@ -2044,7 +2065,7 @@ public class ModuleMain extends XposedModule {
                 ACTIVE_LOOK_AT = System.currentTimeMillis();
                 log(Log.INFO, TAG, "look resolve: id=" + id + " ordinal=" + ordinal
                         + " name=" + name);
-                writeLegendStyle(ordinal == LOOK_M3 ? 2 : 1);
+                writeLegendStyle(ordinal == LOOK_M3 ? 2 : ordinal == LOOK_M10R ? 3 : 1);
                 return make.newInstance(name, idField.getInt(result), degreeField.getInt(result),
                         (float[]) paramsField.get(result), 0);
             });
@@ -2053,7 +2074,8 @@ public class ModuleMain extends XposedModule {
                 try {
                     Object self = chain.getThisObject();
                     String lookName = (String) nameField.get(self);
-                    if (!"lut_m3".equals(lookName) && !"lut_m9".equals(lookName)) {
+                    if (!"lut_m3".equals(lookName) && !"lut_m9".equals(lookName)
+                            && !"lut_m10r".equals(lookName)) {
                         return result;
                     }
                     ensureLookFile(lookName);
@@ -2203,12 +2225,14 @@ public class ModuleMain extends XposedModule {
             hook(save).intercept(chain -> {
                 int id = (Integer) chain.getArg(0);
                 int ordinal = id & 0xFFFF;
-                if (ordinal != LOOK_M3 && ordinal != LOOK_M9) {
+                if (ordinal != LOOK_M3 && ordinal != LOOK_M9 && ordinal != LOOK_M10R) {
                     return chain.proceed();
                 }
-                String ourName = ordinal == LOOK_M3 ? "lut_m3" : "lut_m9";
+                String ourName = ordinal == LOOK_M3 ? "lut_m3"
+                        : ordinal == LOOK_M9 ? "lut_m9" : "lut_m10r";
                 String nativeName = ordinal == LOOK_M3
-                        ? "lut_normal_neutral" : "lut_normal_soft";
+                        ? "lut_normal_neutral" : ordinal == LOOK_M9
+                        ? "lut_normal_soft" : "lut_normal_whitening";
                 try {
                     java.nio.file.Path dst = java.nio.file.Paths.get(
                             "/data/vendor/camera/" + nativeName + ".png");
@@ -2228,7 +2252,7 @@ public class ModuleMain extends XposedModule {
                 }
                 return null;
             });
-            log(Log.INFO, TAG, "installed M3/M9 native preview LUT hook");
+            log(Log.INFO, TAG, "installed M3/M9/M10R native preview LUT hook");
         } catch (Throwable t) {
             log(Log.WARN, TAG, "cannot hook MIVILutSaver: " + t);
         }
@@ -2236,7 +2260,8 @@ public class ModuleMain extends XposedModule {
 
     private Bitmap freshLookBitmap(String name) {
         String asset = "lut_m3".equals(name) ? "leica_luts/M3_Monopan.png"
-                : "leica_luts/130_LeicaNatural.png";
+                : "lut_m9".equals(name) ? "leica_luts/130_LeicaNatural.png"
+                : "lut_m10r".equals(name) ? "leica_luts/M10R_Cmos.png" : null;
         if (moduleApk == null) {
             return null;
         }
@@ -2293,20 +2318,35 @@ public class ModuleMain extends XposedModule {
             }
             return freshLookBitmap("lut_m9");
         }
+        if (name.contains("lut_m10r")) {
+            if (PREVIEW_LOGGED.add(name)) {
+                log(Log.INFO, TAG, "preview LUT " + name + " -> lut_m10r");
+            }
+            return freshLookBitmap("lut_m10r");
+        }
         if ("lut_normal_neutral".equals(name)) {
             return freshLookBitmap("lut_m3");
         }
         if ("lut_normal_soft".equals(name)) {
             return freshLookBitmap("lut_m9");
         }
+        if ("lut_normal_whitening".equals(name)) {
+            return freshLookBitmap("lut_m10r");
+        }
+        // The GL renderer falls back to a stock LUT name for enum slots that are not in
+        // its filter table: 91/92 get "lut_nc", 93 gets "lut_normal_lively". Gate on the
+        // live filter ordinal so a real stock filter keeps its own LUT.
         if ("lut_nc".equals(name) || "0".equals(name)
-                || "lut_debug_blank_lut".equals(name)) {
+                || "lut_debug_blank_lut".equals(name)
+                || "lut_normal_lively".equals(name)) {
             int look = currentFilterOrdinal();
-            if (look == LOOK_M3 || look == LOOK_M9) {
-                Bitmap bm = freshLookBitmap(look == LOOK_M3 ? "lut_m3" : "lut_m9");
+            if (look == LOOK_M3 || look == LOOK_M9 || look == LOOK_M10R) {
+                Bitmap bm = freshLookBitmap(look == LOOK_M3 ? "lut_m3"
+                        : look == LOOK_M9 ? "lut_m9" : "lut_m10r");
                 if (bm != null && PREVIEW_LOGGED.add("neutral:" + name + ":" + look)) {
                     log(Log.INFO, TAG, "preview LUT " + name + " -> "
-                            + (look == LOOK_M3 ? "lut_m3" : "lut_m9"));
+                            + (look == LOOK_M3 ? "lut_m3" : look == LOOK_M9
+                            ? "lut_m9" : "lut_m10r"));
                 }
                 return bm;
             }
@@ -2325,6 +2365,9 @@ public class ModuleMain extends XposedModule {
         if (path.contains("lut_m9")) {
             return freshLookBitmap("lut_m9");
         }
+        if (path.contains("lut_m10r")) {
+            return freshLookBitmap("lut_m10r");
+        }
         return null;
     }
 
@@ -2340,7 +2383,7 @@ public class ModuleMain extends XposedModule {
                          new java.io.FileOutputStream(new java.io.File(dir, "hcm_style"))) {
                 out.write(String.valueOf(style).getBytes(java.nio.charset.StandardCharsets.UTF_8));
             }
-            ensureLookFile(style == 2 ? "lut_m3" : "lut_m9");
+            ensureLookFile(style == 2 ? "lut_m3" : style == 3 ? "lut_m10r" : "lut_m9");
         } catch (Throwable t) {
             log(Log.WARN, TAG, "cannot write hcm_style: " + t);
         }
@@ -2351,8 +2394,9 @@ public class ModuleMain extends XposedModule {
     // filters; nothing stock is touched.
     private void ensureLookFile(String name) {
         String asset = "lut_m3".equals(name) ? "leica_luts/M3_Monopan.png"
-                : "leica_luts/130_LeicaNatural.png";
-        if (moduleApk == null) {
+                : "lut_m9".equals(name) ? "leica_luts/130_LeicaNatural.png"
+                : "lut_m10r".equals(name) ? "leica_luts/M10R_Cmos.png" : null;
+        if (moduleApk == null || asset == null) {
             return;
         }
         try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(moduleApk)) {
@@ -2366,7 +2410,8 @@ public class ModuleMain extends XposedModule {
             if (target.length() > 0) {
                 String md5 = md5(target);
                 boolean valid = "lut_m9".equals(name) ? M9_MD5.equals(md5)
-                        : "lut_m3".equals(name) && M3_MD5.equals(md5);
+                        : "lut_m3".equals(name) ? M3_MD5.equals(md5)
+                        : "lut_m10r".equals(name) && M10R_MD5.equals(md5);
                 if (valid) {
                     return;
                 }
@@ -2388,8 +2433,9 @@ public class ModuleMain extends XposedModule {
 
     private boolean writeLookAsset(String name, java.nio.file.Path dst) {
         String asset = "lut_m3".equals(name) ? "leica_luts/M3_Monopan.png"
-                : "leica_luts/130_LeicaNatural.png";
-        if (moduleApk == null) {
+                : "lut_m9".equals(name) ? "leica_luts/130_LeicaNatural.png"
+                : "lut_m10r".equals(name) ? "leica_luts/M10R_Cmos.png" : null;
+        if (moduleApk == null || asset == null) {
             return false;
         }
         try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(moduleApk)) {

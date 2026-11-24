@@ -1015,7 +1015,8 @@ public class ModuleMain extends XposedModule {
                 int id = title.getInt(filter);
                 String name;
                 if ((id & 0xFFFF0000) == RESERVED_LOOK_NAME_BASE) {
-                    name = (id & 0xFF) == 1 ? "M3" : "M9";
+                    name = (id & 0xFF) == 1 ? "M3"
+                            : (id & 0xFF) == 3 ? "M10R" : "M9";
                 } else if ((id & 0xFFFF0000) == FILM_NAME_BASE) {
                     name = filmLabel(id & 0xFFFF);
                 } else if (id > 0 && app != null) {
@@ -1133,7 +1134,7 @@ public class ModuleMain extends XposedModule {
                     return filmLabel(id & 0xFFFF);
                 }
                 if ((id & 0xFFFF0000) == RESERVED_LOOK_NAME_BASE) {
-                    return (id & 0xFF) == 1 ? "M3" : "M9";
+                    return (id & 0xFF) == 1 ? "M3" : (id & 0xFF) == 3 ? "M10R" : "M9";
                 }
                 return chain.proceed();
             });
@@ -1150,7 +1151,7 @@ public class ModuleMain extends XposedModule {
                     return filmLabel(id & 0xFFFF);
                 }
                 if ((id & 0xFFFF0000) == RESERVED_LOOK_NAME_BASE) {
-                    return (id & 0xFF) == 1 ? "M3" : "M9";
+                    return (id & 0xFF) == 1 ? "M3" : (id & 0xFF) == 3 ? "M10R" : "M9";
                 }
                 return chain.proceed();
             });
