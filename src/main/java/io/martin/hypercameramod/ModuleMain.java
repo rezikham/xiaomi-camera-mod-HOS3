@@ -1898,7 +1898,7 @@ public class ModuleMain extends XposedModule {
                         java.util.ArrayList<Integer> effectLabels = new java.util.ArrayList<>();
                         effectLabels.add(lookNameIcon);
                         effectLabels.add(lookIcon);
-                        int order = i == 0 ? 20 : 19;   // descending: M3, M9, POS, NEG
+                        int order = 22 - i;   // descending: M3, M9, M10R, POS, NEG
                         Object cfg = makeConfig.newInstance(order, -1, -1,
                                 LOOK_TEXT_BASE | (i + 1), lookIcon, lookNameIcon, 0, null, -1,
                                 effects, effectLabels);
@@ -1919,7 +1919,10 @@ public class ModuleMain extends XposedModule {
                             try {
                                 int stockTitle = stockFields[1].getInt(src);
                                 int stockIcon = stockFields[2].getInt(src);
-                                int stockNameIcon = STRIP_ICON_BASE | (3 + si);
+                                // 5+si avoids STRIP_ICON_BASE|3, which the M10R look card
+                                // already uses; sharing it made the panel show the stock
+                                // Positive card in M10R's slot and drop the Negative.
+                                int stockNameIcon = STRIP_ICON_BASE | (5 + si);
                                 java.util.ArrayList<Integer> effects =
                                         new java.util.ArrayList<>();
                                 Object sampleValue = stockFields[4].get(src);
