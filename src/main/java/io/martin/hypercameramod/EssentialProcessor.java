@@ -95,6 +95,7 @@ final class EssentialProcessor {
             return null;
         }
         String asset = legend == 2 ? "leica_filter_param_m3.bin"
+                : legend == 3 ? "leica_filter_param_m10r_snapshot.bin"
                 : legend == 1 ? "leica_filter_param_m9_snapshot.bin" : null;
         if (asset == null) {
             return null;
@@ -124,7 +125,8 @@ final class EssentialProcessor {
         try {
             Scene scene = scene(jpeg, bitmap);
             float phase = SystemClock.uptimeMillis() % 60000;
-            Log.i(TAG, "M" + (legend == 2 ? "3" : "9") + " scene lux=" + scene.lux
+            String style = legend == 2 ? "M3" : legend == 3 ? "M10R" : "M9";
+            Log.i(TAG, style + " scene lux=" + scene.lux
                     + " cct=" + scene.cct + " iso=" + scene.iso
                     + " denoise=" + scene.denoise + " backend=" + (wrapped ? "B12" : "m9base"));
             if (legend == 2) {
@@ -138,6 +140,25 @@ final class EssentialProcessor {
                     }
                 } catch (Throwable t) {
                     Log.w(TAG, "FilmInput tone skipped: " + t);
+                }
+            }
+            if (legend == 3) {
+                // The 18PM M10R style-transfer model, when its runtime is staged.
+                File models = new File(context.getCacheDir(), "essential/leica-v4");
+                File runner = new File(nativeLibraryDir, "libstyletrans_runner.so");
+                if (runner.isFile() && models.isDirectory()) {
+                    try {
+                        boolean styled = LegendaryPostProcessor.applyStyle(bitmap,
+                                runner.getAbsolutePath(),
+                                context.getCacheDir().getAbsolutePath(),
+                                models.getAbsolutePath(), scene.orientation,
+                                (int) scene.lux, (int) scene.cct);
+                        Log.i(TAG, "M10R style transfer=" + styled);
+                    } catch (Throwable t) {
+                        Log.w(TAG, "M10R style transfer failed: " + t);
+                    }
+                } else {
+                    Log.i(TAG, "M10R style transfer skipped: runner/models absent");
                 }
             }
             boolean ok;
@@ -283,12 +304,14 @@ final class EssentialProcessor {
         final float cct;
         final float iso;
         final float denoise;
+        final int orientation;
 
-        Scene(float lux, float cct, float iso, float denoise) {
+        Scene(float lux, float cct, float iso, float denoise, int orientation) {
             this.lux = lux;
             this.cct = cct;
             this.iso = iso;
             this.denoise = denoise;
+            this.orientation = orientation;
         }
     }
 
@@ -328,7 +351,23 @@ final class EssentialProcessor {
         }
         float denoise = (!Float.isFinite(iso) || iso <= 0) ? 0.6f
                 : smooth(400f, 2400f, iso);
-        return new Scene(lux, cct, iso, denoise);
+        int orientation = 0;
+        try {
+            android.media.ExifInterface exif =
+                    new android.media.ExifInterface(new ByteArrayInputStream(jpeg));
+            int value = exif.getAttributeInt(
+                    android.media.ExifInterface.TAG_ORIENTATION, 1);
+            if (value == 3 || value == 4) {
+                orientation = 180;
+            } else if (value == 5 || value == 6) {
+                orientation = 90;
+            } else if (value == 7 || value == 8) {
+                orientation = 270;
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "cannot read orientation: " + t);
+        }
+        return new Scene(lux, cct, iso, denoise, orientation);
     }
 
     private static float smooth(float low, float high, float value) {

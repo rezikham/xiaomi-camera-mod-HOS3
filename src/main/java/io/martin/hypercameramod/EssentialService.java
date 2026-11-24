@@ -233,6 +233,7 @@ public final class EssentialService extends Service {
         }
         String asset = legend == 2
                 ? "leica_filter_param_m3.bin"
+                : legend == 3 ? "leica_filter_param_m10r_snapshot.bin"
                 : legend == 1 ? "leica_filter_param_m9_snapshot.bin" : null;
         if (asset == null) {
             return null;
@@ -264,7 +265,8 @@ public final class EssentialService extends Service {
         try {
             Scene scene = scene(jpeg, bitmap);
             float phase = SystemClock.uptimeMillis() % 60000;
-            Log.i(TAG, "M" + (legend == 2 ? "3" : "9") + " scene lux=" + scene.lux
+            String style = legend == 2 ? "M3" : legend == 3 ? "M10R" : "M9";
+            Log.i(TAG, style + " scene lux=" + scene.lux
                     + " cct=" + scene.cct + " iso=" + scene.iso
                     + " denoise=" + scene.denoise);
             boolean ok;

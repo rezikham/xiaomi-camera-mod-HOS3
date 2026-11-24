@@ -46,9 +46,9 @@ import io.github.libxposed.api.XposedModule;
 //  2. the "Original" colour style next to Leica Authentic and Leica Vibrant (bit 3 of the camera
 //     characteristic xiaomi.capabilities.stylizationTypeMask, which this phone's camera hardware
 //     layer does not set),
-//  3. the Leica Essential CMOS (M10R) style, whose list entry is compiled out of this build. Off
-//     unless the system property camera.feature.m10r is 1: the hardware layer of the 17 Ultra
-//     has no M10R processing, so the style only gives a plain picture.
+//  3. the Leica Essential CMOS (M10R) style, added when m10r_enabled is on. The 14 Ultra has
+//     no M10R HAL, so the module post-processes M10R captures with the Essential Moments M10R
+//     bin plus B12/B43; the 18 Pro Max neural M10R style model is not available here.
 // Each part is independent; one that does not fit the camera build is skipped and logged.
 public class ModuleMain extends XposedModule {
     private static final String TAG = "HyperCameraMod";
@@ -798,7 +798,7 @@ public class ModuleMain extends XposedModule {
                     // selected style in pref_legendary_mode_key. In this mode the style is
                     // persistent, like the 17 Ultra, so every capture is processed.
                     byte style = legendFromPrefs();
-                    if (style == 1 || style == 2) {
+                    if (style == 1 || style == 2 || style == 3) {
                         latest = style;
                         age = 0;
                         log(Log.INFO, TAG, "Moment App using stored Essential style legend=" + style);
@@ -990,6 +990,9 @@ public class ModuleMain extends XposedModule {
             if ("M3".equalsIgnoreCase(forced)) {
                 return 2;
             }
+            if ("M10R".equalsIgnoreCase(forced)) {
+                return 3;
+            }
             // An explicit property always wins, including "off": without this, a build that
             // always starts the watcher would still resolve the style from the camera's saved
             // preference and post-process a capture the HAL already rendered.
@@ -1010,6 +1013,9 @@ public class ModuleMain extends XposedModule {
                 }
                 if ("M3".equalsIgnoreCase(v)) {
                     return 2;
+                }
+                if ("M10R".equalsIgnoreCase(v)) {
+                    return 3;
                 }
             }
         } catch (Throwable ignored) {
@@ -1496,9 +1502,8 @@ public class ModuleMain extends XposedModule {
 
                 hook(build).intercept(chain -> {
                     Object result = chain.proceed();
-                    // Show M10R entry when toggle is on, even if HAL can't process it.
-                    // The user explicitly requested the entry to appear; actual processing
-                    // will fall back to a plain picture on unsupported devices.
+                    // Show M10R when the toggle is on. On the 14 Ultra the save-path pipeline
+                    // post-processes it; phones with the 18 Pro Max HAL process it natively.
                     if (!m10rEnabled()) {
                         return result;
                     }

@@ -38,6 +38,14 @@ public final class LegendaryPostProcessor {
                                                          float densityEv, float warmth);
 
     /**
+     * M9/M10R style transfer. The native side spawns the runner and applies the
+     * returned bitmap; the models directory selects the online model.
+     */
+    public static native boolean applyStyle(Bitmap bitmap, String runnerPath,
+                                            String cacheDir, String modelsDir,
+                                            int orientation, int lux, int cct);
+
+    /**
      * Runs the Monopan helper. This is the stage that segfaults in a foreign app process on
      * aurora. It is only called from the module's private process, and the caller treats a
      * false return or a process death as "grain unavailable" and falls back to grayscale.

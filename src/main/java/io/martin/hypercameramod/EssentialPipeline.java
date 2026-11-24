@@ -78,7 +78,7 @@ final class EssentialPipeline {
             Log.i(TAG, "handle: file too small or missing: " + (file != null ? file.getName() : "null"));
             return false;
         }
-        if (legend != 1 && legend != 2) {
+        if (legend != 1 && legend != 2 && legend != 3) {
             Log.i(TAG, "no M3/M9 selection; leaving " + file.getName() + " untouched");
             return true; // consume the selection so LUT fallback doesn't run
         }
