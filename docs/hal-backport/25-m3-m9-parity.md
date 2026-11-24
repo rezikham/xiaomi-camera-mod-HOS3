@@ -43,7 +43,7 @@ The 17 Ultra app decision point is `LegendaryPostProcessor.processStyled`:
 | B12 reconciliation | `libleicamodelembed` wrapper | same wrapper, RUNPATH patched |
 | M9 style transfer | `applyStyle` (QNN HTP V81) | not available on SM8650/HTP V75 |
 | Person correction | `LeicaQuality` | not ported |
-| M3 film tone | `FilmInput` GLES stage | not ported |
+| M3 film tone | `FilmInput` GLES stage | ported, `FilmInput` + `FilmTone` |
 | EXIF | copy + `legendmode` | copy APP1 + append IFD0 tag |
 
 The M9 capture parameter file is the **root** asset
@@ -114,6 +114,23 @@ M3 with Monopan: 3072x4096, max |r-g| 0, max |g-b| 0, wall stddev 11.7
 M3 fallback:     3072x4096, max |r-g| 0, max |g-b| 0, wall stddev 6.2
 ```
 
+## FilmInput tone (M3)
+
+`FilmInput` and `FilmTone` are ported from the app's GLES stage. The module
+builds the histogram, derives gamma / white point / detail strength, then
+renders the film tone shader in 1024 px tiles (4 px halo) into an EGL pbuffer.
+It runs before `applyOriginalFilter`, matching the 17 Ultra order. The M3
+capture `IMG_20261124_133851.jpg` logged:
+
+```text
+FilmInput: gamma=1.1228147 white=0.987549 detail=0.0 denoise=1.0 iso=2500.0
+HCM-Essential: FilmInput tone applied
+HCM-Essential: Monopan grain=true in 1033 ms
+```
+
+The tone lifted the wall mean from 102.4 to 128.7 while keeping true
+monochrome and the `0x88b0=2` tag.
+
 ## Monopan OpenCL shim
 
 `libmialgo_monopan.so` asks for `/system/vendor/lib64/libOpenCL.so`, but the
@@ -136,7 +153,7 @@ launched with the module's native directory on `LD_LIBRARY_PATH`, so:
 
 * M9 style transfer: the shipped model is QNN HTP V81 (SM8750); the 14 Ultra
   is HTP V75. The B12 warm grade runs without the style model.
-* `LeicaQuality` person correction, `FilmInput` tone, `LeicaDynamicRange`
-  and the Leica container/watermark are not ported.
+* `LeicaQuality` person correction, `LeicaDynamicRange` and the Leica
+  container/watermark are not ported.
 * No matched 17 Ultra capture is available on this setup, so the look is
   compared against the app's own stage order and local captures only.

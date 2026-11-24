@@ -12,6 +12,7 @@ import android.os.SystemClock;
 import android.util.Log;
 
 import com.codex.leicaapp.B43Tone;
+import com.codex.leicaapp.FilmInput;
 import com.codex.leicaapp.LegendaryPostProcessor;
 
 import java.io.ByteArrayInputStream;
@@ -126,6 +127,19 @@ final class EssentialProcessor {
             Log.i(TAG, "M" + (legend == 2 ? "3" : "9") + " scene lux=" + scene.lux
                     + " cct=" + scene.cct + " iso=" + scene.iso
                     + " denoise=" + scene.denoise + " backend=" + (wrapped ? "B12" : "m9base"));
+            if (legend == 2) {
+                // 17 Ultra stage order: FilmInput tone (M3) before the parametric filter.
+                try {
+                    Bitmap toned = FilmInput.apply(bitmap, true, scene.iso);
+                    if (toned != null && toned != bitmap) {
+                        bitmap.recycle();
+                        bitmap = toned;
+                        Log.i(TAG, "FilmInput tone applied");
+                    }
+                } catch (Throwable t) {
+                    Log.w(TAG, "FilmInput tone skipped: " + t);
+                }
+            }
             boolean ok;
             if (legend == 2) {
                 ok = LegendaryPostProcessor.applyOriginalFilter(
