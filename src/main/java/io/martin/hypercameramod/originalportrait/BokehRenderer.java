@@ -31,7 +31,11 @@ public class BokehRenderer {
         nativeLibraryDir = dir;
     }
 
-    private static synchronized boolean ensureNativeLoaded() {
+    public static String getNativeLibraryDir() {
+        return nativeLibraryDir;
+    }
+
+    public static synchronized boolean ensureNativeLoaded() {
         if (nativeLoaded) {
             return true;
         }

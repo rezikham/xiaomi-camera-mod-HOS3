@@ -1218,6 +1218,28 @@ public class ModuleMain extends XposedModule {
     // Intercepts filterId for Portrait mode when Original is selected, forces Master for capture,
     // and stores the Original selection for post-processing via EssentialPipelineExtension.
 
+    private void setHalBokehBypass(boolean on) {
+        if (lastHalBypass != null && lastHalBypass == on) {
+            return;
+        }
+        lastHalBypass = on;
+        try {
+            android.content.Context context = currentApplication();
+            if (context == null) {
+                log(Log.WARN, TAG, "HAL bokeh bypass " + on + ": no context");
+                return;
+            }
+            java.io.File dir = context.getFilesDir();
+            java.io.File file = new java.io.File(dir, "hcm_bokeh_bypass");
+            try (java.io.FileOutputStream fos = new java.io.FileOutputStream(file)) {
+                fos.write((on ? "1" : "0").getBytes());
+            }
+            log(Log.INFO, TAG, "HAL bokeh bypass file=" + on + " " + file);
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot write HAL bokeh bypass=" + on + ": " + t);
+        }
+    }
+
     private void installOriginalPortraitCaptureHook(ClassLoader loader) {
         if (originalPortraitCaptureHooked) {
             return;
@@ -1249,13 +1271,18 @@ public class ModuleMain extends XposedModule {
                 // Master for preview and capture and remember it for post-processing.
                 if ("com.xiaomi.sessionparams.stylizationType".equals(name)
                         && chain.getArg(1) instanceof Number stylNum
-                        && stylNum.byteValue() == 2
-                        && currentModuleId == MODE_PORTRAIT
-                        && originalPortraitEnabled()) {
-                    lastOriginalPortrait = true;
-                    lastOriginalPortraitTime = android.os.SystemClock.elapsedRealtime();
-                    log(Log.INFO, TAG, "Original Portrait selected -> using Master in the HAL, will post-process");
-                    return chain.proceed(new Object[]{key, (byte) 0});
+                        && currentModuleId == MODE_PORTRAIT) {
+                    byte style = stylNum.byteValue();
+                    if (style == 2 && originalPortraitEnabled()) {
+                        setHalBokehBypass(true);
+                        lastOriginalPortrait = true;
+                        lastOriginalPortraitTime = android.os.SystemClock.elapsedRealtime();
+                        log(Log.INFO, TAG, "Original Portrait selected -> AI bokeh, HAL bokeh bypassed");
+                        return chain.proceed(new Object[]{key, (byte) 0});
+                    }
+                    if (style == 0 || style == 1) {
+                        setHalBokehBypass(false);
+                    }
                 }
                 return chain.proceed();
             });
@@ -1291,6 +1318,7 @@ public class ModuleMain extends XposedModule {
     // State for Original Portrait post-processing
     private volatile boolean lastOriginalPortrait = false;
     private volatile long lastOriginalPortraitTime = 0;
+    private volatile Boolean lastHalBypass = null;
     private volatile boolean originalPortraitCaptureHooked = false;
     private volatile int currentModuleId = -1;
 

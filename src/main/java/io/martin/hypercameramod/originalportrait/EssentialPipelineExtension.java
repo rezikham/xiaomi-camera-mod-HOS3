@@ -68,6 +68,7 @@ public class EssentialPipelineExtension {
     // State
     private BokehRenderer bokehRenderer;
     private ColorProfile colorProfile;
+    private AncBokehRenderer ancBokeh;
     
     private EssentialPipelineExtension(@NonNull Context context) {
         this.context = context.getApplicationContext();
@@ -96,7 +97,16 @@ public class EssentialPipelineExtension {
         // Load color profile
         colorProfile = ColorProfile.load(context, "original_portrait",
                 io.martin.hypercameramod.ModuleMain.getModuleApkPath());
-        
+
+        // Load the 14 Ultra AI single-bokeh engine (SM8650 models, v3 API).
+        if (ancBokeh == null) {
+            ancBokeh = new AncBokehRenderer();
+            boolean ok = ancBokeh.initialize(context,
+                    io.martin.hypercameramod.ModuleMain.getModuleApkPath(),
+                    BokehRenderer.getNativeLibraryDir());
+            Log.i(TAG, "AI bokeh " + (ok ? "ready" : "unavailable"));
+        }
+
         Log.d(TAG, "EssentialPipelineExtension initialized");
     }
     
@@ -237,7 +247,23 @@ public class EssentialPipelineExtension {
             throw new IOException("Failed to load JPEG: " + jpegFile);
         }
         
-        // Apply color profile FIRST (on full-res)
+        // Use the 18 Pro Max Original aperture defaults: 2.8 at 23 mm,
+        // 1.4 at 35 mm and longer.
+        params.fNumber = resolveOriginalAperture(jpegFile, params);
+
+        // Render the 14 Ultra AI bokeh first, on the sharp capture.
+        if (ancBokeh != null && ancBokeh.isReady() && !params.bypass) {
+            Bitmap aiBokeh = ancBokeh.process(bitmap, params);
+            if (aiBokeh != null) {
+                bitmap.recycle();
+                bitmap = aiBokeh;
+                Log.i(TAG, "AI bokeh rendered");
+            } else {
+                Log.w(TAG, "AI bokeh failed, keeping sharp image");
+            }
+        }
+
+        // Apply the exact 18 Pro Max Original LUT after bokeh.
         if (colorProfile != null) {
             bitmap = colorProfile.apply(bitmap);
         }
@@ -305,6 +331,23 @@ public class EssentialPipelineExtension {
         return outputFile;
     }
     
+    private float resolveOriginalAperture(@NonNull File jpegFile, @NonNull OriginalPortraitParams params) {
+        try {
+            android.media.ExifInterface exif =
+                    new android.media.ExifInterface(jpegFile.getAbsolutePath());
+            int focal35 = exif.getAttributeInt(
+                    android.media.ExifInterface.TAG_FOCAL_LENGTH_IN_35MM_FILM, 0);
+            if (focal35 > 0) {
+                float target = focal35 <= 35 ? 2.8f : 4.5f;
+                Log.i(TAG, "Original aperture " + target + " for " + focal35 + "mm");
+                return target;
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "cannot read focal length: " + t);
+        }
+        return params.focalLength <= 35 ? 2.8f : 4.5f;
+    }
+
     // Helper: Apply intensity to f_number (lower f-number = more blur)
     private float applyIntensity(float fNumber) {
         // intensity 0 = no change, 100 = max effect
