@@ -45,7 +45,7 @@ final class EssentialPipeline {
     private static final int MSG_PROCESS = 1;
     private static final long CONNECT_TIMEOUT_MS = 10_000;
     private static final long RESULT_TIMEOUT_MS = 90_000;
-    private static final long MIN_FILE_BYTES = 200_000;
+    private static final long MIN_FILE_BYTES = 50_000;
 
     // Error codes for structured logging
     private static final String ERR_NONE = "ok";

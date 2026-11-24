@@ -744,7 +744,7 @@ public class ModuleMain extends XposedModule {
                                     log(Log.INFO, TAG, "LUT saw new file " + f.getName());
                                     long size = f.length();
                                     Thread.sleep(1500);
-                                    if (f.length() == size && size > 200000) {
+                                    if (f.length() == size && size > 50000) {
                                         applyLutToFile(f);
                                     }
                                 }
@@ -792,13 +792,35 @@ public class ModuleMain extends XposedModule {
                     return;
                 }
                 long age = android.os.SystemClock.elapsedRealtime() - lastLegendTime;
+                if (latest == 0 && essentialModeActive()) {
+                    // The 14 Ultra's Essential mode does not put legendMode into the request
+                    // (the HAL has no Legendary plugin), but the camera still stores the
+                    // selected style in pref_legendary_mode_key. In this mode the style is
+                    // persistent, like the 17 Ultra, so every capture is processed.
+                    byte style = legendFromPrefs();
+                    if (style == 1 || style == 2) {
+                        latest = style;
+                        age = 0;
+                        log(Log.INFO, TAG, "Moment App using stored Essential style legend=" + style);
+                    }
+                }
                 if (latest == 0 || age > ESSENTIAL_LEGEND_FRESH_MS) {
                     log(Log.INFO, TAG, "Moment App pipeline skipped " + file.getName()
                             + ": no fresh M3/M9 selection (legend=" + latest + ", age=" + age + " ms)");
                     return;
                 }
                 log(Log.INFO, TAG, "Moment App candidate " + file.getName() + " legend=" + latest);
-                EssentialPipeline.handle(file, latest);
+                // The bound service is invisible to Camera under Android 11+ package
+                // visibility, so run the same native stages in the save path (as the
+                // 17 Ultra app does). The Monopan helper still runs out of process.
+                android.content.Context ctx = currentContext();
+                boolean applied = false;
+                if (ctx != null && moduleApk != null && moduleInfo != null) {
+                    applied = EssentialProcessor.processFile(file, latest, moduleApk,
+                            moduleInfo.nativeLibraryDir, ctx);
+                }
+                log(Log.INFO, TAG, "Moment App " + (applied ? "applied" : "left unchanged")
+                        + " legend=" + latest + " " + file.getName());
                 // One selection, one file: a later normal capture must not inherit this look.
                 lastLegend = 0;
                 lastLegendTime = 0;
@@ -993,6 +1015,34 @@ public class ModuleMain extends XposedModule {
         } catch (Throwable ignored) {
         }
         return 0;
+    }
+
+    /** The camera application context, or null before the process is bound. */
+    private static android.content.Context currentContext() {
+        try {
+            Class<?> at = Class.forName("android.app.ActivityThread");
+            Object app = at.getMethod("currentApplication").invoke(null);
+            if (app instanceof android.content.Context) {
+                return (android.content.Context) app;
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    /** True when the camera is in the Leica Essential mode (module index 256). */
+    private static boolean essentialModeActive() {
+        try {
+            Class<?> at = Class.forName("android.app.ActivityThread");
+            Object app = at.getMethod("currentApplication").invoke(null);
+            if (app instanceof android.content.Context) {
+                android.content.SharedPreferences p = ((android.content.Context) app)
+                        .getSharedPreferences("camera_settings_global", 0);
+                return p.getInt("pref_camera_mode_key_intent_0", 0) == 256;
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
     }
 
     private void installLutFallbackHook(ClassLoader loader) {

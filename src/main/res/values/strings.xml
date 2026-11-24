@@ -25,7 +25,7 @@
     <string name="pref_compat_fallback_key">compat_fallback_enabled</string>
 
     <string name="pref_essential_pipeline_title">Leica Essential pipeline (real M3/M9)</string>
-    <string name="pref_essential_pipeline_summary">Apply the genuine Leica filter from Essential Moments to saved JPEGs when M3 or M9 is selected. Native code runs in a private module process, so a crash cannot take down Camera. Off by default; restart Camera after changing. Do not combine with the HAL LUT slot. M3 uses the app\'s grayscale fallback unless the optional Monopan libs are bundled.</string>
+    <string name="pref_essential_pipeline_summary">Apply the genuine Essential Moments M3/M9 pipeline to saved JPEGs when M3 or M9 is selected in the Essential Moment mode. Runs in the camera save path with the app\'s B12 wrapper, M9 warm grade and B43 tone. Off by default; restart Camera after changing. Do not combine with the HAL LUT slot. M3 uses the app\'s grayscale fallback because the Monopan helper cannot reach vendor OpenCL on this device.</string>
     <string name="pref_essential_pipeline_key">essential_pipeline_enabled</string>
 
     <string name="pref_extra_filters_title">Extra Film Filters</string>

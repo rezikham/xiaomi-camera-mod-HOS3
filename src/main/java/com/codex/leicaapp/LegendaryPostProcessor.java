@@ -28,6 +28,16 @@ public final class LegendaryPostProcessor {
                                                      float phase);
 
     /**
+     * M9 colour grade. This is the app's {@code applyWarmOriginalFilter} call with the
+     * M9 density ({@code -0.95 EV}) and neutral warmth ({@code 0.3}); it is the stage the
+     * 17 Ultra runs after the style-transfer model.
+     */
+    public static native boolean applyWarmOriginalFilter(Bitmap bitmap, String modelPath,
+                                                         float lux, float cct, float zoom,
+                                                         float phase, float denoise,
+                                                         float densityEv, float warmth);
+
+    /**
      * Runs the Monopan helper. This is the stage that segfaults in a foreign app process on
      * aurora. It is only called from the module's private process, and the caller treats a
      * false return or a process death as "grain unavailable" and falls back to grayscale.

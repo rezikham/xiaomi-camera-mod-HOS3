@@ -20,6 +20,7 @@ import android.os.Process;
 import android.os.SystemClock;
 import android.util.Log;
 
+import com.codex.leicaapp.B43Tone;
 import com.codex.leicaapp.LegendaryPostProcessor;
 
 import java.io.ByteArrayOutputStream;
@@ -212,8 +213,20 @@ public final class EssentialService extends Service {
         }
     }
 
-    /** Runs the genuine parametric filter and, for M3, the app's own grayscale fallback. */
-    private byte[] process(byte[] jpeg, int legend, float lux, float cct) {
+    /**
+     * Runs the same stage order as the 17 Ultra capture path:
+     *
+     * <pre>
+     * M3: applyOriginalFilter -> Monopan (or the app's saturation-0 fallback)
+     * M9: applyWarmOriginalFilter (-0.95 EV, warmth 0.3) -> B43Tone
+     * </pre>
+     *
+     * <p>The M9 style-transfer model is not available on SM8650 (QNN HTP V81 vs V75), so the
+     * warm parametric grade is applied directly. The scene lux/CCT are estimated from the JPEG
+     * (EXIF EV and neutral-pixel balance), because the module saves after the camera's own
+     * CaptureResult has gone away.
+     */
+    private byte[] process(byte[] jpeg, int legend, float unusedLux, float unusedCct) {
         if (!loadNative()) {
             Log.e(TAG, "native load failed: " + nativeError);
             return null;
@@ -249,15 +262,31 @@ public final class EssentialService extends Service {
         }
 
         try {
+            Scene scene = scene(jpeg, bitmap);
             float phase = SystemClock.uptimeMillis() % 60000;
+            Log.i(TAG, "M" + (legend == 2 ? "3" : "9") + " scene lux=" + scene.lux
+                    + " cct=" + scene.cct + " iso=" + scene.iso
+                    + " denoise=" + scene.denoise);
             boolean ok;
             try {
-                // This is exactly MadridLegendary.filter / applyOriginalFilter: the .bin file is a
-                // parametric shading + LUT table, not a neural model.
-                ok = LegendaryPostProcessor.applyOriginalFilter(
-                        bitmap, model, lux, cct, 1.0f, phase);
+                if (legend == 2) {
+                    // This is exactly MadridLegendary.filter / applyOriginalFilter: the .bin file
+                    // is a parametric shading + LUT table, not a neural model.
+                    ok = LegendaryPostProcessor.applyOriginalFilter(
+                            bitmap, model, scene.lux, scene.cct, 1.0f, phase);
+                } else {
+                    // The 17 Ultra M9 colour stage. Density -0.95 EV and warmth 0.3 are the
+                    // app's M9_DENSITY_EV / M9_NEUTRAL_WARMTH constants.
+                    ok = LegendaryPostProcessor.applyWarmOriginalFilter(
+                            bitmap, model, scene.lux, scene.cct, 1.0f, phase,
+                            scene.denoise, -0.95f, 0.3f);
+                    if (ok) {
+                        // M9-only fixed tone LUT (the app's B43Tone stage).
+                        B43Tone.apply(bitmap, false);
+                    }
+                }
             } catch (Throwable t) {
-                Log.e(TAG, "applyOriginalFilter threw", t);
+                Log.e(TAG, "parametric filter threw", t);
                 ok = false;
             }
             if (!ok) {
@@ -303,6 +332,125 @@ public final class EssentialService extends Service {
         }
     }
 
+    /** Scene values the native adaptive LUT needs, estimated from the saved JPEG. */
+    private static final class Scene {
+        final float lux;
+        final float cct;
+        final float iso;
+        final float denoise;
+
+        Scene(float lux, float cct, float iso, float denoise) {
+            this.lux = lux;
+            this.cct = cct;
+            this.iso = iso;
+            this.denoise = denoise;
+        }
+    }
+
+    private static Scene scene(byte[] jpeg, Bitmap bitmap) {
+        float iso = 100f;
+        float exposure = 1f / 60f;
+        float fNumber = 1.8f;
+        try {
+            android.media.ExifInterface exif =
+                    new android.media.ExifInterface(new java.io.ByteArrayInputStream(jpeg));
+            float value = (float) exif.getAttributeDouble(
+                    "PhotographicSensitivity", Float.NaN);
+            if (!Float.isFinite(value) || value <= 0) {
+                value = (float) exif.getAttributeDouble("ISOSpeedRatings", 100);
+            }
+            if (Float.isFinite(value) && value > 0) {
+                iso = value;
+            }
+            value = (float) exif.getAttributeDouble(
+                    android.media.ExifInterface.TAG_EXPOSURE_TIME, 1.0 / 60.0);
+            if (Float.isFinite(value) && value > 0 && value < 60) {
+                exposure = value;
+            }
+            value = (float) exif.getAttributeDouble(
+                    android.media.ExifInterface.TAG_F_NUMBER, 1.8);
+            if (Float.isFinite(value) && value > 0.5 && value < 64) {
+                fNumber = value;
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "cannot read exposure EXIF: " + t);
+        }
+
+        // EV at ISO 100 from the exposure triangle, then the standard incident-light constant.
+        double ev100 = Math.log((double) fNumber * fNumber / exposure) / Math.log(2.0)
+                - Math.log((double) iso / 100.0) / Math.log(2.0);
+        float lux = (float) Math.max(0.1, Math.min(10000.0, 2.5 * Math.pow(2.0, ev100)));
+        if (iso <= 0) {
+            lux = 200f;
+        }
+
+        float cct = estimateCct(bitmap);
+        if (!Float.isFinite(cct)) {
+            cct = 5500f;
+        }
+
+        // FilmTone.denoise: invalid ISO falls back to 0.6; otherwise smoothstep(400, 2400, ISO).
+        float denoise;
+        if (!Float.isFinite(iso) || iso <= 0) {
+            denoise = 0.6f;
+        } else {
+            denoise = smooth(400f, 2400f, iso);
+        }
+        return new Scene(lux, cct, iso, denoise);
+    }
+
+    private static float smooth(float low, float high, float value) {
+        float t = Math.max(0f, Math.min(1f, (value - low) / (high - low)));
+        return t * t * (3f - 2f * t);
+    }
+
+    /**
+     * The app's JPEG white-balance estimator (SceneWhiteBalance.jpegTarget). It samples neutral
+     * mid-tones and returns a 4800..5500 K estimate; the native LUT uses this to choose the
+     * scene block when the camera CaptureResult is unavailable.
+     */
+    private static float estimateCct(Bitmap bitmap) {
+        int width = bitmap.getWidth();
+        int height = bitmap.getHeight();
+        if (width <= 0 || height <= 0) {
+            return Float.NaN;
+        }
+        int scale = Math.max(1, Math.max(width, height) / 512);
+        int sw = Math.max(1, width / scale);
+        int sh = Math.max(1, height / scale);
+        int[] pixels = new int[sw * sh];
+        Bitmap small = Bitmap.createScaledBitmap(bitmap, sw, sh, false);
+        try {
+            small.getPixels(pixels, 0, sw, 0, 0, sw, sh);
+        } finally {
+            if (small != bitmap) {
+                small.recycle();
+            }
+        }
+        double sum = 0.0;
+        int count = 0;
+        for (int pixel : pixels) {
+            float r = ((pixel >> 16) & 255) / 255f;
+            float g = ((pixel >> 8) & 255) / 255f;
+            float b = (pixel & 255) / 255f;
+            float max = Math.max(r, Math.max(g, b));
+            float min = Math.min(r, Math.min(g, b));
+            if (min >= 0.15f && max <= 0.85f && max - min <= 0.12f) {
+                float rb = r + b;
+                if (Math.abs(g - 0.5f * rb) <= 0.04f) {
+                    sum += (r - b) / Math.max(0.01f, rb);
+                    count++;
+                }
+            }
+        }
+        if (count < Math.max(16, pixels.length / 50)) {
+            return Float.NaN;
+        }
+        double mean = sum / count;
+        double clamped = Math.max(-1.0, Math.min(1.0, mean / 0.08));
+        return (float) (5150.0 - clamped * 350.0);
+    }
+
     private static void desaturate(Bitmap bitmap) {
         Bitmap source = bitmap.copy(Bitmap.Config.ARGB_8888, true);
         if (source == null) {
@@ -331,13 +479,22 @@ public final class EssentialService extends Service {
                 // Not fatal; m9base may pull it via DT_NEEDED
             }
             try {
-                System.loadLibrary("m9base");
+                // The app loads the B12 wrapper first; the wrapper dlopens libm9base itself.
+                // This is the 17 Ultra load order and applies the reference/reconciliation pass.
+                System.loadLibrary("leicamodelembed");
                 nativeReady = true;
-                Log.i(TAG, "libm9base loaded");
-            } catch (Throwable t) {
-                nativeFailed = true;
-                nativeError = t.toString();
-                Log.e(TAG, "cannot load libm9base", t);
+                Log.i(TAG, "libleicamodelembed loaded (B12 wrapper)");
+            } catch (Throwable wrapped) {
+                Log.w(TAG, "libleicamodelembed failed, trying libm9base: " + wrapped);
+                try {
+                    System.loadLibrary("m9base");
+                    nativeReady = true;
+                    Log.i(TAG, "libm9base loaded (no B12 wrapper)");
+                } catch (Throwable t) {
+                    nativeFailed = true;
+                    nativeError = t.toString();
+                    Log.e(TAG, "cannot load libm9base", t);
+                }
             }
             return nativeReady;
         }
