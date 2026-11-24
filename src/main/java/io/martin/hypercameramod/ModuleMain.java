@@ -1880,7 +1880,7 @@ public class ModuleMain extends XposedModule {
                     }
                     for (int i = 0; i < ordinals.length; i++) {
                         int lookIcon = lookIcons[i] != 0 ? lookIcons[i] : foIcon;
-                        int lookNameIcon = STRIP_ICON_BASE | (i + 1);
+                        int lookNameIcon = STRIP_ICON_BASE | (i == 2 ? 5 : i + 1);
                         java.util.ArrayList<Integer> effects = new java.util.ArrayList<>();
                         if (lookTemplates[i] != 0) {
                             effects.add(lookTemplates[i]);
@@ -1919,10 +1919,9 @@ public class ModuleMain extends XposedModule {
                             try {
                                 int stockTitle = stockFields[1].getInt(src);
                                 int stockIcon = stockFields[2].getInt(src);
-                                // 5+si avoids STRIP_ICON_BASE|3, which the M10R look card
-                                // already uses; sharing it made the panel show the stock
-                                // Positive card in M10R's slot and drop the Negative.
-                                int stockNameIcon = STRIP_ICON_BASE | (5 + si);
+                                // 3 = FLM POS, 4 = FLM NEG in stripLabel; the M10R look
+                                // card moved to id 5 so the three labels stay distinct.
+                                int stockNameIcon = STRIP_ICON_BASE | (3 + si);
                                 java.util.ArrayList<Integer> effects =
                                         new java.util.ArrayList<>();
                                 Object sampleValue = stockFields[4].get(src);
@@ -2158,7 +2157,7 @@ public class ModuleMain extends XposedModule {
         paint.setTypeface(stripTypeface());
         String top = which == 3 || which == 4 ? "FLM" : "ESTL";
         String bottom = which == 1 ? "M3" : which == 2 ? "M9"
-                : which == 3 ? "POS" : "NEG";
+                : which == 3 ? "POS" : which == 4 ? "NEG" : which == 5 ? "M10R" : "NEG";
         paint.setTextSize(size * 0.335f);
         canvas.drawText(top, size / 2f, size * 0.47f, paint);
         canvas.drawText(bottom, size / 2f, size * 0.80f, paint);
