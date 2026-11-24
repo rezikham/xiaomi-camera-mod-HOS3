@@ -13,12 +13,20 @@
     <string name="pref_leica_theme_key">leica_theme_enabled</string>
 
     <string name="pref_m10r_title">CMOS (M10R) Style</string>
-    <string name="pref_m10r_summary">Add the CMOS (M10R) style to the photography styles picker. Requires Leica UI enabled.</string>
+    <string name="pref_m10r_summary">Add the CMOS (M10R) style. On the 14 Ultra the module applies the genuine M10R filter, B12 grade and B43 tone to captures; the 18 Pro Max neural M10R style model is not available on this hardware.</string>
     <string name="pref_m10r_key">m10r_enabled</string>
 
     <string name="pref_original_portrait_title">Original Portrait Style</string>
     <string name="pref_original_portrait_summary">Show Original in the Portrait style picker. On by default on the 17 Ultra and 18 Pro Max; off by default on the 14 Ultra, whose camera hardware layer cannot complete the Original portrait preview session — enabling it there may freeze the preview. Original colour in Photo mode is not affected. Restart Camera after changing this.</string>
     <string name="pref_original_portrait_key">original_portrait_enabled</string>
+
+    <string name="pref_compat_fallback_title">Compatibility fallback (M9/M3 approximation)</string>
+    <string name="pref_compat_fallback_summary">When the Legendary HAL plugin is missing, forward M9/M3 to the stock Leica Authentic/Vibrant colour path. This is an approximation, not the real M3/M9 processing. Off by default.</string>
+    <string name="pref_compat_fallback_key">compat_fallback_enabled</string>
+
+    <string name="pref_essential_pipeline_title">Leica Essential pipeline (real M3/M9)</string>
+    <string name="pref_essential_pipeline_summary">Apply the genuine Essential Moments M3/M9 pipeline to saved JPEGs when M3 or M9 is selected in the Essential Moment mode. Runs in the camera save path with the app\'s B12 wrapper, Monopan grain, M9 warm grade and B43 tone. Off by default; restart Camera after changing. Do not combine with the HAL LUT slot. M9 style transfer still needs the 17 Ultra QNN runtime.</string>
+    <string name="pref_essential_pipeline_key">essential_pipeline_enabled</string>
 
     <string name="pref_extra_filters_title">Extra Film Filters</string>
     <string name="pref_extra_filters_summary">Expose all 12 film simulation filters: 600F, BF70, R600, P100F, F-50, KC64, V250, H400, KP160, FC400, C-50D, KG200. Existing entries are reused and renamed to the film code.</string>

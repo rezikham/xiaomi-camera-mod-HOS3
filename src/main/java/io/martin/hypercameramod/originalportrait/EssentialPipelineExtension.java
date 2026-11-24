@@ -11,6 +11,8 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 
+import io.martin.hypercameramod.ExifUtils;
+
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.WorkerThread;
@@ -66,6 +68,7 @@ public class EssentialPipelineExtension {
     // State
     private BokehRenderer bokehRenderer;
     private ColorProfile colorProfile;
+    private AncBokehRenderer ancBokeh;
     
     private EssentialPipelineExtension(@NonNull Context context) {
         this.context = context.getApplicationContext();
@@ -92,8 +95,18 @@ public class EssentialPipelineExtension {
         BitmapUtils.initRenderScript(context);
         
         // Load color profile
-        colorProfile = ColorProfile.load(context, "original_portrait");
-        
+        colorProfile = ColorProfile.load(context, "original_portrait",
+                io.martin.hypercameramod.ModuleMain.getModuleApkPath());
+
+        // Load the 14 Ultra AI single-bokeh engine (SM8650 models, v3 API).
+        if (ancBokeh == null) {
+            ancBokeh = new AncBokehRenderer();
+            boolean ok = ancBokeh.initialize(context,
+                    io.martin.hypercameramod.ModuleMain.getModuleApkPath(),
+                    BokehRenderer.getNativeLibraryDir());
+            Log.i(TAG, "AI bokeh " + (ok ? "ready" : "unavailable"));
+        }
+
         Log.d(TAG, "EssentialPipelineExtension initialized");
     }
     
@@ -189,15 +202,19 @@ public class EssentialPipelineExtension {
      */
     public void handlePortraitOriginal(@NonNull File jpegFile,
                                         @Nullable Object depthMap,
-                                        @NonNull CaptureResult result,
+                                        @Nullable CaptureResult result,
                                         @NonNull OnProcessedCallback callback) {
         if (!enabled) {
             callback.onResult(jpegFile); // Return original
             return;
         }
         
-        // Extract parameters
-        OriginalPortraitParams params = extractParams(result);
+        // Extract parameters. The camera-app process cannot always build a CaptureResult,
+        // so fall back to the defaults instead of failing the whole post-process.
+        OriginalPortraitParams params = result == null
+                ? new OriginalPortraitParams()
+                : extractParams(result);
+        params.computeFocalLengthFromRole();
         
         // Apply intensity scaling to f_number
         params.fNumber = applyIntensity(params.fNumber);
@@ -207,7 +224,7 @@ public class EssentialPipelineExtension {
             try {
                 File processedFile = processPortraitOriginal(jpegFile, depthMap, params);
                 mainHandler.post(() -> callback.onResult(processedFile));
-            } catch (Exception e) {
+            } catch (Throwable e) {
                 Log.e(TAG, "Original portrait processing failed", e);
                 mainHandler.post(() -> callback.onResult(jpegFile)); // Return original on failure
             }
@@ -230,7 +247,23 @@ public class EssentialPipelineExtension {
             throw new IOException("Failed to load JPEG: " + jpegFile);
         }
         
-        // Apply color profile FIRST (on full-res)
+        // Use the 18 Pro Max Original aperture defaults: 2.8 at 23 mm,
+        // 1.4 at 35 mm and longer.
+        params.fNumber = resolveOriginalAperture(jpegFile, params);
+
+        // Render the 14 Ultra AI bokeh first, on the sharp capture.
+        if (ancBokeh != null && ancBokeh.isReady() && !params.bypass) {
+            Bitmap aiBokeh = ancBokeh.process(bitmap, params);
+            if (aiBokeh != null) {
+                bitmap.recycle();
+                bitmap = aiBokeh;
+                Log.i(TAG, "AI bokeh rendered");
+            } else {
+                Log.w(TAG, "AI bokeh failed, keeping sharp image");
+            }
+        }
+
+        // Apply the exact 18 Pro Max Original LUT after bokeh.
         if (colorProfile != null) {
             bitmap = colorProfile.apply(bitmap);
         }
@@ -247,9 +280,13 @@ public class EssentialPipelineExtension {
             confidenceBytes = BitmapUtils.createConfidenceMap(depthFloat, bitmap.getWidth(), bitmap.getHeight());
         }
         
-        // Render bokeh if depth available
+        // The camera's Master portrait already has real depth-based bokeh. The
+        // synthetic renderer is kept for the real-depth experiment but must not
+        // double-blur the image; it will be enabled again when the vendor depth
+        // container is decoded.
+        final boolean useSyntheticBokeh = false;
         Bitmap resultBitmap = bitmap;
-        if (depthFloat != null) {
+        if (useSyntheticBokeh && depthFloat != null) {
             // Initialize renderer if needed
             if (bokehRenderer == null) {
                 bokehRenderer = new BokehRenderer();
@@ -280,8 +317,10 @@ public class EssentialPipelineExtension {
             throw new IOException("Failed to save processed JPEG");
         }
         
-        // Tag as Original Portrait for Gallery
-        tagAsOriginalPortrait(outputFile);
+        // Keep the camera's EXIF (time, location, orientation, maker notes). The custom
+        // legendmode tag injection is disabled until its IFD rebuild is fixed; corrupting
+        // the maker notes is worse than leaving the stock portrait metadata intact.
+        ExifUtils.copyExifFromFile(jpegFile, outputFile);
         
         // Cleanup
         if (resultBitmap != bitmap) {
@@ -292,6 +331,23 @@ public class EssentialPipelineExtension {
         return outputFile;
     }
     
+    private float resolveOriginalAperture(@NonNull File jpegFile, @NonNull OriginalPortraitParams params) {
+        try {
+            android.media.ExifInterface exif =
+                    new android.media.ExifInterface(jpegFile.getAbsolutePath());
+            int focal35 = exif.getAttributeInt(
+                    android.media.ExifInterface.TAG_FOCAL_LENGTH_IN_35MM_FILM, 0);
+            if (focal35 > 0) {
+                float target = focal35 <= 35 ? 2.8f : 4.5f;
+                Log.i(TAG, "Original aperture " + target + " for " + focal35 + "mm");
+                return target;
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "cannot read focal length: " + t);
+        }
+        return params.focalLength <= 35 ? 2.8f : 4.5f;
+    }
+
     // Helper: Apply intensity to f_number (lower f-number = more blur)
     private float applyIntensity(float fNumber) {
         // intensity 0 = no change, 100 = max effect
@@ -339,12 +395,10 @@ public class EssentialPipelineExtension {
     // Helper: Tag JPEG as Original Portrait for Gallery
     private void tagAsOriginalPortrait(@NonNull File file) {
         try {
-            android.media.ExifInterface exif = new android.media.ExifInterface(file.getAbsolutePath());
             // EXIF tag 34992 (0x88B0) = legendmode
             // 0 = Original, 1 = M9, 2 = M3, 3 = M10R (per Camera 6.8)
-            exif.setAttribute("34992", "0");
-            exif.saveAttributes();
-        } catch (IOException e) {
+            ExifUtils.setLegendModeInFile(file, 0);
+        } catch (Throwable e) {
             Log.w(TAG, "Failed to write EXIF tag", e);
         }
     }

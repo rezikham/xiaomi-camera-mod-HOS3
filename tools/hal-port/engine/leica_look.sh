@@ -3,6 +3,7 @@
 #
 #   leica_look.sh m3        # Leica Monopan 50 (M3), monochrome
 #   leica_look.sh m9        # Leica M9 / "Modern vintage" colour look
+#   leica_look.sh m10r     # Leica M10R / "CMOS" warm vintage look
 #   leica_look.sh off       # restore the stock slot and the gate property
 #   leica_look.sh status
 #
@@ -40,6 +41,7 @@ look_asset() {
     case "$1" in
         m3|look-m3) echo "$REPO/assets/leica_luts/M3_Monopan.png" ;;
         m9|look-m9) echo "$REPO/assets/leica_luts/130_LeicaNatural.png" ;;
+        m10r|look-m10r) echo "$REPO/assets/leica_luts/M10R_Cmos.png" ;;
         *)   return 1 ;;
     esac
 }
@@ -50,13 +52,14 @@ look_name() {
     case "$1" in
         look-m3) echo "lut_m3" ;;
         look-m9) echo "lut_m9" ;;
+        look-m10r) echo "lut_m10r" ;;
         *)       echo "lut_nc" ;;
     esac
 }
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        m3|m9|look-m3|look-m9|off|status) ACTION="$1"; shift ;;
+        m3|m9|m10r|look-m3|look-m9|look-m10r|off|status) ACTION="$1"; shift ;;
         --serial)   SERIAL="$2"; shift 2 ;;
         --no-restart) RESTART=0; shift ;;
         --no-gate)  NO_GATE=1; shift ;;
@@ -91,7 +94,7 @@ status() {
 }
 
 case "$ACTION" in
-    m3|m9|look-m3|look-m9)
+    m3|m9|m10r|look-m3|look-m9|look-m10r)
         LUT="$(look_asset "$ACTION")"
         NAME="$(look_name "$ACTION")"
         [ -f "$LUT" ] || { echo "LUT not found: $LUT" >&2; exit 1; }

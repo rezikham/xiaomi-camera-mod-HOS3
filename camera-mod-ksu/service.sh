@@ -34,3 +34,31 @@ done
 setprop camera.debug.mivi3.output.jpeg true
 
 log -t HyperCameraMod "service: LUT stage complete"
+
+
+# Original Portrait beauty: use the 18 PM RearPortraitOriginal value (10)
+# instead of the stock Master values (20 / 0).
+BEAUTY_SRC="$MODDIR/data/odm/etc/camera/beauty_config_gl.json"
+if [ -f "$BEAUTY_SRC" ]; then
+    chcon u:object_r:vendor_configs_file:s0 "$BEAUTY_SRC" 2>/dev/null
+    mount --bind "$BEAUTY_SRC" /odm/etc/camera/beauty_config_gl.json
+    log -t HyperCameraMod "beauty config mounted (Original skin smoothing 10)"
+fi
+
+# Original Portrait per-style HAL bypass.
+# The camera app writes 1 only while Original is selected; this root watcher
+# flips the 14U capture mdbokeh bypass so Master/Leica keep their stock bokeh.
+BYPASS_SIGNAL=/data/user/0/com.android.camera/files/hcm_bokeh_bypass
+(
+    last=""
+    while true; do
+        v=$(cat "$BYPASS_SIGNAL" 2>/dev/null)
+        if [ "$v" != "$last" ] && { [ "$v" = "0" ] || [ "$v" = "1" ]; }; then
+            setprop persist.vendor.camera.capturemdbokeh.bypass "$v"
+            last="$v"
+            log -t HyperCameraMod "capture bokeh bypass=$v"
+        fi
+        sleep 1
+    done
+) &
+log -t HyperCameraMod "service: Original portrait bypass watcher started"

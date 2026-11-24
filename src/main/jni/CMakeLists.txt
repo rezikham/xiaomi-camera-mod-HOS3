@@ -18,6 +18,7 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 # Source files
 set(SOURCES
     bokeh_renderer.cpp
+    anc_bokeh.cpp
 )
 
 # Shader compilation (embed as string, no separate compilation needed)

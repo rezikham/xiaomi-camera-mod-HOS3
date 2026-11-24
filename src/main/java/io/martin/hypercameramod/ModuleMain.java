@@ -46,9 +46,9 @@ import io.github.libxposed.api.XposedModule;
 //  2. the "Original" colour style next to Leica Authentic and Leica Vibrant (bit 3 of the camera
 //     characteristic xiaomi.capabilities.stylizationTypeMask, which this phone's camera hardware
 //     layer does not set),
-//  3. the Leica Essential CMOS (M10R) style, whose list entry is compiled out of this build. Off
-//     unless the system property camera.feature.m10r is 1: the hardware layer of the 17 Ultra
-//     has no M10R processing, so the style only gives a plain picture.
+//  3. the Leica Essential CMOS (M10R) style, added when m10r_enabled is on. The 14 Ultra has
+//     no M10R HAL, so the module post-processes M10R captures with the Essential Moments M10R
+//     bin plus B12/B43; the 18 Pro Max neural M10R style model is not available here.
 // Each part is independent; one that does not fit the camera build is skipped and logged.
 public class ModuleMain extends XposedModule {
     private static final String TAG = "HyperCameraMod";
@@ -115,6 +115,10 @@ public class ModuleMain extends XposedModule {
     private static final Map<Integer, Bitmap> ASSET_CACHE = new HashMap<>();
     private static volatile String moduleApk;
 
+    public static String getModuleApkPath() {
+        return moduleApk;
+    }
+
     // What did not work, shown to the user once per camera version.
     private static final String MSG_LEGEND =
             "The Leica Essential style list is different on this camera version, so the CMOS "
@@ -159,6 +163,8 @@ public class ModuleMain extends XposedModule {
         try {
             moduleInfo = getModuleApplicationInfo();
             moduleApk = moduleInfo.sourceDir;
+            io.martin.hypercameramod.originalportrait.BokehRenderer
+                    .setNativeLibraryDir(moduleInfo.nativeLibraryDir);
         } catch (Throwable t) {
             log(Log.WARN, TAG, "cannot find the module APK: " + t);
         }
@@ -169,7 +175,10 @@ public class ModuleMain extends XposedModule {
         installModeListHook(loader);
         installNameStyleHook(loader);
         installStylizationHook();
-        installOriginalPortraitCaptureHook();
+        installLegendBridgeHook();
+        installLegendObserver();
+        installOriginalPortraitCaptureHook(loader);
+        installLutFallbackHook(loader);
         installLutFileWatcher();
         installBlurRadiusHook(loader);
         installLegendHook(loader);
@@ -696,8 +705,7 @@ public class ModuleMain extends XposedModule {
 
             final java.util.Set<String> processed =
                     java.util.concurrent.ConcurrentHashMap.newKeySet();
-            java.io.File[] existing = dir.listFiles(
-                    (d, n) -> n.toLowerCase(java.util.Locale.ROOT).endsWith(".jpg"));
+            java.io.File[] existing = dir.listFiles((d, n) -> isCameraPhotoName(n));
             if (existing != null) {
                 for (java.io.File f : existing) {
                     processed.add(f.getAbsolutePath());
@@ -706,17 +714,19 @@ public class ModuleMain extends XposedModule {
             new Thread(() -> {
                 while (true) {
                     try {
-                        java.io.File[] files = dir.listFiles(
-                                (d, n) -> n.toLowerCase(java.util.Locale.ROOT).endsWith(".jpg"));
+                        java.io.File[] files = dir.listFiles((d, n) -> isCameraPhotoName(n));
                         log(Log.INFO, TAG, "LUT poll n=" + (files == null ? -1 : files.length)
                                 + " readable=" + dir.canRead());
                         if (files != null) {
                             for (java.io.File f : files) {
+                                if (!isCameraPhoto(f)) {
+                                    continue;
+                                }
                                 if (processed.add(f.getAbsolutePath())) {
                                     log(Log.INFO, TAG, "LUT saw new file " + f.getName());
                                     long size = f.length();
                                     Thread.sleep(1500);
-                                    if (f.length() == size && size > 200000) {
+                                    if (f.length() == size && size > 50000) {
                                         applyLutToFile(f);
                                     }
                                 }
@@ -732,6 +742,31 @@ public class ModuleMain extends XposedModule {
         } catch (Throwable t) {
             log(Log.WARN, TAG, "cannot watch DCIM/Camera: " + t);
         }
+    }
+
+    /**
+     * Only real camera JPEGs are post-processed. Gallery trash entries
+     * (".trashed-<id>-IMG_..."), pending/temp files and the module's own
+     * ".hcm-*" working files must never enter the pipeline; a gallery
+     * cleanup used to queue dozens of deleted photos and delayed the next
+     * capture by minutes.
+     */
+    private static boolean isCameraPhotoName(String name) {
+        if (name == null) {
+            return false;
+        }
+        String lower = name.toLowerCase(java.util.Locale.ROOT);
+        return lower.startsWith("img_")
+                && lower.endsWith(".jpg")
+                && !lower.contains(".trashed-")
+                && !lower.contains(".pending")
+                && !lower.contains(".hcm")
+                && !lower.contains(".tmp")
+                && !lower.startsWith(".");
+    }
+
+    private static boolean isCameraPhoto(java.io.File file) {
+        return file != null && file.isFile() && isCameraPhotoName(file.getName());
     }
 
     private void applyLutToFile(java.io.File file) {
@@ -754,6 +789,101 @@ public class ModuleMain extends XposedModule {
                 }
             }
 
+            // The genuine pipeline is an additional path. It never replaces the LUT fallback or
+            // the HAL slot: when it is on it owns the file, and it refuses to run if the HAL slot
+            // is also rendering M3/M9 in the camera engine.
+            byte latest = lastLegend;
+            if (essentialPipelineEnabled()) {
+                if (halLutSlotEnabled()) {
+                    log(Log.INFO, TAG, "Moment App pipeline skipped: HAL LUT slot is on");
+                    return;
+                }
+                long age = android.os.SystemClock.elapsedRealtime() - lastLegendTime;
+                if (latest == 0 && essentialModeActive()) {
+                    // The 14 Ultra's Essential mode does not put legendMode into the request
+                    // (the HAL has no Legendary plugin), but the camera still stores the
+                    // selected style in pref_legendary_mode_key. In this mode the style is
+                    // persistent, like the 17 Ultra, so every capture is processed.
+                    byte style = legendFromPrefs();
+                    if (style == 1 || style == 2 || style == 3) {
+                        latest = style;
+                        age = 0;
+                        log(Log.INFO, TAG, "Moment App using stored Essential style legend=" + style
+                                + " module=" + currentModuleId);
+                    }
+                }
+                if (latest == 0 || age > ESSENTIAL_LEGEND_FRESH_MS) {
+                    log(Log.INFO, TAG, "Moment App pipeline skipped " + file.getName()
+                            + ": no fresh M3/M9 selection (legend=" + latest + ", age=" + age
+                            + " ms, module=" + currentModuleId + ")");
+                    return;
+                }
+                log(Log.INFO, TAG, "Moment App candidate " + file.getName() + " legend=" + latest);
+                // The bound service is invisible to Camera under Android 11+ package
+                // visibility, so run the same native stages in the save path (as the
+                // 17 Ultra app does). The Monopan helper still runs out of process.
+                android.content.Context ctx = currentContext();
+                boolean applied = false;
+                if (ctx != null && moduleApk != null && moduleInfo != null) {
+                    applied = EssentialProcessor.processFile(file, latest, moduleApk,
+                            moduleInfo.nativeLibraryDir, ctx);
+                }
+                log(Log.INFO, TAG, "Moment App " + (applied ? "applied" : "left unchanged")
+                        + " legend=" + latest + " " + file.getName());
+                // One selection, one file: a later normal capture must not inherit this look.
+                lastLegend = 0;
+                lastLegendTime = 0;
+                return;
+            }
+            if (!compatFallbackEnabled()) {
+                return;
+            }
+            byte legend = legendFromPrefs();
+            log(Log.INFO, TAG, "LUT candidate " + file.getName() + " legend=" + legend
+                    + " apk=" + (moduleApk != null) + " size=" + file.length());
+            legend = legendFromPrefs();
+            String asset = legend == 1 ? "leica_luts/130_LeicaNatural.png"
+                    : legend == 2 ? "leica_luts/M3_Monopan.png"
+                    : legend == 3 ? "leica_luts/M10R_Cmos.png" : null;
+            if (asset == null || moduleApk == null) {
+                return;
+            }
+            if (file.length() < 500_000L) {
+                return;
+            }
+            Thread.sleep(800);
+            android.graphics.Bitmap bm = android.graphics.BitmapFactory.decodeFile(file.getAbsolutePath());
+            log(Log.INFO, TAG, "LUT decoded " + (bm == null ? "null" : bm.getWidth() + "x" + bm.getHeight()));
+            if (bm == null || bm.getWidth() < 2000) {
+                return;
+            }
+            LeicaLut lut = lutCache.get(asset);
+            if (lut == null) {
+                lut = LeicaLut.loadFromApk(moduleApk, asset);
+                log(Log.INFO, TAG, "LUT load " + (lut != null));
+                if (lut == null) {
+                    return;
+                }
+                lutCache.put(asset, lut);
+            }
+            log(Log.INFO, TAG, "LUT applying " + asset);
+            android.graphics.Bitmap out = lut.apply(bm, 1.0f);
+            log(Log.INFO, TAG, "LUT bitmap ready " + (out != null));
+            if (out == null) {
+                return;
+            }
+            java.io.File tmp = new java.io.File(file.getParentFile(), file.getName() + ".hcm.tmp");
+            try (java.io.FileOutputStream fos = new java.io.FileOutputStream(tmp)) {
+                out.compress(android.graphics.Bitmap.CompressFormat.JPEG, 95, fos);
+            }
+            out.recycle();
+            bm.recycle();
+            if (!tmp.renameTo(file)) {
+                tmp.delete();
+                log(Log.WARN, TAG, "could not replace " + file.getName());
+                return;
+            }
+            log(Log.INFO, TAG, "applied Leica LUT to " + file.getName());
         } catch (Throwable t) {
             log(Log.WARN, TAG, "LUT file post-process failed: " + t);
         }
@@ -784,16 +914,13 @@ public class ModuleMain extends XposedModule {
                 return;
             }
             
-            int w = bm.getWidth();
-            int h = bm.getHeight();
-            float[] depthMap = createSyntheticDepthMap(w, h);
-            
-            // Prepare capture result metadata
+            // The camera's Master portrait already has real depth-based bokeh;
+            // no synthetic depth map is needed for the current software path.
             android.hardware.camera2.CaptureResult result = createMockCaptureResult();
             
             // Process with EssentialPipelineExtension
             final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
-            ext.handlePortraitOriginal(file, depthMap, result, processedFile -> {
+            ext.handlePortraitOriginal(file, null, result, processedFile -> {
                 if (processedFile != file) {
                     // Replace original file with processed version
                     try {
@@ -858,11 +985,335 @@ public class ModuleMain extends XposedModule {
         }
     }
 
+    // Fallback for builds that never send com.xiaomi.sessionparams.legendMode: read the style the
+    // app has stored for the rear camera. M9 = 1, M3 = 2.
+    private static byte legendFromPrefs() {
+        // Stage LUT files on first M3/M9 selection so the stock filter node can render them.
+        ensureLutFiles();
+        try {
+            Class<?> sp = Class.forName("android.os.SystemProperties");
+            String forced = (String) sp.getMethod("get", String.class, String.class)
+                    .invoke(null, "camera.feature.lut_style", "");
+            if ("M9".equalsIgnoreCase(forced)) {
+                return 1;
+            }
+            if ("M3".equalsIgnoreCase(forced)) {
+                return 2;
+            }
+            if ("M10R".equalsIgnoreCase(forced)) {
+                return 3;
+            }
+            // An explicit property always wins, including "off": without this, a build that
+            // always starts the watcher would still resolve the style from the camera's saved
+            // preference and post-process a capture the HAL already rendered.
+            if (!forced.isEmpty()) {
+                return 0;
+            }
+        } catch (Throwable ignored) {
+        }
+        try {
+            Class<?> at = Class.forName("android.app.ActivityThread");
+            Object app = at.getMethod("currentApplication").invoke(null);
+            if (app instanceof android.content.Context) {
+                android.content.SharedPreferences p = ((android.content.Context) app)
+                        .getSharedPreferences("camera_settings_simple_mode_local_0", 0);
+                String v = p.getString("pref_legendary_mode_key", "");
+                if ("M9".equalsIgnoreCase(v)) {
+                    return 1;
+                }
+                if ("M3".equalsIgnoreCase(v)) {
+                    return 2;
+                }
+                if ("M10R".equalsIgnoreCase(v)) {
+                    return 3;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return 0;
+    }
+
+    /** The camera application context, or null before the process is bound. */
+    private static android.content.Context currentContext() {
+        try {
+            Class<?> at = Class.forName("android.app.ActivityThread");
+            Object app = at.getMethod("currentApplication").invoke(null);
+            if (app instanceof android.content.Context) {
+                return (android.content.Context) app;
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    /** True when the camera is in the Leica Essential mode (module index 256). */
+    private boolean essentialModeActive() {
+        // The module index is authoritative. Camera writes pref_camera_mode_key_intent_0
+        // only when it leaves the mode, so that preference is stale right after entering
+        // Essential. Without this check a fresh capture is skipped as "no fresh selection".
+        if (currentModuleId == ESSENTIAL_MODE) {
+            return true;
+        }
+        try {
+            Class<?> at = Class.forName("android.app.ActivityThread");
+            Object app = at.getMethod("currentApplication").invoke(null);
+            if (app instanceof android.content.Context) {
+                android.content.SharedPreferences p = ((android.content.Context) app)
+                        .getSharedPreferences("camera_settings_global", 0);
+                return p.getInt("pref_camera_mode_key_intent_0", 0) == ESSENTIAL_MODE;
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
+    }
+
+    private void installLutFallbackHook(ClassLoader loader) {
+        if (lutHooked) {
+            return;
+        }
+        try {
+            Method compress = android.graphics.Bitmap.class.getDeclaredMethod("compress",
+                    android.graphics.Bitmap.CompressFormat.class, int.class,
+                    java.io.OutputStream.class);
+            compress.setAccessible(true);
+            hook(compress).intercept(chain -> {
+                if (Boolean.TRUE.equals(IN_LUT.get())) {
+                    return chain.proceed();
+                }
+                if (!compatFallbackEnabled()) {
+                    return chain.proceed();
+                }
+                try {
+                    android.graphics.Bitmap bm = (android.graphics.Bitmap) chain.getThisObject();
+                    if (bm == null || bm.getWidth() < 2000) {
+                        return chain.proceed();
+                    }
+                    byte legend = lastLegend;
+                    if (legend == 0) {
+                        legend = legendFromPrefs();
+                    }
+                    String asset = legend == 1 ? "leica_luts/130_LeicaNatural.png"
+                            : legend == 2 ? "leica_luts/M3_Monopan.png"
+                            : legend == 3 ? "leica_luts/M10R_Cmos.png" : null;
+                    if (asset == null) {
+                        return chain.proceed();
+                    }
+                    if (moduleApk == null) {
+                        return chain.proceed();
+                    }
+                    LeicaLut lut = lutCache.get(asset);
+                    if (lut == null) {
+                        lut = LeicaLut.loadFromApk(moduleApk, asset);
+                        if (lut == null) {
+                            return chain.proceed();
+                        }
+                        lutCache.put(asset, lut);
+                    }
+                    log(Log.INFO, TAG, "LUT applying " + asset);
+            android.graphics.Bitmap out = lut.apply(bm, 1.0f);
+            log(Log.INFO, TAG, "LUT bitmap ready " + (out != null));
+                    if (out == null) {
+                        return chain.proceed();
+                    }
+                    out.compress((android.graphics.Bitmap.CompressFormat) chain.getArg(0),
+                            (Integer) chain.getArg(1), (java.io.OutputStream) chain.getArg(2));
+                    out.recycle();
+                    log(Log.INFO, TAG, "applied Leica LUT " + asset);
+                    return true;
+                } catch (Throwable t) {
+                    log(Log.WARN, TAG, "LUT fallback failed: " + t);
+                    return chain.proceed();
+                }
+            });
+            lutHooked = true;
+            log(Log.INFO, TAG, "installed the Leica LUT compatibility fallback");
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot hook Bitmap.compress: " + t);
+        }
+    }
+
+    private boolean compatFallbackEnabled() {
+        // Explicit property wins; used for testing and for managed deployments.
+        if (propertyOn("camera.feature.compat_fallback")) {
+            return true;
+        }
+        try {
+            android.content.SharedPreferences p = getRemotePreferences("hypercameramod");
+            if (p != null && p.contains(COMPAT_FALLBACK_KEY)) {
+                return p.getBoolean(COMPAT_FALLBACK_KEY, false);
+            }
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot read " + COMPAT_FALLBACK_KEY + ": " + t);
+        }
+        return propertyOn("camera.feature.compat_fallback");
+    }
+
+    // Genuine Moment App pipeline (from Moment App). Off by default; all native work
+    // happens in the module's :essential process.
+    private boolean essentialPipelineEnabled() {
+        if (propertyOn(ESSENTIAL_PIPELINE_PROP)) {
+            return true;
+        }
+        try {
+            android.content.SharedPreferences p = getRemotePreferences("hypercameramod");
+            if (p != null && p.contains(ESSENTIAL_PIPELINE_KEY)) {
+                return p.getBoolean(ESSENTIAL_PIPELINE_KEY, false);
+            }
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot read " + ESSENTIAL_PIPELINE_KEY + ": " + t);
+        }
+        return false;
+    }
+
+    // ---- 2b. Legendary request bridge -----------------------------------------------------------
+    // The 6.7 app sends com.xiaomi.sessionparams.legendMode (M9=1, M3=2). The Aurora engine has no
+    // code to copy that key into MiMetadata tag 508, so a ported plugin would see 0 and disable
+    // itself. The port patches the plugin to read stylizationType instead; this hook makes the
+    // request carry the Legendary byte in that key. It only runs when the port's marker file is
+    // present, so a stock camera is never changed.
+    private void installLegendBridgeHook() {
+        // The marker means the real Nezha plugin is installed. Without it, the optional
+        // compatibility fallback still forwards the M9/M3 choice as stylizationType, which
+        // makes the stock Leica Authentic/Vibrant colour path approximate the look. It is
+        // not the real Legendary plugin.
+        boolean realBridge = HalCapabilities.hasLegendBridge();
+        if (legendBridgeHooked || (!realBridge && !compatFallbackEnabled())) {
+            return;
+        }
+        try {
+            Class<?> builder = Class.forName("android.hardware.camera2.CaptureRequest$Builder");
+            Class<?> keyClass = Class.forName("android.hardware.camera2.CaptureRequest$Key");
+            Method set = null;
+            for (Method m : builder.getDeclaredMethods()) {
+                if (m.getName().equals("set") && m.getParameterCount() == 2
+                        && m.getParameterTypes()[0] == keyClass) {
+                    set = m;
+                }
+            }
+            if (set == null) {
+                log(Log.WARN, TAG, "CaptureRequest.Builder.set(Key, Object) not found");
+                return;
+            }
+            Object stylizationKey = keyClass.getConstructor(String.class, Class.class)
+                    .newInstance(STYLIZATION_TYPE_KEY, Byte.class);
+            Method setMethod = builder.getMethod("set", keyClass, Object.class);
+            Method build = builder.getMethod("build");
+
+            hook(set).intercept(chain -> {
+                Object key = chain.getArg(0);
+                if (!(key instanceof CaptureRequest.Key<?> requestKey)) {
+                    return chain.proceed();
+                }
+                String name = requestKey.getName();
+                if (LEGEND_MODE_KEY.equals(name)) {
+                    byte legend = chain.getArg(1) instanceof Number number
+                            ? number.byteValue() : 0;
+                    BRIDGE_LEGEND.set(legend);
+                    if (legend != 0) {
+                        lastLegend = legend;
+                        lastLegendTime = android.os.SystemClock.elapsedRealtime();
+                    }
+                    Object result = chain.proceed();
+                    if (legend != 0 && !BRIDGE_SETTING.get()) {
+                        BRIDGE_SETTING.set(true);
+                        try {
+                            setMethod.invoke(chain.getThisObject(), stylizationKey, legend);
+                        } catch (Throwable t) {
+                            log(Log.WARN, TAG, "cannot add stylizationType to the request: " + t);
+                        } finally {
+                            BRIDGE_SETTING.set(false);
+                        }
+                    }
+                    return result;
+                }
+                if (STYLIZATION_TYPE_KEY.equals(name) && !BRIDGE_SETTING.get()) {
+                    Byte legend = BRIDGE_LEGEND.get();
+                    if (legend != null && legend != 0) {
+                        return chain.proceed(new Object[]{key, legend});
+                    }
+                }
+                return chain.proceed();
+            });
+            hook(build).intercept(chain -> {
+                try {
+                    return chain.proceed();
+                } finally {
+                    BRIDGE_LEGEND.remove();
+                }
+            });
+            legendBridgeHooked = true;
+            log(Log.INFO, TAG, "installed the Legendary -> stylizationType request bridge"
+                    + (realBridge ? " (HAL plugin)" : " (compatibility fallback)"));
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot install the Legendary request bridge: " + t);
+        }
+    }
+
+    // Records the M3/M9 choice even when the real HAL bridge or the compatibility fallback is off,
+    // so the optional Essential pipeline knows which look the user selected. It does not modify
+    // the request: stock filters and LUT slots stay exactly as they were.
+    private void installLegendObserver() {
+        if (legendObserverHooked || legendBridgeHooked || !essentialPipelineEnabled()) {
+            return;
+        }
+        try {
+            Class<?> builder = Class.forName("android.hardware.camera2.CaptureRequest$Builder");
+            Class<?> keyClass = Class.forName("android.hardware.camera2.CaptureRequest$Key");
+            Method set = null;
+            for (Method m : builder.getDeclaredMethods()) {
+                if (m.getName().equals("set") && m.getParameterCount() == 2
+                        && m.getParameterTypes()[0] == keyClass) {
+                    set = m;
+                }
+            }
+            if (set == null) {
+                return;
+            }
+            hook(set).intercept(chain -> {
+                Object key = chain.getArg(0);
+                if (key instanceof CaptureRequest.Key<?> requestKey
+                        && LEGEND_MODE_KEY.equals(requestKey.getName())
+                        && chain.getArg(1) instanceof Number number
+                        && number.byteValue() != 0) {
+                    lastLegend = number.byteValue();
+                    lastLegendTime = android.os.SystemClock.elapsedRealtime();
+                }
+                return chain.proceed();
+            });
+            legendObserverHooked = true;
+            log(Log.INFO, TAG, "observing " + LEGEND_MODE_KEY + " for the Moment App pipeline");
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot observe the Legendary style: " + t);
+        }
+    }
+
     // ---- Original Portrait Software Post-Processing Hook ----------------------------------------
     // Intercepts filterId for Portrait mode when Original is selected, forces Master for capture,
     // and stores the Original selection for post-processing via EssentialPipelineExtension.
 
-    private void installOriginalPortraitCaptureHook() {
+    private void setHalBokehBypass(boolean on) {
+        if (lastHalBypass != null && lastHalBypass == on) {
+            return;
+        }
+        lastHalBypass = on;
+        try {
+            android.content.Context context = currentApplication();
+            if (context == null) {
+                log(Log.WARN, TAG, "HAL bokeh bypass " + on + ": no context");
+                return;
+            }
+            java.io.File dir = context.getFilesDir();
+            java.io.File file = new java.io.File(dir, "hcm_bokeh_bypass");
+            try (java.io.FileOutputStream fos = new java.io.FileOutputStream(file)) {
+                fos.write((on ? "1" : "0").getBytes());
+            }
+            log(Log.INFO, TAG, "HAL bokeh bypass file=" + on + " " + file);
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot write HAL bokeh bypass=" + on + ": " + t);
+        }
+    }
+
+    private void installOriginalPortraitCaptureHook(ClassLoader loader) {
         if (originalPortraitCaptureHooked) {
             return;
         }
@@ -880,10 +1331,6 @@ public class ModuleMain extends XposedModule {
                 log(Log.WARN, TAG, "CaptureRequest.Builder.set for Original Portrait not found");
                 return;
             }
-            Object filterIdKey = keyClass.getConstructor(String.class, Class.class)
-                    .newInstance("com.xiaomi.sessionparams.filterId", Byte.class);
-            Object stylizationKey = keyClass.getConstructor(String.class, Class.class)
-                    .newInstance("com.xiaomi.sessionparams.stylizationType", Byte.class);
 
             hook(set).intercept(chain -> {
                 Object key = chain.getArg(0);
@@ -891,29 +1338,49 @@ public class ModuleMain extends XposedModule {
                     return chain.proceed();
                 }
                 String name = requestKey.getName();
-                // Intercept filterId for Portrait mode when Original is selected
-                if ("com.xiaomi.sessionparams.filterId".equals(name)
-                        && chain.getArg(1) instanceof Number filterNum
-                        && filterNum.byteValue() == 2  // STYLE_ORIGINAL = "2"
-                        && originalPortraitEnabled()) {
-                    // Force Master style for capture to avoid native HAL hang
-                    // Store Original selection for post-processing
-                    lastOriginalPortrait = true;
-                    lastOriginalPortraitTime = android.os.SystemClock.elapsedRealtime();
-                    log(Log.INFO, TAG, "Original Portrait selected -> forcing Master style for capture, will post-process");
-                    return chain.proceed(new Object[]{filterIdKey, (byte) 1}); // STYLE_MASTER = "1"
-                }
-                // Also handle stylizationType for Portrait mode
+                // The portrait style reaches the HAL as stylizationType, not filterId:
+                // 0 = Master, 1 = Leica, 2 = Original. Original starts the algorithm-up
+                // SAT preview that the Aurora DSP bokeh engine cannot serve, so map it to
+                // Master for preview and capture and remember it for post-processing.
                 if ("com.xiaomi.sessionparams.stylizationType".equals(name)
                         && chain.getArg(1) instanceof Number stylNum
-                        && stylNum.byteValue() == 171  // MODE_PORTRAIT
-                        && originalPortraitEnabled()
-                        && lastOriginalPortrait) {
-                    // Ensure stylizationType is set correctly
-                    return chain.proceed();
+                        && currentModuleId == MODE_PORTRAIT) {
+                    byte style = stylNum.byteValue();
+                    if (style == 2 && originalPortraitEnabled()) {
+                        setHalBokehBypass(true);
+                        lastOriginalPortrait = true;
+                        lastOriginalPortraitTime = android.os.SystemClock.elapsedRealtime();
+                        log(Log.INFO, TAG, "Original Portrait selected -> AI bokeh, HAL bokeh bypassed");
+                        return chain.proceed(new Object[]{key, (byte) 0});
+                    }
+                    if (style == 0 || style == 1) {
+                        setHalBokehBypass(false);
+                    }
                 }
                 return chain.proceed();
             });
+            // Track which camera module is active. The portrait style hook needs to know
+            // that stylizationType 2 means Original portrait and not the Photo colour style.
+            try {
+                Class<?> moduleBase = Class.forName("z3.a", false, loader);
+                Class<?> moduleInterface = Class.forName("z3.r", false, loader);
+                Method getModuleId = moduleInterface.getMethod("getModuleId");
+                for (Method m : moduleBase.getDeclaredMethods()) {
+                    if (!m.getName().equals("s") || m.getParameterCount() != 1) {
+                        continue;
+                    }
+                    hook(m).intercept(chain -> {
+                        try {
+                            currentModuleId = (Integer) getModuleId.invoke(chain.getThisObject());
+                        } catch (Throwable ignored) {
+                        }
+                        return chain.proceed();
+                    });
+                }
+                log(Log.INFO, TAG, "tracking the active camera module for Original Portrait");
+            } catch (Throwable t) {
+                log(Log.WARN, TAG, "cannot track the active camera module: " + t);
+            }
             originalPortraitCaptureHooked = true;
             log(Log.INFO, TAG, "installed Original Portrait capture hook (forces Master, post-processes)");
         } catch (Throwable t) {
@@ -924,7 +1391,9 @@ public class ModuleMain extends XposedModule {
     // State for Original Portrait post-processing
     private volatile boolean lastOriginalPortrait = false;
     private volatile long lastOriginalPortraitTime = 0;
+    private volatile Boolean lastHalBypass = null;
     private volatile boolean originalPortraitCaptureHooked = false;
+    private volatile int currentModuleId = -1;
 
     // ---- 3. Leica Essential CMOS (M10R) ---------------------------------------------------------
 
@@ -1050,9 +1519,8 @@ public class ModuleMain extends XposedModule {
 
                 hook(build).intercept(chain -> {
                     Object result = chain.proceed();
-                    // Show M10R entry when toggle is on, even if HAL can't process it.
-                    // The user explicitly requested the entry to appear; actual processing
-                    // will fall back to a plain picture on unsupported devices.
+                    // Show M10R when the toggle is on. On the 14 Ultra the save-path pipeline
+                    // post-processes it; phones with the 18 Pro Max HAL process it natively.
                     if (!m10rEnabled()) {
                         return result;
                     }
@@ -1224,16 +1692,21 @@ public class ModuleMain extends XposedModule {
     private static final int LOOK_TEXT_BASE = 0x7e030000;   // made-up ids for the chip labels
     private static final int LOOK_M3 = 91;                  // enum entry N_NEUTRAL, unused in Photo
     private static final int LOOK_M9 = 92;                  // enum entry N_SOFT, unused in Photo
+    private static final int LOOK_M10R = 93;                // enum entry N_WHITENING, unused in Photo
     // Authentic 17U M3 Monopan extraction. The old 167c769a... file was the
     // earlier reproduced fallback and must be replaced.
     private static final String M3_MD5 = "c4ff65cebdcd8edfa7146c6ab2f838f9";
     private static final String M9_MD5 = "ecbafbf8130ba7340749e95ace25616b";
+    // Derived warm-density LUT (the 18 PM ships the M10R 3D LUTs neutral), so this
+    // file is a bake of the -0.95 EV / warmth 0.3 grade, not a Xiaomi asset.
+    private static final String M10R_MD5 = "e5176c87c69877917b3d24e9b74f5348";
     private static volatile int ACTIVE_LOOK = 0;
     private static volatile long ACTIVE_LOOK_AT = 0L;
     private static volatile java.lang.reflect.Method EFFECT_CONTROLLER_GET;
     private static volatile java.lang.reflect.Field EFFECT_CONTROLLER_FILTER;
     private static final java.util.Set<String> PREVIEW_LOGGED =
             java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private static final String LOOKS_ENTRIES_KEY = "looks_entries_enabled";
     private volatile boolean looksEntriesHooked;
     private volatile boolean uiHooksInstalled;
     private volatile boolean lookTextHooked;
@@ -1270,9 +1743,9 @@ public class ModuleMain extends XposedModule {
             Method back = looks.getDeclaredMethod("c");
             Method build = looks.getDeclaredMethod("b", enums, int.class, config);
             Object[] values = enums.getEnumConstants();
-            if (values == null || values.length <= LOOK_M9) {
+            if (values == null || values.length <= LOOK_M10R) {
                 log(Log.WARN, TAG, "looks: filter enum has only "
-                        + (values == null ? 0 : values.length) + " entries, M3/M9 skipped");
+                        + (values == null ? 0 : values.length) + " entries, M3/M9/M10R skipped");
                 return;
             }
             Object base = null;
@@ -1356,29 +1829,8 @@ public class ModuleMain extends XposedModule {
                 try {
                     @SuppressWarnings("unchecked")
                     java.util.List<Object> target = (java.util.List<Object>) list;
-                    String[] names = {"M3", "M9"};
-                    int[] ordinals = {LOOK_M3, LOOK_M9};
-                    android.content.Context ctx = currentApplication();
-                    android.content.res.Resources res = ctx != null ? ctx.getResources() : null;
-                    int[] lookIcons = new int[2];
-                    int[] lookNameIcons = new int[2];
-                    int[] lookTemplates = new int[2];
-                    if (res != null) {
-                        lookIcons[0] = res.getIdentifier("legendary_leica_m3_icon",
-                                "drawable", CAMERA_PACKAGE);
-                        lookIcons[1] = res.getIdentifier("legendary_leica_m9_icon",
-                                "drawable", CAMERA_PACKAGE);
-                        lookNameIcons[0] = res.getIdentifier("legendary_leica_m3_text_icon",
-                                "drawable", CAMERA_PACKAGE);
-                        lookNameIcons[1] = res.getIdentifier("legendary_leica_m9_text_icon",
-                                "drawable", CAMERA_PACKAGE);
-                        lookTemplates[0] = res.getIdentifier("legendary_leica_m3_template",
-                                "drawable", CAMERA_PACKAGE);
-                        lookTemplates[1] = res.getIdentifier("legendary_leica_m9_template",
-                                "drawable", CAMERA_PACKAGE);
-                    }
-                    // The Looks panel inserts an unknown item at position 1, so add M9
-                    // first and M3 last to display "M3, M9".
+                    String[] names = {"M3", "M9", "M10R"};
+                    int[] ordinals = {LOOK_M3, LOOK_M9, LOOK_M10R};
                     for (int i = 0; i < ordinals.length; i++) {
                         int lookIcon = lookIcons[i] != 0 ? lookIcons[i] : foIcon;
                         int lookNameIcon = STRIP_ICON_BASE | (i + 1);
@@ -1467,6 +1919,8 @@ public class ModuleMain extends XposedModule {
                 }
                 return result;
             });
+            installLookLutHooks(loader);
+            installPreviewLutHook(loader);
             looksEntriesHooked = true;
             log(Log.INFO, TAG, "installed M3/M9 Looks entries");
         } catch (Throwable t) {
@@ -1549,12 +2003,14 @@ public class ModuleMain extends XposedModule {
             java.util.List<Object> target = (java.util.List<Object>) list;
             boolean hasM3 = false;
             boolean hasM9 = false;
+            boolean hasM10R = false;
             for (Object o : target) {
                 int ord = ordinalField.getInt(o);
                 hasM3 |= ord == LOOK_M3;
                 hasM9 |= ord == LOOK_M9;
+                hasM10R |= ord == LOOK_M10R;
             }
-            if (hasM3 && hasM9) {
+            if (hasM3 && hasM9 && hasM10R) {
                 return;
             }
             Object proto = target.isEmpty() ? null : target.get(0);
@@ -1566,7 +2022,13 @@ public class ModuleMain extends XposedModule {
             int order = proto == null ? 100 : Math.max(100, orderField.getInt(proto) + 90);
             // The strip inserts a filter it does not know yet at position 1, so the item added
             // last ends up first: add M9 first, M3 last, to get "M3, M9".
-            // The chip label is two lines: ESTL above, M3/M9 below, like LEICA IA / FLM FC400.
+            // The name icon is the stock one: the palette editor draws that field large, and
+            // a generated label there shows up as text over a transparency checkerboard.
+            if (!hasM10R) {
+                target.add(stripItem(make, LOOK_M10R, LOOK_TEXT_BASE | 3, nameIcon,
+                        icon, nameIcon, samples, labels, desc, order - 1, ordinalField,
+                        samplesField, labelsField, descField, cloudField));
+            }
             if (!hasM9) {
                 target.add(stripItem(make, LOOK_M9, LOOK_TEXT_BASE | 2, STRIP_ICON_BASE | 2,
                         icon, nameIcon, samples, labels, desc, order, ordinalField,
@@ -1577,9 +2039,14 @@ public class ModuleMain extends XposedModule {
                         icon, nameIcon, samples, labels, desc, order + 1, ordinalField,
                         samplesField, labelsField, descField, cloudField));
             }
-            log(Log.INFO, TAG, "strip: M3/M9 entries added (" + target.size() + " items)");
+            log(Log.INFO, TAG, "strip: M3/M9/M10R entries added (" + target.size() + " items)");
+            StringBuilder ordinalList = new StringBuilder();
+            for (Object o : target) {
+                ordinalList.append(ordinalField.getInt(o)).append(' ');
+            }
+            log(Log.INFO, TAG, "strip: ordinals " + ordinalList);
         } catch (Throwable t) {
-            log(Log.WARN, TAG, "strip: cannot add M3/M9: " + t);
+            log(Log.WARN, TAG, "strip: cannot add M3/M9/M10R: " + t);
         }
     }
 
@@ -1678,15 +2145,15 @@ public class ModuleMain extends XposedModule {
                 if ((id & 0xFFFF0000) != LOOK_TEXT_BASE) {
                     return chain.proceed();
                 }
-                return (id & 0xFFFF) == 1 ? "ESTL\nM3" : "ESTL\nM9";
-            });
+                return (id & 0xFFFF) == 1 ? "ESTL\nM3"
+                        : (id & 0xFFFF) == 3 ? "ESTL\nM10R" : "ESTL\nM9";            });
             hook(Resources.class.getDeclaredMethod("getString", int.class)).intercept(chain -> {
                 int id = (Integer) chain.getArg(0);
                 if ((id & 0xFFFF0000) != LOOK_TEXT_BASE) {
                     return chain.proceed();
                 }
-                return (id & 0xFFFF) == 1 ? "ESTL\nM3" : "ESTL\nM9";
-            });
+                return (id & 0xFFFF) == 1 ? "ESTL\nM3"
+                        : (id & 0xFFFF) == 3 ? "ESTL\nM10R" : "ESTL\nM9";            });
             lookTextHooked = true;
         } catch (Throwable t) {
             log(Log.WARN, TAG, "cannot hook Resources.getText (look labels): " + t);
@@ -1713,7 +2180,8 @@ public class ModuleMain extends XposedModule {
                 int id = (Integer) chain.getArg(0);
                 int ordinal = id & 0xFFFF;
                 String name = ordinal == LOOK_M3 ? "lut_m3"
-                        : ordinal == LOOK_M9 ? "lut_m9" : null;
+                        : ordinal == LOOK_M9 ? "lut_m9"
+                        : ordinal == LOOK_M10R ? "lut_m10r" : null;
                 if (name == null || result == null) {
                     return result;
                 }
@@ -1721,7 +2189,7 @@ public class ModuleMain extends XposedModule {
                 ACTIVE_LOOK_AT = System.currentTimeMillis();
                 log(Log.INFO, TAG, "look resolve: id=" + id + " ordinal=" + ordinal
                         + " name=" + name);
-                writeLegendStyle(ordinal == LOOK_M3 ? 2 : 1);
+                writeLegendStyle(ordinal == LOOK_M3 ? 2 : ordinal == LOOK_M10R ? 3 : 1);
                 return make.newInstance(name, idField.getInt(result), degreeField.getInt(result),
                         (float[]) paramsField.get(result), 0);
             });
@@ -1730,7 +2198,8 @@ public class ModuleMain extends XposedModule {
                 try {
                     Object self = chain.getThisObject();
                     String lookName = (String) nameField.get(self);
-                    if (!"lut_m3".equals(lookName) && !"lut_m9".equals(lookName)) {
+                    if (!"lut_m3".equals(lookName) && !"lut_m9".equals(lookName)
+                            && !"lut_m10r".equals(lookName)) {
                         return result;
                     }
                     ensureLookFile(lookName);
@@ -1880,12 +2349,14 @@ public class ModuleMain extends XposedModule {
             hook(save).intercept(chain -> {
                 int id = (Integer) chain.getArg(0);
                 int ordinal = id & 0xFFFF;
-                if (ordinal != LOOK_M3 && ordinal != LOOK_M9) {
+                if (ordinal != LOOK_M3 && ordinal != LOOK_M9 && ordinal != LOOK_M10R) {
                     return chain.proceed();
                 }
-                String ourName = ordinal == LOOK_M3 ? "lut_m3" : "lut_m9";
+                String ourName = ordinal == LOOK_M3 ? "lut_m3"
+                        : ordinal == LOOK_M9 ? "lut_m9" : "lut_m10r";
                 String nativeName = ordinal == LOOK_M3
-                        ? "lut_normal_neutral" : "lut_normal_soft";
+                        ? "lut_normal_neutral" : ordinal == LOOK_M9
+                        ? "lut_normal_soft" : "lut_normal_whitening";
                 try {
                     java.nio.file.Path dst = java.nio.file.Paths.get(
                             "/data/vendor/camera/" + nativeName + ".png");
@@ -1905,7 +2376,7 @@ public class ModuleMain extends XposedModule {
                 }
                 return null;
             });
-            log(Log.INFO, TAG, "installed M3/M9 native preview LUT hook");
+            log(Log.INFO, TAG, "installed M3/M9/M10R native preview LUT hook");
         } catch (Throwable t) {
             log(Log.WARN, TAG, "cannot hook MIVILutSaver: " + t);
         }
@@ -1913,7 +2384,8 @@ public class ModuleMain extends XposedModule {
 
     private Bitmap freshLookBitmap(String name) {
         String asset = "lut_m3".equals(name) ? "leica_luts/M3_Monopan.png"
-                : "leica_luts/130_LeicaNatural.png";
+                : "lut_m9".equals(name) ? "leica_luts/130_LeicaNatural.png"
+                : "lut_m10r".equals(name) ? "leica_luts/M10R_Cmos.png" : null;
         if (moduleApk == null) {
             return null;
         }
@@ -1970,20 +2442,35 @@ public class ModuleMain extends XposedModule {
             }
             return freshLookBitmap("lut_m9");
         }
+        if (name.contains("lut_m10r")) {
+            if (PREVIEW_LOGGED.add(name)) {
+                log(Log.INFO, TAG, "preview LUT " + name + " -> lut_m10r");
+            }
+            return freshLookBitmap("lut_m10r");
+        }
         if ("lut_normal_neutral".equals(name)) {
             return freshLookBitmap("lut_m3");
         }
         if ("lut_normal_soft".equals(name)) {
             return freshLookBitmap("lut_m9");
         }
+        if ("lut_normal_whitening".equals(name)) {
+            return freshLookBitmap("lut_m10r");
+        }
+        // The GL renderer falls back to a stock LUT name for enum slots that are not in
+        // its filter table: 91/92 get "lut_nc", 93 gets "lut_normal_lively". Gate on the
+        // live filter ordinal so a real stock filter keeps its own LUT.
         if ("lut_nc".equals(name) || "0".equals(name)
-                || "lut_debug_blank_lut".equals(name)) {
+                || "lut_debug_blank_lut".equals(name)
+                || "lut_normal_lively".equals(name)) {
             int look = currentFilterOrdinal();
-            if (look == LOOK_M3 || look == LOOK_M9) {
-                Bitmap bm = freshLookBitmap(look == LOOK_M3 ? "lut_m3" : "lut_m9");
+            if (look == LOOK_M3 || look == LOOK_M9 || look == LOOK_M10R) {
+                Bitmap bm = freshLookBitmap(look == LOOK_M3 ? "lut_m3"
+                        : look == LOOK_M9 ? "lut_m9" : "lut_m10r");
                 if (bm != null && PREVIEW_LOGGED.add("neutral:" + name + ":" + look)) {
                     log(Log.INFO, TAG, "preview LUT " + name + " -> "
-                            + (look == LOOK_M3 ? "lut_m3" : "lut_m9"));
+                            + (look == LOOK_M3 ? "lut_m3" : look == LOOK_M9
+                            ? "lut_m9" : "lut_m10r"));
                 }
                 return bm;
             }
@@ -2002,6 +2489,9 @@ public class ModuleMain extends XposedModule {
         if (path.contains("lut_m9")) {
             return freshLookBitmap("lut_m9");
         }
+        if (path.contains("lut_m10r")) {
+            return freshLookBitmap("lut_m10r");
+        }
         return null;
     }
 
@@ -2017,7 +2507,7 @@ public class ModuleMain extends XposedModule {
                          new java.io.FileOutputStream(new java.io.File(dir, "hcm_style"))) {
                 out.write(String.valueOf(style).getBytes(java.nio.charset.StandardCharsets.UTF_8));
             }
-            ensureLookFile(style == 2 ? "lut_m3" : "lut_m9");
+            ensureLookFile(style == 2 ? "lut_m3" : style == 3 ? "lut_m10r" : "lut_m9");
         } catch (Throwable t) {
             log(Log.WARN, TAG, "cannot write hcm_style: " + t);
         }
@@ -2028,8 +2518,9 @@ public class ModuleMain extends XposedModule {
     // filters; nothing stock is touched.
     private void ensureLookFile(String name) {
         String asset = "lut_m3".equals(name) ? "leica_luts/M3_Monopan.png"
-                : "leica_luts/130_LeicaNatural.png";
-        if (moduleApk == null) {
+                : "lut_m9".equals(name) ? "leica_luts/130_LeicaNatural.png"
+                : "lut_m10r".equals(name) ? "leica_luts/M10R_Cmos.png" : null;
+        if (moduleApk == null || asset == null) {
             return;
         }
         try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(moduleApk)) {
@@ -2043,7 +2534,8 @@ public class ModuleMain extends XposedModule {
             if (target.length() > 0) {
                 String md5 = md5(target);
                 boolean valid = "lut_m9".equals(name) ? M9_MD5.equals(md5)
-                        : "lut_m3".equals(name) && M3_MD5.equals(md5);
+                        : "lut_m3".equals(name) ? M3_MD5.equals(md5)
+                        : "lut_m10r".equals(name) && M10R_MD5.equals(md5);
                 if (valid) {
                     return;
                 }
@@ -2065,8 +2557,9 @@ public class ModuleMain extends XposedModule {
 
     private boolean writeLookAsset(String name, java.nio.file.Path dst) {
         String asset = "lut_m3".equals(name) ? "leica_luts/M3_Monopan.png"
-                : "leica_luts/130_LeicaNatural.png";
-        if (moduleApk == null) {
+                : "lut_m9".equals(name) ? "leica_luts/130_LeicaNatural.png"
+                : "lut_m10r".equals(name) ? "leica_luts/M10R_Cmos.png" : null;
+        if (moduleApk == null || asset == null) {
             return false;
         }
         try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(moduleApk)) {

@@ -30,7 +30,15 @@ struct OriginalParams {
     bool isStaticScene = false;     // tag 0x10009: Static scene optimization
     float motionSpeed = 1.0f;       // tag 0x1000A: Motion blur factor
     bool bypass = false;            // tag 0x1000B: Bypass bokeh entirely
-    
+
+    // Color profile parameters (Leica look matching)
+    float contrast = 1.0f;          // Contrast multiplier (1.0 = neutral)
+    float saturation = 1.0f;        // Saturation multiplier (0.0 = grayscale)
+    float highlights = 0.0f;        // Highlight compression (0.0-1.0)
+    float shadows = 0.0f;           // Shadow lift (0.0-1.0)
+    float colorTemp = 0.0f;         // Color temperature shift (cool->warm)
+    float tint = 0.0f;              // Green-magenta tint shift
+
     // Computed from cameraRole + zoomRate if not set explicitly
     void computeFocalLength() {
         switch (cameraRole) {
@@ -39,6 +47,32 @@ struct OriginalParams {
             case 2: focalLength = 13.0f * zoomRate; break;  // Ultra-wide ~13mm
             default: focalLength = 35.0f * zoomRate; break;
         }
+    }
+
+    // M3 Leica look (approximate - to be refined with donor measurements)
+    static OriginalParams makeM3() {
+        OriginalParams p;
+        p.bokehStyle = 0; // Natural
+        p.contrast = 1.15f;
+        p.saturation = 0.0f; // Monochrome
+        p.highlights = 0.10f;
+        p.shadows = 0.10f;
+        p.colorTemp = 0.0f;
+        p.tint = 0.0f;
+        return p;
+    }
+
+    // M9 Leica look (approximate - to be refined with donor measurements)
+    static OriginalParams makeM9() {
+        OriginalParams p;
+        p.bokehStyle = 1; // Smooth
+        p.contrast = 1.05f;
+        p.saturation = 0.85f; // Slightly muted CCD look
+        p.highlights = 0.15f;
+        p.shadows = 0.05f;
+        p.colorTemp = -0.2f; // Slightly cool
+        p.tint = 0.1f;
+        return p;
     }
 };
 

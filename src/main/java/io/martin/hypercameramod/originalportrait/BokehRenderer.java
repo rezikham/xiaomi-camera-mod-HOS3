@@ -21,9 +21,48 @@ import java.nio.ByteOrder;
 public class BokehRenderer {
     private static final String TAG = "OriginalPortraitBokeh";
     
-    // Native library name
-    static {
-        System.loadLibrary("original_portrait_bokeh");
+    // The camera process loads this class through LSPosed's module classloader, where
+    // System.loadLibrary cannot always resolve the APK's native libraries. The module sets
+    // nativeLibraryDir to the installed module's extracted lib directory as a fallback.
+    private static volatile boolean nativeLoaded;
+    private static volatile String nativeLibraryDir;
+
+    public static void setNativeLibraryDir(String dir) {
+        nativeLibraryDir = dir;
+    }
+
+    public static String getNativeLibraryDir() {
+        return nativeLibraryDir;
+    }
+
+    public static synchronized boolean ensureNativeLoaded() {
+        if (nativeLoaded) {
+            return true;
+        }
+        try {
+            System.loadLibrary("original_portrait_bokeh");
+            nativeLoaded = true;
+            return true;
+        } catch (Throwable first) {
+            String dir = nativeLibraryDir;
+            if (dir != null) {
+                try {
+                    System.load(dir + "/libc++_shared.so");
+                } catch (Throwable ignored) {
+                }
+                try {
+                    System.load(dir + "/liboriginal_portrait_bokeh.so");
+                    nativeLoaded = true;
+                    Log.i(TAG, "loaded native bokeh renderer from " + dir);
+                    return true;
+                } catch (Throwable second) {
+                    Log.e(TAG, "cannot load native bokeh renderer from " + dir, second);
+                    return false;
+                }
+            }
+            Log.e(TAG, "cannot load native bokeh renderer", first);
+            return false;
+        }
     }
     
     // Quality presets
@@ -62,6 +101,10 @@ public class BokehRenderer {
      * Must call initialize() before render().
      */
     public BokehRenderer() {
+        if (!ensureNativeLoaded()) {
+            nativePtr = 0;
+            return;
+        }
         nativePtr = nativeCreate();
         if (nativePtr == 0) {
             Log.e(TAG, "Failed to create native renderer");
@@ -233,7 +276,13 @@ public class BokehRenderer {
         
         ByteBuffer dstBuf = BitmapUtils.bitmapToByteBuffer(dstBitmap);
         
-        return render(srcBuf, depthBuf, confBuf, params, dstBuf);
+        boolean success = render(srcBuf, depthBuf, confBuf, params, dstBuf);
+        if (success) {
+            // bitmapToByteBuffer() copies the pixels out; copy the rendered result back.
+            dstBuf.rewind();
+            dstBitmap.copyPixelsFromBuffer(dstBuf);
+        }
+        return success;
     }
     
     // Getters

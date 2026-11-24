@@ -591,6 +591,20 @@ public class ModuleMain extends XposedModule {
         return true; // Default to enabled
     }
 
+    // M3/M9 as separate Looks/film-strip entries. While this is on, ordinals 85/86 are
+    // reserved for M3/M9, so the film pass must not expose V250/H400 there.
+    private boolean looksEntriesEnabled() {
+        try {
+            android.content.SharedPreferences prefs = getRemotePreferences("hypercameramod");
+            if (prefs != null && prefs.contains("looks_entries_enabled")) {
+                return prefs.getBoolean("looks_entries_enabled", true);
+            }
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot read looks_entries_enabled preference: " + t);
+        }
+        return true; // Default to enabled
+    }
+
     // A component filter's key is its category in the high 16 bits and its ordinal in the low 16
     private static int countLegacyFilms(List<?> built, Field key) throws Exception {
         int count = 0;
@@ -1002,7 +1016,8 @@ public class ModuleMain extends XposedModule {
                 int id = title.getInt(filter);
                 String name;
                 if ((id & 0xFFFF0000) == RESERVED_LOOK_NAME_BASE) {
-                    name = (id & 0xFF) == 1 ? "M3" : "M9";
+                    name = (id & 0xFF) == 1 ? "M3"
+                            : (id & 0xFF) == 3 ? "M10R" : "M9";
                 } else if ((id & 0xFFFF0000) == FILM_NAME_BASE) {
                     name = filmLabel(id & 0xFFFF);
                 } else if (id > 0 && app != null) {
@@ -1120,7 +1135,7 @@ public class ModuleMain extends XposedModule {
                     return filmLabel(id & 0xFFFF);
                 }
                 if ((id & 0xFFFF0000) == RESERVED_LOOK_NAME_BASE) {
-                    return (id & 0xFF) == 1 ? "M3" : "M9";
+                    return (id & 0xFF) == 1 ? "M3" : (id & 0xFF) == 3 ? "M10R" : "M9";
                 }
                 return chain.proceed();
             });
@@ -1137,7 +1152,7 @@ public class ModuleMain extends XposedModule {
                     return filmLabel(id & 0xFFFF);
                 }
                 if ((id & 0xFFFF0000) == RESERVED_LOOK_NAME_BASE) {
-                    return (id & 0xFF) == 1 ? "M3" : "M9";
+                    return (id & 0xFF) == 1 ? "M3" : (id & 0xFF) == 3 ? "M10R" : "M9";
                 }
                 return chain.proceed();
             });

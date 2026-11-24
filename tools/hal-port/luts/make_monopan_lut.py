@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Generate a 64^3 monochrome (Leica Monopan 50-like) LUT as a 512x512 tile PNG.
+"""Generate a SYNTHETIC 64^3 monochrome LUT as a 512x512 tile PNG.
 
-M3 is Leica Monopan 50: monochrome, deep blacks, bright highlights, grain.
-A LUT can reproduce the tone/colour part (grain is spatial and not included).
+WARNING: this is a prototype tone curve, not the authentic Leica M3
+M3_Monopan LUT. It must not be shipped as `lut_m3.png`. The real asset is
+`src/main/assets/leica_luts/M3_Monopan.png`.
 """
 import numpy as np
 from PIL import Image
