@@ -195,3 +195,17 @@ person mask.
 * `LeicaDynamicRange` and the Leica container/watermark are not ported.
 * No matched 17 Ultra capture is available on this setup, so the look is
   compared against the app's own stage order and local captures only.
+
+## Save-path watcher and Essential-mode detection
+
+The DCIM watcher accepts only `IMG_*.jpg`. Gallery trash entries
+(`.trashed-<id>-IMG_*`), `.pending`, `.tmp` and the module's own `.hcm-*`
+working files are ignored. A gallery cleanup used to enqueue dozens of
+deleted photos, delaying the next capture by minutes and applying M3 to the
+trash.
+
+The Essential mode is detected from the live camera module index (256), not
+from `pref_camera_mode_key_intent_0`: Camera writes that preference only when
+it leaves the mode, so a fresh capture was skipped as "no fresh M3/M9
+selection". Rear M3 capture `IMG_20261124_175516.jpg` is 3072x4096, true
+monochrome, `0x88b0=2`, and was processed about 5 s after save.

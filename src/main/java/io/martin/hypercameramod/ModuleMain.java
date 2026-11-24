@@ -724,8 +724,7 @@ public class ModuleMain extends XposedModule {
 
             final java.util.Set<String> processed =
                     java.util.concurrent.ConcurrentHashMap.newKeySet();
-            java.io.File[] existing = dir.listFiles(
-                    (d, n) -> n.toLowerCase(java.util.Locale.ROOT).endsWith(".jpg"));
+            java.io.File[] existing = dir.listFiles((d, n) -> isCameraPhotoName(n));
             if (existing != null) {
                 for (java.io.File f : existing) {
                     processed.add(f.getAbsolutePath());
@@ -734,12 +733,14 @@ public class ModuleMain extends XposedModule {
             new Thread(() -> {
                 while (true) {
                     try {
-                        java.io.File[] files = dir.listFiles(
-                                (d, n) -> n.toLowerCase(java.util.Locale.ROOT).endsWith(".jpg"));
+                        java.io.File[] files = dir.listFiles((d, n) -> isCameraPhotoName(n));
                         log(Log.INFO, TAG, "LUT poll n=" + (files == null ? -1 : files.length)
                                 + " readable=" + dir.canRead());
                         if (files != null) {
                             for (java.io.File f : files) {
+                                if (!isCameraPhoto(f)) {
+                                    continue;
+                                }
                                 if (processed.add(f.getAbsolutePath())) {
                                     log(Log.INFO, TAG, "LUT saw new file " + f.getName());
                                     long size = f.length();
@@ -760,6 +761,31 @@ public class ModuleMain extends XposedModule {
         } catch (Throwable t) {
             log(Log.WARN, TAG, "cannot watch DCIM/Camera: " + t);
         }
+    }
+
+    /**
+     * Only real camera JPEGs are post-processed. Gallery trash entries
+     * (".trashed-<id>-IMG_..."), pending/temp files and the module's own
+     * ".hcm-*" working files must never enter the pipeline; a gallery
+     * cleanup used to queue dozens of deleted photos and delayed the next
+     * capture by minutes.
+     */
+    private static boolean isCameraPhotoName(String name) {
+        if (name == null) {
+            return false;
+        }
+        String lower = name.toLowerCase(java.util.Locale.ROOT);
+        return lower.startsWith("img_")
+                && lower.endsWith(".jpg")
+                && !lower.contains(".trashed-")
+                && !lower.contains(".pending")
+                && !lower.contains(".hcm")
+                && !lower.contains(".tmp")
+                && !lower.startsWith(".");
+    }
+
+    private static boolean isCameraPhoto(java.io.File file) {
+        return file != null && file.isFile() && isCameraPhotoName(file.getName());
     }
 
     private void applyLutToFile(java.io.File file) {
@@ -801,12 +827,14 @@ public class ModuleMain extends XposedModule {
                     if (style == 1 || style == 2 || style == 3) {
                         latest = style;
                         age = 0;
-                        log(Log.INFO, TAG, "Moment App using stored Essential style legend=" + style);
+                        log(Log.INFO, TAG, "Moment App using stored Essential style legend=" + style
+                                + " module=" + currentModuleId);
                     }
                 }
                 if (latest == 0 || age > ESSENTIAL_LEGEND_FRESH_MS) {
                     log(Log.INFO, TAG, "Moment App pipeline skipped " + file.getName()
-                            + ": no fresh M3/M9 selection (legend=" + latest + ", age=" + age + " ms)");
+                            + ": no fresh M3/M9 selection (legend=" + latest + ", age=" + age
+                            + " ms, module=" + currentModuleId + ")");
                     return;
                 }
                 log(Log.INFO, TAG, "Moment App candidate " + file.getName() + " legend=" + latest);
@@ -1037,14 +1065,20 @@ public class ModuleMain extends XposedModule {
     }
 
     /** True when the camera is in the Leica Essential mode (module index 256). */
-    private static boolean essentialModeActive() {
+    private boolean essentialModeActive() {
+        // The module index is authoritative. Camera writes pref_camera_mode_key_intent_0
+        // only when it leaves the mode, so that preference is stale right after entering
+        // Essential. Without this check a fresh capture is skipped as "no fresh selection".
+        if (currentModuleId == ESSENTIAL_MODE) {
+            return true;
+        }
         try {
             Class<?> at = Class.forName("android.app.ActivityThread");
             Object app = at.getMethod("currentApplication").invoke(null);
             if (app instanceof android.content.Context) {
                 android.content.SharedPreferences p = ((android.content.Context) app)
                         .getSharedPreferences("camera_settings_global", 0);
-                return p.getInt("pref_camera_mode_key_intent_0", 0) == 256;
+                return p.getInt("pref_camera_mode_key_intent_0", 0) == ESSENTIAL_MODE;
             }
         } catch (Throwable ignored) {
         }
