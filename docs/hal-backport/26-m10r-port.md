@@ -67,31 +67,40 @@ The 18 PM M10R style model attempt is recorded below; it did not run.
 ## 18 PM M10R style-transfer attempt
 
 The 18 PM `libmialgo_styletrans.so` (304,712 bytes) is a MAGE/OpenCL
-runtime (NEEDED `libmage.so`), not the 17 Ultra QNN lib. It exports the same
-`MialgoAi_DIPS_*` API as the 17 Ultra `libstyletrans_runner.so`, and the
-18 PM `styletrans_low_m10r.minn` model is 39,981,140 bytes. The runner was
-patched to the default namespace and given the Monopan OpenCL shim/ICD; the
-18 PM lib, `libmage.so`, `libLMSceneSeg.so`, the QNN stub/system/htp,
-`libcdsprpc.so`, `libvmmem.so` and the DSP HIDL lib were staged. The runner
-then reached the 18 PM MAGE runtime:
+host (NEEDED `libmage.so`), not the 17 Ultra QNN lib. It exports the same
+`MialgoAi_DIPS_*` API as the 17 Ultra `libstyletrans_runner.so`. The runner
+was patched to the default namespace and given the Monopan OpenCL shim/ICD;
+the 18 PM lib, `libmage.so`, `libLMSceneSeg.so`, the QNN stub/system/htp,
+`libcdsprpc.so`, `libvmmem.so` and the DSP HIDL lib were staged.
+
+The initial `run=1140001` was a **missing model**: the 18 PM library selects
+the high tier and requested `styletrans_high_m9.minn`; only the low model was
+staged. After adding the high M10R model (and the low M10R under the high
+name), the model loads but its QNN executor fails:
 
 ```text
 StyletransDIPS: StyletransDIPS version 2.0.0.20260920
 Styletrans init=0
-Styletrans run=1140001 rotation=0 lux=20 cct=5500
-HCM-Essential: M10R style transfer=false
-LeicaM9M3B12: B12 upstream_failed stage=1 recovery=fresh_source_requested
+QnnExecutorImplV2: m_interface is null
+Initialize: m_is_valid is invalid
+StyletransModelForward: model legend Initialize fail!!
+MialgoAi_DIPS_Run run fail!
 ```
 
-The same `run=1140001` occurs with the genuine 18 PM `styletrans_low_m9.minn`
-model, so the failure is the 18 PM MAGE runtime/model on the 14 Ultra GPU,
-not the M10R model specifically. The 18 PM model/legendCT remain the main
-M10R parity gap.
+The 18 PM style inference is **QNN HTP V81**. The 14 Ultra is V75, so the
+V81 HTP interface is unavailable; the MAGE/OpenCL host itself initializes
+(`init=0`). The same failure occurs with the M9 low model content at the high
+path. This is the same QNN generation block as the M9 style transfer and the
+`LeicaQuality` person model. `legendCT` is an 18 PM HAL color-transform
+plugin and is not ported; the M10R filter bin covers the parametric
+color/LUT.
 
 ## Remaining gaps
 
-* 18 PM M10R neural style transfer (`styletrans_low/high_m10r.minn`) and
-  `legendCT` are not runnable through the 17 Ultra runner on the 14 Ultra.
+* 18 PM M10R neural style transfer (`styletrans_high/low_m10r.minn`) is
+  QNN HTP V81; the 14 Ultra V75 returns `m_interface is null` /
+  `m_is_valid is invalid`. `legendCT` is an 18 PM HAL color-transform
+  plugin and is not ported.
 * No 18 PM M10R reference capture exists in the dump: all 72 camera JPEGs
   are `filterName:"Original"`; the only other file is a video with an empty
   filter name. A matched comparison needs an 18 PM M10R capture or the 18 PM
