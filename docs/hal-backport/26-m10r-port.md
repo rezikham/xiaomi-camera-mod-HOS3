@@ -11,10 +11,21 @@ default); the HAL pipeline runs `mileicafilter` with
 with the dedicated M10R `styletrans_*_m10r.minn` models and `legendCT`.
 See [18-pro-max-hal/02-legend-m10r.md](../18-pro-max-hal/02-legend-m10r.md).
 
-The 18 PM source filter bin is 1,598,108 bytes
-(SHA-256 `7f6ab019…`). The Essential Moments app ships a trimmed
-`assets/legend18/leica_filter_param_m10r_snapshot.bin` of 1,597,668 bytes
-(SHA-256 `9713e4f6…`), the form its `libm9base` filter expects.
+The 18 PM `leica_filter_param_m10r_snapshot.bin` (1,598,108 bytes, SHA-256
+`7f6ab019…`) has **0/108 non-neutral LUTs** because snapshot delegates color
+styling to the QNN HTP V85 `styletrans_*_m10r.minn` UNet. However,
+`leica_filter_param_m10r_preview.bin` (1,598,108 bytes, timestamp `202609041724`)
+contains Xiaomi's **authentic 18 Pro Max Leica M10-R (CMOS) 17³ 3D LUT** in all
+108/108 slots (`mean_diff = 10.70/255`, `max_diff = 65/255` vs identity;
+`mean_diff = 17.79/255` vs 18PM M9 preview).
+
+Trimming the 440-byte tail delta (`55 × [int32(9), float32[9]]` → `55 × float32[8]`)
+via `tools/hal-port/luts/make_m10r_lut.py --trim-bin` produces a 1,597,668-byte
+`libm9base`/B12-compatible bin (SHA-256 `52a41273…`) bundled as
+`assets/essential/leica_filter_param_m10r_snapshot.bin`, and trilinearly
+upsampling the same 17³ LUT produces the 512×512 Leica Looks strip LUT
+(`assets/leica_luts/M10R_Cmos.png` & `camera-mod-ksu/data/vendor/camera/lut_m10r.png`,
+MD5 `e1a95801d1a720f9ea446c290a8cc8ab`).
 
 ## 14 Ultra port
 
@@ -106,22 +117,22 @@ StyletransModelForward: model legend Initialize fail!!
 MialgoAi_DIPS_Run run fail!
 ```
 
-The 18 PM style inference is **QNN HTP V81**. The 14 Ultra is V75, so the
-V81 HTP interface is unavailable; the MAGE/OpenCL host itself initializes
-(`init=0`). The same failure occurs with the M9 low model content at the high
-path. This is the same QNN generation block as the M9 style transfer and the
-`LeicaQuality` person model. `legendCT` is an 18 PM HAL color-transform
-plugin and is not ported; the M10R filter bin covers the parametric
-color/LUT.
+The 18 PM style models are **QNN HTP V85 (`soc_type=SM8975; arch=85; min_arch=85`, QNN SDK `v2.47.0`)**, not V81 (17 Ultra / `nezha` is HTP V81, QNN `v2.33.0`). Decrypting the `NNiM` v2 container (`mage::NNDecrypt`: 16-byte repeating XOR `"legenddddddddddd"` over the first `0x10000` bytes of the payload) confirms all four Madrid models (`m10_high_sim`, `m10_low_sim`, `m9_high_sim`, `m9_low_sim`) are precompiled HTP V85 UNets mapping `(1, 512, 512, 3)` → `(1, 256, 256, 384)` (`32 luma bins × 12 affine 3×4 RGB coefficients`), sliced at full resolution via OpenCL (`styletrans_process_bilateral_process_cl`). The 14 Ultra is HTP V75, so the V85 context binary cannot execute and no ONNX/GPU/CPU graph is shipped; `libmage.so` (`QnnExecutorImplV2474`) fails at `m_interface is null` when no compatible `v2.47` HTP provider initializes. See [15-qnn-model-porting.md](15-qnn-model-porting.md).
+
+`com.xiaomi.plugin.legendCT.so` (`libmialgo_ccm_3x8.so`, 14 MB, no QNN) was
+reversed and confirmed to be a no-op placeholder on `madrid`: all 153 embedded
+17³ LUTs in `.rodata` are exact identity (`max_abs_diff = 0.000000`), and
+`legendsnapshot.json` does not wire `legendCT`.
 
 ## Remaining gaps
 
-* 18 PM M10R neural style transfer (`styletrans_high/low_m10r.minn`) is
-  QNN HTP V81; the 14 Ultra V75 returns `m_interface is null` /
-  `m_is_valid is invalid`. `legendCT` is an 18 PM HAL color-transform
-  plugin and is not ported. The local `M10rPost` (the app's M10R toggle
-  defaults: AWB 0.8, detail 0.3, vignette 0.3, grain 0.3) is the working
-  CMOS look, not the exact 18 PM neural style.
+* 18 PM M10R neural style transfer (`styletrans_high/low_m10r.minn`) is a
+  precompiled **QNN HTP V85 (`SM8975`, `v2.47.0`)** bilateral-grid UNet
+  (`512×512×3 → 256×256×384`) with no ONNX/GPU/CPU payload; the 14 Ultra V75
+  returns `m_interface is null` / `m_is_valid is invalid`. The trimmed 18 PM
+  `leica_filter_param_m10r_preview.bin` supplies the authentic Xiaomi 18 PM
+  M10-R 3D LUT (used for both live viewfinder and Essential/Looks on 14 Ultra)
+  as the closest 1:1 hardware-portable color transform.
 * No 18 PM M10R reference capture exists in the dump: all 72 camera JPEGs
   are `filterName:"Original"`; the only other file is a video with an empty
   filter name. A matched comparison needs an 18 PM M10R capture or the 18 PM

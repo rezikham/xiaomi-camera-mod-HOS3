@@ -1809,7 +1809,8 @@ public class ModuleMain extends XposedModule {
     private static final String M9_MD5 = "ecbafbf8130ba7340749e95ace25616b";
     // Derived warm-density LUT (the 18 PM ships the M10R 3D LUTs neutral), so this
     // file is a bake of the -0.95 EV / warmth 0.3 grade, not a Xiaomi asset.
-    private static final String M10R_MD5 = "e5176c87c69877917b3d24e9b74f5348";
+    // Authentic 18 Pro Max Leica M10-R (CMOS) 64^3 LUT upsampled from leica_filter_param_m10r_preview.bin.
+    private static final String M10R_MD5 = "e1a95801d1a720f9ea446c290a8cc8ab";
     private static volatile int ACTIVE_LOOK = 0;
     private static volatile long ACTIVE_LOOK_AT = 0L;
     private static volatile java.lang.reflect.Method EFFECT_CONTROLLER_GET;
