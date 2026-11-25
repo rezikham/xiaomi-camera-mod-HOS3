@@ -10,8 +10,8 @@ log -t HyperCameraMod "post-fs-data: LUT stage starting"
 
 mkdir -p /data/vendor/camera
 
-# All LUTs bundled with the module: M3/M9 first, then the 12 film filters.
-LUTS="lut_m3.png lut_m9.png
+# All LUTs bundled with the module: M3/M9/M10R first, then the 12 film filters.
+LUTS="lut_m3.png lut_m9.png lut_m10r.png
 lut_600f.png lut_bf70.png lut_r600.png lut_p100f.png
 lut_f50.png lut_kc64.png lut_v250.png lut_h400.png
 lut_kp160.png lut_fc400.png lut_c50d.png lut_kg200.png"

@@ -278,16 +278,20 @@ final class EssentialProcessor {
                 return null;
             }
             File target = new File(dir, name);
-            if (target.isFile() && target.length() > 0) {
-                return target.getAbsolutePath();
-            }
-            File tmp = new File(dir, name + ".tmp");
+            long apkLastMod = new File(moduleApk).lastModified();
             try (ZipFile zip = new ZipFile(moduleApk)) {
                 ZipEntry entry = zip.getEntry("assets/essential/" + name);
                 if (entry == null) {
                     Log.e(TAG, "missing APK asset assets/essential/" + name);
                     return null;
                 }
+                long expectedSize = entry.getSize();
+                if (target.isFile() && target.length() > 0
+                        && (expectedSize <= 0 || target.length() == expectedSize)
+                        && target.lastModified() >= apkLastMod) {
+                    return target.getAbsolutePath();
+                }
+                File tmp = new File(dir, name + ".tmp");
                 try (InputStream in = zip.getInputStream(entry);
                      FileOutputStream out = new FileOutputStream(tmp)) {
                     byte[] buf = new byte[65536];
@@ -296,10 +300,13 @@ final class EssentialProcessor {
                         out.write(buf, 0, n);
                     }
                 }
-            }
-            if (!tmp.renameTo(target)) {
-                tmp.delete();
-                return null;
+                if (!tmp.renameTo(target)) {
+                    tmp.delete();
+                    return null;
+                }
+                if (apkLastMod > 0) {
+                    target.setLastModified(apkLastMod);
+                }
             }
             return target.getAbsolutePath();
         } catch (Throwable t) {
