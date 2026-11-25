@@ -925,21 +925,12 @@ public class ModuleMain extends XposedModule {
                 io.martin.hypercameramod.originalportrait.EssentialPipelineExtension.getInstance(context);
             ext.setEnabled(true);
             ext.initialize();
+
+            float[] liveFocusPoint = computePortraitAfFocusPoint();
             
-            // Create a simple synthetic depth map (center-weighted)
-            android.graphics.Bitmap bm = android.graphics.BitmapFactory.decodeFile(file.getAbsolutePath());
-            if (bm == null) {
-                log(Log.WARN, TAG, "Failed to decode JPEG for Original Portrait post-process");
-                return;
-            }
-            
-            // The camera's Master portrait already has real depth-based bokeh;
-            // no synthetic depth map is needed for the current software path.
-            android.hardware.camera2.CaptureResult result = createMockCaptureResult();
-            
-            // Process with EssentialPipelineExtension
+            // Process with EssentialPipelineExtension (reads JPEG, XMP focuspoint, and EXIF directly)
             final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
-            ext.handlePortraitOriginal(file, null, result, processedFile -> {
+            ext.handlePortraitOriginal(file, null, null, liveFocusPoint, processedFile -> {
                 if (processedFile != file) {
                     // Replace original file with processed version
                     try {
@@ -957,15 +948,11 @@ public class ModuleMain extends XposedModule {
             
             // Wait for completion (with timeout)
             try {
-                if (!latch.await(10, java.util.concurrent.TimeUnit.SECONDS)) {
+                if (!latch.await(15, java.util.concurrent.TimeUnit.SECONDS)) {
                     log(Log.WARN, TAG, "Original Portrait post-process timed out");
                 }
             } catch (InterruptedException e) {
                 log(Log.WARN, TAG, "Original Portrait post-process interrupted");
-            }
-            
-            if (bm != null && !bm.isRecycled()) {
-                bm.recycle();
             }
             
         } catch (Throwable t) {
@@ -1357,29 +1344,45 @@ public class ModuleMain extends XposedModule {
                     return chain.proceed();
                 }
                 String name = requestKey.getName();
-                // The portrait style reaches the HAL as stylizationType, not filterId:
-                // 0 = Master, 1 = Leica, 2 = Original. Original starts the algorithm-up
-                // SAT preview that the Aurora DSP bokeh engine cannot serve, so map it to
-                // Master for preview and capture and remember it for post-processing.
-                if ("com.xiaomi.sessionparams.stylizationType".equals(name)
-                        && chain.getArg(1) instanceof Number stylNum
-                        && currentModuleId == MODE_PORTRAIT) {
-                    byte style = stylNum.byteValue();
-                    if (style == 2 && originalPortraitEnabled()) {
-                        setHalBokehBypass(true);
-                        lastOriginalPortrait = true;
-                        lastOriginalPortraitTime = android.os.SystemClock.elapsedRealtime();
-                        log(Log.INFO, TAG, "Original Portrait selected -> AI bokeh, HAL bokeh bypassed");
-                        return chain.proceed(new Object[]{key, (byte) 0});
+                if (currentModuleId == MODE_PORTRAIT) {
+                    Object val = chain.getArg(1);
+                    if (CaptureRequest.SCALER_CROP_REGION.equals(requestKey)
+                            && val instanceof android.graphics.Rect crop
+                            && crop.width() > 0 && crop.height() > 0) {
+                        lastPortraitCropRegion = new android.graphics.Rect(crop);
+                    } else if (CaptureRequest.CONTROL_AF_REGIONS.equals(requestKey)
+                            && val instanceof android.hardware.camera2.params.MeteringRectangle[] regions) {
+                        recordPortraitAfRegion(regions);
+                    } else if (CaptureRequest.JPEG_ORIENTATION.equals(requestKey)
+                            && val instanceof Integer ori) {
+                        lastPortraitJpegOrientation = ori;
                     }
-                    if (style == 0 || style == 1) {
-                        setHalBokehBypass(false);
+                    // The portrait style reaches the HAL as stylizationType, not filterId:
+                    // 0 = Master, 1 = Leica, 2 = Original. Original starts the algorithm-up
+                    // SAT preview that the Aurora DSP bokeh engine cannot serve, so map it to
+                    // Master for preview and capture and remember it for post-processing.
+                    if ("com.xiaomi.sessionparams.stylizationType".equals(name)
+                            && val instanceof Number stylNum) {
+                        byte style = stylNum.byteValue();
+                        if (style == 2 && originalPortraitEnabled()) {
+                            setHalBokehBypass(true);
+                            lastOriginalPortrait = true;
+                            lastOriginalPortraitTime = android.os.SystemClock.elapsedRealtime();
+                            log(Log.INFO, TAG, "Original Portrait selected -> AI bokeh, HAL bokeh bypassed");
+                            return chain.proceed(new Object[]{key, (byte) 0});
+                        }
+                        if (style == 0 || style == 1) {
+                            setHalBokehBypass(false);
+                            lastOriginalPortrait = false;
+                            lastOriginalPortraitTime = 0;
+                        }
                     }
                 }
                 return chain.proceed();
             });
             // Track which camera module is active. The portrait style hook needs to know
-            // that stylizationType 2 means Original portrait and not the Photo colour style.
+            // that stylizationType 2 means Original portrait and not the Photo colour style,
+            // and must release the HAL bokeh bypass when leaving Portrait mode.
             try {
                 Class<?> moduleBase = Class.forName("z3.a", false, loader);
                 Class<?> moduleInterface = Class.forName("z3.r", false, loader);
@@ -1390,7 +1393,13 @@ public class ModuleMain extends XposedModule {
                     }
                     hook(m).intercept(chain -> {
                         try {
-                            currentModuleId = (Integer) getModuleId.invoke(chain.getThisObject());
+                            int id = (Integer) getModuleId.invoke(chain.getThisObject());
+                            currentModuleId = id;
+                            if (id != MODE_PORTRAIT) {
+                                setHalBokehBypass(false);
+                                lastOriginalPortrait = false;
+                                lastOriginalPortraitTime = 0;
+                            }
                         } catch (Throwable ignored) {
                         }
                         return chain.proceed();
@@ -1407,12 +1416,84 @@ public class ModuleMain extends XposedModule {
         }
     }
 
+    private void recordPortraitAfRegion(android.hardware.camera2.params.MeteringRectangle[] regions) {
+        if (regions == null || regions.length == 0) {
+            return;
+        }
+        android.hardware.camera2.params.MeteringRectangle best = null;
+        for (android.hardware.camera2.params.MeteringRectangle r : regions) {
+            if (r == null || r.getMeteringWeight() <= 0) {
+                continue;
+            }
+            android.graphics.Rect rect = r.getRect();
+            if (rect == null || rect.width() <= 0 || rect.height() <= 0) {
+                continue;
+            }
+            if (best == null || r.getMeteringWeight() > best.getMeteringWeight()) {
+                best = r;
+            }
+        }
+        if (best != null) {
+            lastPortraitAfRect = new android.graphics.Rect(best.getRect());
+            lastPortraitAfTime = android.os.SystemClock.elapsedRealtime();
+        }
+    }
+
+    private float[] computePortraitAfFocusPoint() {
+        android.graphics.Rect af = lastPortraitAfRect;
+        android.graphics.Rect crop = lastPortraitCropRegion;
+        if (af == null || crop == null || crop.width() <= 0 || crop.height() <= 0) {
+            return null;
+        }
+        long age = android.os.SystemClock.elapsedRealtime() - lastPortraitAfTime;
+        if (age > 15_000L) {
+            return null;
+        }
+        // Ignore full-frame default AF metering windows (>= 85% of crop in both axes).
+        if (af.width() >= crop.width() * 0.85f && af.height() >= crop.height() * 0.85f) {
+            return null;
+        }
+        float u = (af.exactCenterX() - crop.left) / (float) crop.width();
+        float v = (af.exactCenterY() - crop.top) / (float) crop.height();
+        if (u < 0.01f || u > 0.99f || v < 0.01f || v > 0.99f) {
+            return null;
+        }
+        int ori = ((lastPortraitJpegOrientation % 360) + 360) % 360;
+        float nx;
+        float ny;
+        switch (ori) {
+            case 90:
+                nx = 1.0f - v;
+                ny = u;
+                break;
+            case 180:
+                nx = 1.0f - u;
+                ny = 1.0f - v;
+                break;
+            case 270:
+                nx = v;
+                ny = 1.0f - u;
+                break;
+            default:
+                nx = u;
+                ny = v;
+                break;
+        }
+        log(Log.INFO, TAG, "Portrait AF focus norm=("
+                + String.format(java.util.Locale.US, "%.3f,%.3f", nx, ny) + ") ori=" + ori);
+        return new float[]{nx, ny};
+    }
+
     // State for Original Portrait post-processing
     private volatile boolean lastOriginalPortrait = false;
     private volatile long lastOriginalPortraitTime = 0;
     private volatile Boolean lastHalBypass = null;
     private volatile boolean originalPortraitCaptureHooked = false;
     private volatile int currentModuleId = -1;
+    private volatile android.graphics.Rect lastPortraitCropRegion = null;
+    private volatile android.graphics.Rect lastPortraitAfRect = null;
+    private volatile long lastPortraitAfTime = 0;
+    private volatile int lastPortraitJpegOrientation = 90;
 
     // ---- 3. Leica Essential CMOS (M10R) ---------------------------------------------------------
 

@@ -233,7 +233,7 @@ Java_io_martin_hypercameramod_originalportrait_AncBokehRenderer_nativeRelease(
 extern "C" JNIEXPORT jboolean JNICALL
 Java_io_martin_hypercameramod_originalportrait_AncBokehRenderer_nativeProcess(
         JNIEnv* env, jclass, jobject srcBitmap, jobject dstBitmap,
-        jint fx1, jint fy1, jint fx2, jint fy2, jfloat fNumber) {
+        jint fx1, jint fy1, jint fx2, jint fy2, jfloat fNumber, jint orientation) {
     std::lock_guard<std::mutex> guard(gEngine.lock);
     if (!gEngine.handle) {
         LOGE("process without engine");
@@ -305,40 +305,52 @@ Java_io_martin_hypercameramod_originalportrait_AncBokehRenderer_nativeProcess(
         x1 = width / 4; x2 = width * 3 / 4;
         y1 = height / 4; y2 = height * 3 / 4;
     }
-    int face[4] = {x1, y1, x2, y2};
+    int32_t face[4] = {x1, y1, x2, y2};
+
+    int ori = ((orientation % 360) + 360) % 360;
+    if (ori != 0 && ori != 90 && ori != 180 && ori != 270) {
+        ori = 0;
+    }
+    float clampedF = std::max(1.0f, std::min(15.9f, (float)fNumber));
 
     WsgImage in;
     WsgImage out;
     memset(&in, 0, sizeof(in));
     memset(&out, 0, sizeof(out));
-    *(int*)(in.b + 0x00) = 0;
-    *(int*)(in.b + 0x04) = 0;
-    *(int*)(in.b + 0x08) = width;
-    *(int*)(in.b + 0x0c) = height;
+    *(int32_t*)(in.b + 0x00) = ori;
+    *(int32_t*)(in.b + 0x04) = 0;
+    *(int32_t*)(in.b + 0x08) = width;
+    *(int32_t*)(in.b + 0x0c) = height;
     *(void**)(in.b + 0x10) = srcY;
     *(void**)(in.b + 0x18) = srcUv;
-    *(int*)(in.b + 0x30) = width;
-    *(int*)(in.b + 0x34) = height;
-    *(int*)(in.b + 0x40) = height;
+    *(int32_t*)(in.b + 0x30) = width;
+    *(int32_t*)(in.b + 0x34) = height;
+    *(int32_t*)(in.b + 0x40) = height;
 
-    *(int*)(out.b + 0x00) = 0;
-    *(int*)(out.b + 0x04) = 0;
-    *(int*)(out.b + 0x08) = width;
-    *(int*)(out.b + 0x0c) = height;
+    *(int32_t*)(out.b + 0x00) = ori;
+    *(int32_t*)(out.b + 0x04) = 0;
+    *(int32_t*)(out.b + 0x08) = width;
+    *(int32_t*)(out.b + 0x0c) = height;
     *(void**)(out.b + 0x10) = dstY;
     *(void**)(out.b + 0x18) = dstUv;
-    *(int*)(out.b + 0x30) = width;
-    *(int*)(out.b + 0x34) = height;
-    *(int*)(out.b + 0x40) = height;
+    *(int32_t*)(out.b + 0x30) = width;
+    *(int32_t*)(out.b + 0x34) = height;
+    *(int32_t*)(out.b + 0x40) = height;
 
-    uint8_t params[0x100];
+    // 32-byte v3 SgSingleBokehParams layout verified from libanc_single_bokeh.so:
+    // +0x00 float   fNumber   (range [1.0, 16.0); higher = gentler blur)
+    // +0x0c int32_t faceCount (>= 1 required by validator)
+    // +0x10 int32_t* faceRects ({x1, y1, x2, y2}, midpoint = focus point)
+    // +0x18 int32_t bokehType (0 -> style 0 natural circular; 1..3 -> styles 7..9)
+    uint8_t params[0x20];
     memset(params, 0, sizeof(params));
-    *(float*)(params + 0x00) = fNumber;
-    for (int off = 0x04; off <= 0x1c; off += 4) {
-        *(int*)(params + off) = 1;
-    }
+    *(float*)(params + 0x00) = clampedF;
+    *(int32_t*)(params + 0x0c) = 1;
     *(void**)(params + 0x10) = face;
+    *(int32_t*)(params + 0x18) = 0;
 
+    LOGI("process %dx%d ori=%d f=%.2f bokehType=0 face=[%d,%d,%d,%d]",
+         width, height, ori, clampedF, x1, y1, x2, y2);
     int r = process(gEngine.handle, &in, params, &out);
     if (r == 0) {
         nv12ToArgb(dstY, dstUv, width, height, (uint8_t*)dstPixels, (int)dstInfo.stride);

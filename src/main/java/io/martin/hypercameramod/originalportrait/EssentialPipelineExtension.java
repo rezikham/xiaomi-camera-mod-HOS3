@@ -63,12 +63,13 @@ public class EssentialPipelineExtension {
     // Configuration
     private boolean enabled = false;
     private BokehRenderer.QualityPreset qualityPreset = BokehRenderer.QualityPreset.BALANCED;
-    private int intensity = 75; // 0-100
+    private int intensity = 75; // 0-100 (100 = full 18PM baseline fNumber, lower = gentler blur)
     
     // State
     private BokehRenderer bokehRenderer;
     private ColorProfile colorProfile;
     private AncBokehRenderer ancBokeh;
+    private boolean initialized = false;
     
     private EssentialPipelineExtension(@NonNull Context context) {
         this.context = context.getApplicationContext();
@@ -90,23 +91,31 @@ public class EssentialPipelineExtension {
     /**
      * Initialize the extension (call at app startup).
      */
-    public void initialize() {
+    public synchronized void initialize() {
+        if (initialized && colorProfile != null && ancBokeh != null && ancBokeh.isReady()) {
+            return;
+        }
         // Initialize RenderScript for bitmap utils
         BitmapUtils.initRenderScript(context);
         
-        // Load color profile
-        colorProfile = ColorProfile.load(context, "original_portrait",
-                io.martin.hypercameramod.ModuleMain.getModuleApkPath());
+        // Load color profile once
+        if (colorProfile == null) {
+            colorProfile = ColorProfile.load(context, "original_portrait",
+                    io.martin.hypercameramod.ModuleMain.getModuleApkPath());
+        }
 
         // Load the 14 Ultra AI single-bokeh engine (SM8650 models, v3 API).
         if (ancBokeh == null) {
             ancBokeh = new AncBokehRenderer();
+        }
+        if (!ancBokeh.isReady()) {
             boolean ok = ancBokeh.initialize(context,
                     io.martin.hypercameramod.ModuleMain.getModuleApkPath(),
                     BokehRenderer.getNativeLibraryDir());
             Log.i(TAG, "AI bokeh " + (ok ? "ready" : "unavailable"));
         }
 
+        initialized = true;
         Log.d(TAG, "EssentialPipelineExtension initialized");
     }
     
@@ -204,6 +213,14 @@ public class EssentialPipelineExtension {
                                         @Nullable Object depthMap,
                                         @Nullable CaptureResult result,
                                         @NonNull OnProcessedCallback callback) {
+        handlePortraitOriginal(jpegFile, depthMap, result, null, callback);
+    }
+
+    public void handlePortraitOriginal(@NonNull File jpegFile,
+                                        @Nullable Object depthMap,
+                                        @Nullable CaptureResult result,
+                                        @Nullable float[] liveFocusPointNorm,
+                                        @NonNull OnProcessedCallback callback) {
         if (!enabled) {
             callback.onResult(jpegFile); // Return original
             return;
@@ -215,9 +232,11 @@ public class EssentialPipelineExtension {
                 ? new OriginalPortraitParams()
                 : extractParams(result);
         params.computeFocalLengthFromRole();
-        
-        // Apply intensity scaling to f_number
-        params.fNumber = applyIntensity(params.fNumber);
+        // Clear the synthetic center default unless real focus metadata is available.
+        params.focusRect = null;
+        if (liveFocusPointNorm != null && liveFocusPointNorm.length >= 2) {
+            params.focusRect = new float[]{liveFocusPointNorm[0], liveFocusPointNorm[1], 0.16f, 0.20f};
+        }
         
         // Submit to background executor
         executor.execute(() -> {
@@ -247,13 +266,26 @@ public class EssentialPipelineExtension {
             throw new IOException("Failed to load JPEG: " + jpegFile);
         }
         
-        // Use the 18 Pro Max Original aperture defaults: 2.8 at 23 mm,
-        // 1.4 at 35 mm and longer.
-        params.fNumber = resolveOriginalAperture(jpegFile, params);
+        int exifOrientation = readExifOrientationDegrees(jpegFile);
+
+        // Prefer the camera's real XMP focuspoint (before re-encoding strips XMP) over
+        // any live AF hint so non-frontal/downward faces keep the sharp focal plane on the subject.
+        float[] xmpFocus = AncBokehRenderer.extractXmpFocusPoint(
+                jpegFile, bitmap.getWidth(), bitmap.getHeight());
+        if (xmpFocus != null) {
+            params.focusRect = new float[]{xmpFocus[0], xmpFocus[1], 0.16f, 0.20f};
+        }
+
+        // Resolve the 18 Pro Max Original aperture baseline (2.8 at 23-35 mm, 4.5 at 75 mm),
+        // then apply intensity scaling AFTER resolution so intensity actually controls blur.
+        float baseFNumber = resolveOriginalAperture(jpegFile, params);
+        params.fNumber = applyIntensity(baseFNumber);
+        Log.i(TAG, "Original aperture base=" + baseFNumber + " intensity=" + intensity
+                + " -> f=" + params.fNumber + " ori=" + exifOrientation);
 
         // Render the 14 Ultra AI bokeh first, on the sharp capture.
         if (ancBokeh != null && ancBokeh.isReady() && !params.bypass) {
-            Bitmap aiBokeh = ancBokeh.process(bitmap, params);
+            Bitmap aiBokeh = ancBokeh.process(bitmap, params, exifOrientation);
             if (aiBokeh != null) {
                 bitmap.recycle();
                 bitmap = aiBokeh;
@@ -263,9 +295,13 @@ public class EssentialPipelineExtension {
             }
         }
 
-        // Apply the exact 18 Pro Max Original LUT after bokeh.
+        // Apply the exact 18 Pro Max Original LUT after bokeh, recycling the intermediate bitmap.
         if (colorProfile != null) {
-            bitmap = colorProfile.apply(bitmap);
+            Bitmap graded = colorProfile.apply(bitmap);
+            if (graded != bitmap) {
+                bitmap.recycle();
+                bitmap = graded;
+            }
         }
         
         // Prepare depth map
@@ -348,12 +384,39 @@ public class EssentialPipelineExtension {
         return params.focalLength <= 35 ? 2.8f : 4.5f;
     }
 
-    // Helper: Apply intensity to f_number (lower f-number = more blur)
-    private float applyIntensity(float fNumber) {
-        // intensity 0 = no change, 100 = max effect
-        // Map intensity to f_number adjustment
-        float factor = 1.0f - (intensity / 100.0f) * 0.5f; // 1.0 to 0.5
-        return fNumber * factor;
+    private int readExifOrientationDegrees(@NonNull File jpegFile) {
+        try {
+            android.media.ExifInterface exif =
+                    new android.media.ExifInterface(jpegFile.getAbsolutePath());
+            int o = exif.getAttributeInt(
+                    android.media.ExifInterface.TAG_ORIENTATION,
+                    android.media.ExifInterface.ORIENTATION_NORMAL);
+            switch (o) {
+                case android.media.ExifInterface.ORIENTATION_ROTATE_90:
+                    return 90;
+                case android.media.ExifInterface.ORIENTATION_ROTATE_180:
+                    return 180;
+                case android.media.ExifInterface.ORIENTATION_ROTATE_270:
+                    return 270;
+                default:
+                    return 0;
+            }
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
+    // Helper: Apply intensity to f_number (higher f-number = gentler blur).
+    // intensity=100 keeps the 18PM baseline f-number (2.8 / 4.5);
+    // intensity=75 stops down gently (~3.85 / 6.2) for cleaner edges on 14U's single-bokeh engine;
+    // intensity=0 stops down to f/15.5 (minimal blur within libanc's [1.0, 16.0) range).
+    private float applyIntensity(float baseFNumber) {
+        if (intensity <= 0) {
+            return 15.5f;
+        }
+        float scale = 1.0f + ((100 - intensity) / 100.0f) * 1.5f;
+        float adjusted = baseFNumber * scale;
+        return Math.max(1.2f, Math.min(15.5f, adjusted));
     }
     
     // Helper: Convert depth map to float array
