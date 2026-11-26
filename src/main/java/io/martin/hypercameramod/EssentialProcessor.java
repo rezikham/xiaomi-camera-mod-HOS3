@@ -452,6 +452,28 @@ final class EssentialProcessor {
                 || (source[0] & 0xFF) != 0xFF || (source[1] & 0xFF) != 0xD8) {
             return processed;
         }
+        boolean processedHasXmp = false;
+        int k = 2;
+        while (k + 4 <= processed.length && (processed[k] & 0xFF) == 0xFF) {
+            int marker = processed[k + 1] & 0xFF;
+            if (marker == 0xDA || marker == 0xD9) {
+                break;
+            }
+            int length = ((processed[k + 2] & 0xFF) << 8) | (processed[k + 3] & 0xFF);
+            if (length < 2 || k + length + 2 > processed.length) {
+                break;
+            }
+            if (marker == 0xE1 && length >= 31
+                    && processed[k + 4] == 'h' && processed[k + 5] == 't'
+                    && processed[k + 6] == 't' && processed[k + 7] == 'p'
+                    && processed[k + 8] == ':' && processed[k + 9] == '/'
+                    && processed[k + 10] == '/' && processed[k + 11] == 'n'
+                    && processed[k + 12] == 's') {
+                processedHasXmp = true;
+                break;
+            }
+            k += length + 2;
+        }
         ByteArrayOutputStream out = new ByteArrayOutputStream(processed.length + 8192);
         out.write(processed, 0, 2);
         int i = 2;
@@ -475,7 +497,7 @@ final class EssentialProcessor {
                     && source[next] == 'h' && source[i + 5] == 't' && source[i + 6] == 't'
                     && source[i + 7] == 'p' && source[i + 8] == ':' && source[i + 9] == '/'
                     && source[i + 10] == '/' && source[i + 11] == 'n' && source[i + 12] == 's';
-            if (exif || xmp) {
+            if (exif || (xmp && !processedHasXmp)) {
                 out.write(source, i, length + 2);
             }
             i += length + 2;
