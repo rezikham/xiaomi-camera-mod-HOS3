@@ -480,7 +480,28 @@ final class EssentialProcessor {
             }
             i += length + 2;
         }
-        out.write(processed, 2, processed.length - 2);
+        int j = 2;
+        while (j + 4 <= processed.length && (processed[j] & 0xFF) == 0xFF) {
+            int marker = processed[j + 1] & 0xFF;
+            if (marker == 0xDA || marker == 0xD9) {
+                break;
+            }
+            int length = ((processed[j + 2] & 0xFF) << 8) | (processed[j + 3] & 0xFF);
+            if (length < 2 || j + length + 2 > processed.length) {
+                break;
+            }
+            boolean procExif = marker == 0xE1 && length >= 8
+                    && processed[j + 4] == 'E' && processed[j + 5] == 'x'
+                    && processed[j + 6] == 'i' && processed[j + 7] == 'f'
+                    && processed[j + 8] == 0 && processed[j + 9] == 0;
+            if (!procExif) {
+                out.write(processed, j, length + 2);
+            }
+            j += length + 2;
+        }
+        if (j < processed.length) {
+            out.write(processed, j, processed.length - j);
+        }
         return out.toByteArray();
     }
 }

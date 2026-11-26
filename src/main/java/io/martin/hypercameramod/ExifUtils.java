@@ -26,8 +26,10 @@ public final class ExifUtils {
 
     private static final String TAG = "HCM-ExifUtils";
 
-    /** EXIF tag id for legendmode, as read by Gallery. */
+    /** EXIF tag id for legendmode, as read by Gallery (ExifIFD). */
     public static final int TAG_LEGENDMODE = 34992; // 0x88B0
+    /** IFD0 tag pointing to ExifIFD. */
+    private static final int TAG_EXIF_IFD = 0x8769;
 
     /** EXIF type codes. */
     private static final int TYPE_BYTE = 1;
@@ -61,7 +63,8 @@ public final class ExifUtils {
         }
 
         try {
-            return injectLegendModeIntoExif(jpeg, (byte) legendMode);
+            byte[] withExif = injectLegendModeIntoExif(jpeg, (byte) legendMode);
+            return injectLegendXmp(withExif, legendMode);
         } catch (Throwable t) {
             Log.w(TAG, "EXIF injection failed: " + t);
             return jpeg;
@@ -101,11 +104,12 @@ public final class ExifUtils {
     }
 
     /**
-     * Appends a second IFD0 that carries the legend tag and points the TIFF header at it.
+     * Injects {@link #TAG_LEGENDMODE} (0x88B0) into ExifIFD (IfdId=2), where Gallery's
+     * {@code ExifUtil.isEssentialPhoto()} reads it.
      *
-     * <p>The original IFD0 and every data block keep their offsets, so MakerNotes, the
-     * thumbnail IFD and vendor blocks stay valid. Rewriting IFD0 in place would shift all
-     * following data by 12 bytes and break every absolute offset in the EXIF.
+     * <p>Inserts the 12-byte entry in-place at the end of ExifIFD and shifts all TIFF
+     * pointers/offsets at or beyond the insertion point by +12 so streaming parsers
+     * such as {@code com.miui.gallery3d.exif.ExifParser} never have to seek backwards.
      */
     private static byte[] injectIntoExifSegment(byte[] jpeg, int exifOffset, int exifLength,
                                                  byte legendMode) {
@@ -130,64 +134,161 @@ public final class ExifUtils {
             return jpeg;
         }
         int ifd0Offset = read32(jpeg, tiffOffset + 4, order);
-        int ifd0Abs = tiffOffset + ifd0Offset;
-        if (ifd0Offset < 0 || ifd0Abs + 2 > jpeg.length) {
+        if (ifd0Offset < 0 || tiffOffset + ifd0Offset + 2 > jpeg.length) {
             Log.w(TAG, "IFD0 offset out of bounds");
             return jpeg;
         }
-        int entryCount = read16(jpeg, ifd0Abs, order);
-        int entriesStart = ifd0Abs + 2;
+
+        byte[] tiff = new byte[tiffLength];
+        System.arraycopy(jpeg, tiffOffset, tiff, 0, tiffLength);
+
+        int entryCount = read16(tiff, ifd0Offset, order);
+        int entriesStart = ifd0Offset + 2;
         int nextPointer = entriesStart + entryCount * 12;
-        if (entryCount < 0 || nextPointer + 4 > jpeg.length) {
+        if (entryCount < 0 || nextPointer + 4 > tiffLength) {
             Log.w(TAG, "IFD0 entry list out of bounds");
             return jpeg;
         }
 
-        // Update the value in place when the tag is already present.
+        int exifIfdOffset = -1;
         for (int n = 0; n < entryCount; n++) {
             int entry = entriesStart + n * 12;
-            if (read16(jpeg, entry, order) == TAG_LEGENDMODE) {
-                int type = read16(jpeg, entry + 2, order);
-                long count = read32(jpeg, entry + 4, order) & 0xFFFFFFFFL;
-                if (type == TYPE_BYTE && count == 1) {
-                    jpeg[entry + 8] = legendMode;
-                }
-                return jpeg;
+            if (read16(tiff, entry, order) == TAG_EXIF_IFD) {
+                exifIfdOffset = read32(tiff, entry + 8, order);
+                break;
             }
         }
 
-        int newIfd0Size = 2 + (entryCount + 1) * 12 + 4;
-        int newExifLength = exifLength + newIfd0Size;
-        if (newExifLength > 0xFFFF || tiffLength + newIfd0Size > 0xFFFF) {
+        if (exifIfdOffset > 0 && exifIfdOffset + 2 <= tiffLength) {
+            int exifCount = read16(tiff, exifIfdOffset, order);
+            int exifEntriesStart = exifIfdOffset + 2;
+            int insertPoint = exifEntriesStart + exifCount * 12;
+            if (exifCount < 0 || insertPoint + 4 > tiffLength) {
+                Log.w(TAG, "ExifIFD entry list out of bounds");
+                return jpeg;
+            }
+
+            // Update in place if 0x88B0 already exists in ExifIFD.
+            for (int n = 0; n < exifCount; n++) {
+                int entry = exifEntriesStart + n * 12;
+                if (read16(tiff, entry, order) == TAG_LEGENDMODE) {
+                    int type = read16(tiff, entry + 2, order);
+                    long count = read32(tiff, entry + 4, order) & 0xFFFFFFFFL;
+                    if (type == TYPE_BYTE && count == 1) {
+                        jpeg[tiffOffset + entry + 8] = legendMode;
+                    }
+                    return jpeg;
+                }
+            }
+
+            int newExifLength = exifLength + 12;
+            if (newExifLength > 0xFFFF) {
+                Log.w(TAG, "EXIF segment would overflow");
+                return jpeg;
+            }
+
+            shiftOffsetsFrom(tiff, ifd0Offset, insertPoint, 12, order, new java.util.HashSet<>());
+            put16(tiff, exifIfdOffset, exifCount + 1, order);
+
+            byte[] newTiff = new byte[tiffLength + 12];
+            System.arraycopy(tiff, 0, newTiff, 0, insertPoint);
+            writeLegendEntry(newTiff, insertPoint, legendMode, order);
+            System.arraycopy(tiff, insertPoint, newTiff, insertPoint + 12, tiffLength - insertPoint);
+            return replaceApp1Tiff(jpeg, exifOffset, exifLength, newExifLength, tiffOffset, newTiff);
+        }
+
+        // Fallback: no ExifIFD present — insert 0x8769 into IFD0 in-place and append 1-entry ExifIFD.
+        int insertPoint = nextPointer;
+        int exifIfdBlockSize = 2 + 12 + 4;
+        int newExifLength = exifLength + 12 + exifIfdBlockSize;
+        if (newExifLength > 0xFFFF) {
             Log.w(TAG, "EXIF segment would overflow");
             return jpeg;
         }
-        int oldNext = read32(jpeg, nextPointer, order);
-        int newIfdOffset = tiffLength;
+        shiftOffsetsFrom(tiff, ifd0Offset, insertPoint, 12, order, new java.util.HashSet<>());
+        put16(tiff, ifd0Offset, entryCount + 1, order);
+        int newExifIfdOffset = tiffLength + 12;
 
-        byte[] tiff = new byte[tiffLength + newIfd0Size];
-        System.arraycopy(jpeg, tiffOffset, tiff, 0, tiffLength);
-        put32(tiff, 4, newIfdOffset, order);
+        byte[] newTiff = new byte[tiffLength + 12 + exifIfdBlockSize];
+        System.arraycopy(tiff, 0, newTiff, 0, insertPoint);
+        writeExifPtrEntry(newTiff, insertPoint, newExifIfdOffset, order);
+        System.arraycopy(tiff, insertPoint, newTiff, insertPoint + 12, tiffLength - insertPoint);
+        put16(newTiff, newExifIfdOffset, 1, order);
+        writeLegendEntry(newTiff, newExifIfdOffset + 2, legendMode, order);
+        put32(newTiff, newExifIfdOffset + 14, 0, order);
+        return replaceApp1Tiff(jpeg, exifOffset, exifLength, newExifLength, tiffOffset, newTiff);
+    }
 
-        int p = tiffLength;
-        put16(tiff, p, entryCount + 1, order);
-        p += 2;
-        System.arraycopy(jpeg, entriesStart, tiff, p, entryCount * 12);
-        p += entryCount * 12;
-        put16(tiff, p, TAG_LEGENDMODE, order);
-        p += 2;
-        put16(tiff, p, TYPE_BYTE, order);
-        p += 2;
-        put32(tiff, p, 1, order);
-        p += 4;
-        tiff[p] = legendMode;
-        tiff[p + 1] = 0;
-        tiff[p + 2] = 0;
-        tiff[p + 3] = 0;
-        p += 4;
-        put32(tiff, p, oldNext, order);
+    private static void shiftOffsetsFrom(byte[] tiff, int ifdOffset, int insertPoint, int delta,
+                                         ByteOrder order, java.util.Set<Integer> visited) {
+        if (ifdOffset <= 0 || ifdOffset + 2 > tiff.length || !visited.add(ifdOffset)) {
+            return;
+        }
+        int count = read16(tiff, ifdOffset, order);
+        int entriesStart = ifdOffset + 2;
+        int nextPtr = entriesStart + count * 12;
+        if (count < 0 || nextPtr + 4 > tiff.length) {
+            return;
+        }
+        for (int n = 0; n < count; n++) {
+            int entry = entriesStart + n * 12;
+            int tag = read16(tiff, entry, order);
+            int type = read16(tiff, entry + 2, order);
+            int num = read32(tiff, entry + 4, order);
+            int val = read32(tiff, entry + 8, order);
+            if (tag == TAG_EXIF_IFD || tag == 0x8825 || tag == 0xA005) {
+                shiftOffsetsFrom(tiff, val, insertPoint, delta, order, visited);
+                if (val >= insertPoint) {
+                    put32(tiff, entry + 8, val + delta, order);
+                }
+            } else {
+                long byteLen = (long) tiffTypeSize(type) * (num & 0xFFFFFFFFL);
+                if (byteLen > 4 || tag == 0x0201) {
+                    if (val >= insertPoint) {
+                        put32(tiff, entry + 8, val + delta, order);
+                    }
+                }
+            }
+        }
+        int nextIfd = read32(tiff, nextPtr, order);
+        if (nextIfd > 0) {
+            shiftOffsetsFrom(tiff, nextIfd, insertPoint, delta, order, visited);
+            if (nextIfd >= insertPoint) {
+                put32(tiff, nextPtr, nextIfd + delta, order);
+            }
+        }
+    }
 
-        ByteArrayOutputStream out = new ByteArrayOutputStream(jpeg.length + 12);
+    private static int tiffTypeSize(int type) {
+        return switch (type) {
+            case 1, 2, 6, 7 -> 1;
+            case 3, 8 -> 2;
+            case 4, 9, 11 -> 4;
+            case 5, 10, 12 -> 8;
+            default -> 1;
+        };
+    }
+
+    private static void writeLegendEntry(byte[] dst, int offset, byte legendMode, ByteOrder order) {
+        put16(dst, offset, TAG_LEGENDMODE, order);
+        put16(dst, offset + 2, TYPE_BYTE, order);
+        put32(dst, offset + 4, 1, order);
+        dst[offset + 8] = legendMode;
+        dst[offset + 9] = 0;
+        dst[offset + 10] = 0;
+        dst[offset + 11] = 0;
+    }
+
+    private static void writeExifPtrEntry(byte[] dst, int offset, int exifIfdOffset, ByteOrder order) {
+        put16(dst, offset, TAG_EXIF_IFD, order);
+        put16(dst, offset + 2, TYPE_LONG, order);
+        put32(dst, offset + 4, 1, order);
+        put32(dst, offset + 8, exifIfdOffset, order);
+    }
+
+    private static byte[] replaceApp1Tiff(byte[] jpeg, int exifOffset, int exifLength,
+                                          int newExifLength, int tiffOffset, byte[] tiff) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream(jpeg.length + 24);
         out.write(jpeg, 0, exifOffset + 2);
         out.write((newExifLength >> 8) & 0xFF);
         out.write(newExifLength & 0xFF);
@@ -247,24 +348,28 @@ public final class ExifUtils {
     }
 
     private static byte[] createExifSegment(byte[] jpeg, byte legendMode) {
-        // Build a minimal EXIF segment with IFD0 containing the legendmode tag
+        // Build a minimal EXIF segment with IFD0 -> 0x8769 -> ExifIFD containing 0x88B0.
         // TIFF header: II (little endian), 0x2A, IFD0 offset = 8
         ByteArrayOutputStream tiff = new ByteArrayOutputStream();
         tiff.write(0x49); tiff.write(0x49); // II (little endian)
         tiff.write(0x2A); tiff.write(0x00); // magic
         tiff.write(0x08); tiff.write(0x00); tiff.write(0x00); tiff.write(0x00); // IFD0 offset = 8
 
-        // IFD0: entry count = 1
+        // IFD0: entry count = 1 (0x8769 ExifIFDPointer -> offset 26 = 8 + 2 + 12 + 4)
         tiff.write(0x01); tiff.write(0x00);
+        tiff.write(0x69); tiff.write(0x87); // tag = 0x8769
+        tiff.write(0x04); tiff.write(0x00); // type = LONG
+        tiff.write(0x01); tiff.write(0x00); tiff.write(0x00); tiff.write(0x00); // count = 1
+        tiff.write(0x1A); tiff.write(0x00); tiff.write(0x00); tiff.write(0x00); // offset = 26
+        tiff.write(0x00); tiff.write(0x00); tiff.write(0x00); tiff.write(0x00); // next IFD = 0
 
-        // Entry: tag=0x88B0, type=BYTE(1), count=1, value=legendMode
-        tiff.write(0xB0); tiff.write(0x88); // tag
+        // ExifIFD at offset 26: entry count = 1 (0x88B0 legendMode)
+        tiff.write(0x01); tiff.write(0x00);
+        tiff.write(0xB0); tiff.write(0x88); // tag = 0x88B0
         tiff.write(0x01); tiff.write(0x00); // type = BYTE
         tiff.write(0x01); tiff.write(0x00); tiff.write(0x00); tiff.write(0x00); // count = 1
         tiff.write(legendMode); tiff.write(0x00); tiff.write(0x00); tiff.write(0x00); // value
-
-        // Next IFD offset = 0
-        tiff.write(0x00); tiff.write(0x00); tiff.write(0x00); tiff.write(0x00);
+        tiff.write(0x00); tiff.write(0x00); tiff.write(0x00); tiff.write(0x00); // next IFD = 0
 
         byte[] tiffBytes = tiff.toByteArray();
 
@@ -299,11 +404,149 @@ public final class ExifUtils {
             return jpeg;
         }
         try {
-            return injectLegendModeIntoExif(jpeg, (byte) legendMode);
+            byte[] withExif = injectLegendModeIntoExif(jpeg, (byte) legendMode);
+            return injectLegendXmp(withExif, legendMode);
         } catch (Throwable t) {
             Log.w(TAG, "legendmode injection failed: " + t);
             return jpeg;
         }
+    }
+
+    /**
+     * Injects Xiaomi's {@code http://ns.xiaomi.com/photos/1.0/container/} XMP directory entry
+     * required by MediaEditor's {@code LegendaryActivity} ({@code LegendInfoExtraManager}) so
+     * tapping the Gallery LEICA badge parses M3 ({@code Legend.MONOPAN}) and M9 ({@code Legend.M9})
+     * cleanly instead of failing with "couldn't parse image".
+     */
+    private static byte[] injectLegendXmp(byte[] jpeg, int legendMode) {
+        String legendName;
+        if (legendMode == 1) {
+            legendName = "Legend.M9";
+        } else if (legendMode == 2) {
+            legendName = "Legend.MONOPAN";
+        } else {
+            return jpeg;
+        }
+
+        int width = 0;
+        int height = 0;
+        int xmpOffset = -1;
+        int xmpLength = -1;
+        int insertAfterExif = 2;
+
+        final byte[] xmpHeader = "http://ns.adobe.com/xap/1.0/\0".getBytes(
+                java.nio.charset.StandardCharsets.US_ASCII);
+
+        int i = 2;
+        while (i + 4 <= jpeg.length && (jpeg[i] & 0xFF) == 0xFF) {
+            int marker = jpeg[i + 1] & 0xFF;
+            if (marker == 0xDA || marker == 0xD9) {
+                break;
+            }
+            int length = ((jpeg[i + 2] & 0xFF) << 8) | (jpeg[i + 3] & 0xFF);
+            if (length < 2 || i + length + 2 > jpeg.length) {
+                break;
+            }
+            if ((marker == 0xC0 || marker == 0xC1 || marker == 0xC2) && length >= 7) {
+                height = ((jpeg[i + 5] & 0xFF) << 8) | (jpeg[i + 6] & 0xFF);
+                width = ((jpeg[i + 7] & 0xFF) << 8) | (jpeg[i + 8] & 0xFF);
+            } else if (marker == 0xE1 && length >= 8
+                    && jpeg[i + 4] == 'E' && jpeg[i + 5] == 'x'
+                    && jpeg[i + 6] == 'i' && jpeg[i + 7] == 'f'
+                    && jpeg[i + 8] == 0 && jpeg[i + 9] == 0) {
+                insertAfterExif = i + length + 2;
+            } else if (marker == 0xE1 && xmpOffset < 0 && length >= 2 + xmpHeader.length) {
+                boolean match = true;
+                for (int k = 0; k < xmpHeader.length; k++) {
+                    if (jpeg[i + 4 + k] != xmpHeader[k]) {
+                        match = false;
+                        break;
+                    }
+                }
+                if (match) {
+                    xmpOffset = i;
+                    xmpLength = length;
+                }
+            }
+            i += length + 2;
+        }
+
+        String descSnippet =
+                "  <rdf:Description rdf:about=\"\"\n"
+                        + "    xmlns:Directory=\"http://ns.xiaomi.com/photos/1.0/container/\"\n"
+                        + "    xmlns:Item=\"http://ns.google.com/photos/1.0/container/item/\">\n"
+                        + "   <Directory:Directory>\n"
+                        + "    <rdf:Seq>\n"
+                        + "     <rdf:li rdf:parseType=\"Resource\">\n"
+                        + "      <Directory:Item\n"
+                        + "       Item:name=\"" + legendName + "\"\n"
+                        + "       Item:width=\"" + width + "\"\n"
+                        + "       Item:height=\"" + height + "\"\n"
+                        + "       Item:Offset=\"0\"\n"
+                        + "       Item:length=\"0\"\n"
+                        + "       Item:Orient=\"0\"\n"
+                        + "       Item:UseMainImage=\"1\"/>\n"
+                        + "     </rdf:li>\n"
+                        + "    </rdf:Seq>\n"
+                        + "   </Directory:Directory>\n"
+                        + "  </rdf:Description>\n";
+
+        if (xmpOffset >= 0) {
+            int payloadStart = xmpOffset + 4 + xmpHeader.length;
+            int payloadLen = xmpLength - 2 - xmpHeader.length;
+            if (payloadLen <= 0 || payloadStart + payloadLen > jpeg.length) {
+                return jpeg;
+            }
+            String existing = new String(jpeg, payloadStart, payloadLen,
+                    java.nio.charset.StandardCharsets.UTF_8);
+            if (existing.contains("http://ns.xiaomi.com/photos/1.0/container/")) {
+                return jpeg;
+            }
+            int rdfEnd = existing.lastIndexOf("</rdf:RDF>");
+            if (rdfEnd < 0) {
+                return jpeg;
+            }
+            byte[] newPayload = (existing.substring(0, rdfEnd) + descSnippet
+                    + existing.substring(rdfEnd)).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            int newSegLen = 2 + xmpHeader.length + newPayload.length;
+            if (newSegLen > 0xFFFF) {
+                Log.w(TAG, "XMP segment would overflow");
+                return jpeg;
+            }
+            ByteArrayOutputStream out = new ByteArrayOutputStream(jpeg.length + descSnippet.length());
+            out.write(jpeg, 0, xmpOffset);
+            out.write(0xFF);
+            out.write(0xE1);
+            out.write((newSegLen >> 8) & 0xFF);
+            out.write(newSegLen & 0xFF);
+            out.write(xmpHeader, 0, xmpHeader.length);
+            out.write(newPayload, 0, newPayload.length);
+            int afterXmp = xmpOffset + 2 + xmpLength;
+            out.write(jpeg, afterXmp, jpeg.length - afterXmp);
+            return out.toByteArray();
+        }
+
+        String fullXmp =
+                "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"Adobe XMP Core 5.1.2\">\n"
+                        + " <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n"
+                        + descSnippet
+                        + " </rdf:RDF>\n"
+                        + "</x:xmpmeta>";
+        byte[] payload = fullXmp.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        int segLen = 2 + xmpHeader.length + payload.length;
+        if (segLen > 0xFFFF) {
+            return jpeg;
+        }
+        ByteArrayOutputStream out = new ByteArrayOutputStream(jpeg.length + segLen + 2);
+        out.write(jpeg, 0, insertAfterExif);
+        out.write(0xFF);
+        out.write(0xE1);
+        out.write((segLen >> 8) & 0xFF);
+        out.write(segLen & 0xFF);
+        out.write(xmpHeader, 0, xmpHeader.length);
+        out.write(payload, 0, payload.length);
+        out.write(jpeg, insertAfterExif, jpeg.length - insertAfterExif);
+        return out.toByteArray();
     }
 
     /** Copy the source JPEG's EXIF APP1 segment into the processed JPEG. */
