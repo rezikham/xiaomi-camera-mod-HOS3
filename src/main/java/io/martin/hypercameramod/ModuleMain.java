@@ -717,7 +717,9 @@ public class ModuleMain extends XposedModule {
     // ---- 2. Original colour style -------------------------------------------------------------
 
     private void installStylizationHook() {
-        if (stylizationHooked || DeviceSupport.family() == DeviceSupport.XIAOMI_13_ULTRA) {
+        if (stylizationHooked
+                || (DeviceSupport.family() == DeviceSupport.XIAOMI_13_ULTRA
+                        && !propertyOn("camera.feature.ishtar_original_photo"))) {
             return;
         }
         try {
@@ -1446,6 +1448,14 @@ public class ModuleMain extends XposedModule {
                     return chain.proceed();
                 }
                 String name = requestKey.getName();
+                // Essential Moment (256) sets bokehRole (0x819d0004, an availableSessionKey) on
+                // repeating preview requests via applyCvLens(1000) but omits it from one-shot AF
+                // trigger requests, forcing two Camera3 stream reconfigurations on every tap and
+                // cancelling tap-to-focus before the lens moves.
+                if (currentModuleId == ESSENTIAL_MODE
+                        && "com.xiaomi.sessionparams.bokehRole".equals(name)) {
+                    return null;
+                }
                 if (currentModuleId == MODE_PORTRAIT) {
                     Object val = chain.getArg(1);
                     if (CaptureRequest.SCALER_CROP_REGION.equals(requestKey)

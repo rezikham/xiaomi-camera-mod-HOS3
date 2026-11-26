@@ -31,7 +31,7 @@ Package: `io.rezikham.hypercameramod`
 | Device | Model / codename | OS | Camera | Verified |
 | ------ | ---------------- | -- | ------ | -------- |
 | Xiaomi 14 Ultra | `24031PN0DC` / aurora | HyperOS `3.0.304.0.WNAMIXM` (Android 16) | `6.7.000280.0` | Original Portrait toggle (software), film filters, HAL module experimental |
-| Xiaomi 13 Ultra | `2304FPN6DC` / ishtar | HyperOS `3.0.308.0.WMACNXM` (Android 16) | `6.7.000280.0` | Leica Looks (M3/M9/M10R, POS/NEG), film filters, Moment App post-capture, Portrait; Original Photo hangs HAL |
+| Xiaomi 13 Ultra | `2304FPN6DC` / ishtar | HyperOS `3.0.308.0.WMACNXM` (Android 16) | `6.7.000280.0` | Leica Looks (M3/M9/M10R, POS/NEG), film filters, Moment App post-capture + tap-to-focus, Portrait, Original Photo (with `hcm-ishtar-original` HAL fix) |
 | Xiaomi 14 Pro Ti | `23116PN5BC` / shennong | HyperOS `3.0.310.0.WNBCNXM` (Android 16) | `6.4.000430.0` | film filters |
 | Xiaomi 18 Pro Max | `M154FF` / madrid | HyperOS `4.0.29.0.XEOCNXM` (Android 17) | `6.8.002230.0` | film filters (static, needs a device log); Legend/M10R native |
 
@@ -57,7 +57,7 @@ The module can only expose what the phone's camera hardware layer (`camera.qcom.
 | ------- | --------------- | --------------- | --------------- | ----------------- |
 | Palette and Parameters | ✅ (preview; no 18PM HAL bridge) | ✅ | ✅ | ✅ |
 | Film filters | ✅ | ✅ | ✅ | ✅ |
-| Original colour style (Photo) | ❌ HAL hangs (disabled on `ishtar`) | ✅ | ✅ | ✅ |
+| Original colour style (Photo) | ✅ (with `hcm-ishtar-original` HAL fix) | ✅ | ✅ | ✅ |
 | **Original portrait style (software)** | ⚠️ Needs scene depth verification | ⚠️ Opt-in — post-capture, uses depth map | ✅ (on by default, native) | ✅ (on by default, native) |
 | Leica Essential (M3/M9) | ⚠️ Moment App post-capture | ⚠️ stock HAL cannot process; Moment App post-capture | ✅ | ✅ |
 | Moment App pipeline (M3/M9) | ✅ (fallback when `essential_mode_enabled` is on) | ⚠️ Off by default; enable in settings | ✅ | ✅ |
@@ -74,7 +74,8 @@ These are firmware limitations for native processing. The module provides **soft
 
 **13 Ultra (`ishtar`) notes (Camera `6.7.000280.0`, HyperOS `3.0.308.0.WMACNXM`):**
 - `camera.debug.mivi3.output.jpeg=true` must **not** be enabled on `ishtar`: MIVI3 outputs raw 12 MiB (`4096×3072`) non-JPEG buffers instead of valid JPEGs (`camera-mod-ksu` skips setting this property on `ishtar`).
-- **Original style in Photo mode** hangs the `ishtar` HAL, so `STYLIZATION_ORIGINAL` is skipped on `ishtar`.
+- **Original style in Photo mode (`LEICA ORIG`):** Stock `ishtar` `/odm/lib64/hw/com.qti.chi.override.so` has an off-by-one UBSan bounds check in `ExtensionModule::GetbokehFallbackLuxThreshold` (`cmp w9, #0x2` before a `[2][8]` array), causing `SIGABRT` when `stylizationType == 2`. Patching it with `tools/hal-port/ishtar/patch_chi_original_13u.py` (`hcm-ishtar-original-v1.0.zip`, which also sets `camera.feature.ishtar_original_photo=1`) makes native Original Photo work cleanly with zero crashes. Without the patch, `STYLIZATION_ORIGINAL` stays disabled on `ishtar`.
+- **Essential Moment tap-to-focus:** Camera 6.7 sets `com.xiaomi.sessionparams.bokehRole` (`0x819d0004`) on repeating requests in mode `256` but omits it from one-shot AF triggers, forcing Camera3 stream reconfiguration on every tap; HyperCameraMod strips `bokehRole` in Essential Moment so touch AF locks normally.
 - Tapping the **Aperture** toggle inside the swipe-down menu crashes Camera `6.7.000280.0` (`TopConfigItem` NPE); moving the Aperture toggle to the top bar works normally.
 - `hcm-palette-18pm` (18PM Palette HAL Bridge) does not apply to `ishtar` because `/odm/lib64/camera/plugins/com.xiaomi.plugin.filter.so` is not present on 13 Ultra.
 
