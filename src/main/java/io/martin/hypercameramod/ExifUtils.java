@@ -20,6 +20,7 @@ import java.nio.file.Files;
  * Values:
  *   1 = M9 (CCD colour)
  *   2 = M3 (B&W Monopan)
+ *   3 = M10R (CMOS colour)
  */
 public final class ExifUtils {
 

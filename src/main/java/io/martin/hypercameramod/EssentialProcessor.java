@@ -471,7 +471,11 @@ final class EssentialProcessor {
             boolean exif = marker == 0xE1 && length >= 8
                     && source[next] == 'E' && source[i + 5] == 'x' && source[i + 6] == 'i'
                     && source[i + 7] == 'f' && source[i + 8] == 0 && source[i + 9] == 0;
-            if (exif) {
+            boolean xmp = marker == 0xE1 && length >= 31
+                    && source[next] == 'h' && source[i + 5] == 't' && source[i + 6] == 't'
+                    && source[i + 7] == 'p' && source[i + 8] == ':' && source[i + 9] == '/'
+                    && source[i + 10] == '/' && source[i + 11] == 'n' && source[i + 12] == 's';
+            if (exif || xmp) {
                 out.write(source, i, length + 2);
             }
             i += length + 2;

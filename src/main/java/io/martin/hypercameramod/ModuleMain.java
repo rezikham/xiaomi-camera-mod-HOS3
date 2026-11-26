@@ -57,16 +57,19 @@ public class ModuleMain extends XposedModule {
     // 1. Palette and Parameters
     private static final String STYLE_VERSION_KEY = "camera.feature.styleVersion";
     private static final int STYLE_VERSION = 2;
-    // Leica UI theme selection (LCC). The camera picks the Leica provider when
-    // Te.b.V() is true, i.e. ro.theme_customize == "LCC" and the debug override is off.
-    private static final String LEICA_THEME_KEY = "leica_theme_enabled";
-    private static final String RO_THEME_KEY = "ro.theme_customize";
-    private static final String THEME_DEBUG_KEY = "camera.debug.theme_customize.disabled";
-    private static volatile boolean realLccTheme;
 
     // 2. Original colour style
     private static final String STYLIZATION_KEY = "xiaomi.capabilities.stylizationTypeMask";
     private static final int STYLIZATION_ORIGINAL = 1 << 3;
+    private static final String LEGEND_MODE_KEY = "com.xiaomi.sessionparams.legendMode";
+    private static final String STYLIZATION_TYPE_KEY = "com.xiaomi.sessionparams.stylizationType";
+    private static final ThreadLocal<Byte> BRIDGE_LEGEND = new ThreadLocal<>();
+    // Last Legendary style seen in a request: 1 = M9, 2 = M3. Used by the LUT fallback and by
+    // the optional Essential pipeline. The timestamp lets the pipeline ignore a stale selection.
+    private static volatile byte lastLegend;
+    private static volatile long lastLegendTime;
+    private static final ThreadLocal<Boolean> BRIDGE_SETTING = ThreadLocal.withInitial(() -> false);
+
     // 3. M10R. The Leica Essential style list builds M3 (B&W) and M9 (CCD); a profile names where
     // that list and its item class live in one camera layout.
     private record LegendProfile(String name, String listClass, String itemClass,
@@ -99,18 +102,20 @@ public class ModuleMain extends XposedModule {
     // settings toggle decides (see originalPortraitEnabled()).
     private static final int MODE_PORTRAIT = 171;
     private static final String ORIGINAL_PORTRAIT_KEY = "original_portrait_enabled";
-    private static final String LEGEND_MODE_KEY = "com.xiaomi.sessionparams.legendMode";
-    private static final String STYLIZATION_TYPE_KEY = "com.xiaomi.sessionparams.stylizationType";
-    private static final ThreadLocal<Byte> BRIDGE_LEGEND = new ThreadLocal<>();
-    private static volatile byte lastLegend;
-    private static volatile long lastLegendTime;
-    private static final ThreadLocal<Boolean> BRIDGE_SETTING = ThreadLocal.withInitial(() -> false);
-    private static final String HAL_GATE_KEY = "camera.debug.mivi3.output.jpeg";
     private static final String COMPAT_FALLBACK_KEY = "compat_fallback_enabled";
+    // Genuine Moment App M3/M9 pipeline. Off by default. Runs all native work in the
+    // module's private :essential process (EssentialService), never in the camera process.
     private static final String ESSENTIAL_PIPELINE_KEY = "essential_pipeline_enabled";
     private static final String ESSENTIAL_PIPELINE_PROP = "camera.feature.essential_pipeline";
-    private static final String HAL_LUT_SLOT_KEY = "hal_lut_slot_enabled";
     private static final long ESSENTIAL_LEGEND_FRESH_MS = 180_000;
+    // The stock filter node (com.xiaomi.plugin.filter / FilterInstance0) renders the look itself
+    // when the camera hands it the render payload. The camera only does that when
+    // camera.debug.mivi3.output.jpeg is true; otherwise it renders in the app and the HAL LUT is
+    // ignored. The gate is read once by the camera process, so the module can answer it here
+    // without root. The LUT file still lives in /data/vendor/camera and is installed by
+    // tools/hal-port/engine/leica_look.sh.
+    private static final String HAL_GATE_KEY = "camera.debug.mivi3.output.jpeg";
+    private static final String HAL_LUT_SLOT_KEY = "hal_lut_slot_enabled";
     private static final String ORIGINAL_PORTRAIT_PROP = "camera.feature.original_portrait";
     private static final int ASSET_ORIGINAL_BADGE = 3;
     private static volatile android.content.pm.ApplicationInfo moduleInfo;
@@ -144,11 +149,11 @@ public class ModuleMain extends XposedModule {
     private volatile boolean stylizationHooked;
     private volatile boolean legendBridgeHooked;
     private volatile boolean legendObserverHooked;
-    private volatile boolean lutHooked;
     private volatile boolean legendHooked;
     private volatile boolean assetsHooked;
     private volatile boolean styleHooked;
     private volatile boolean textHooked;
+    private volatile boolean paletteCaptureHooked;
     // -1 = not read yet, 0 = off, 1 = on. Read once per Camera process.
     private volatile int originalPortraitState = -1;
     // LUT files staged to /data/vendor/camera/ on first M3/M9 selection.
@@ -184,7 +189,6 @@ public class ModuleMain extends XposedModule {
         }
         log(Log.INFO, TAG, "HAL capabilities: " + HalCapabilities.summary());
         installPropertyHook();
-        installThemeHook(loader);
         installTabHook();
         installModeListHook(loader);
         installNameStyleHook(loader);
@@ -197,6 +201,7 @@ public class ModuleMain extends XposedModule {
         installBlurRadiusHook(loader);
         installLegendHook(loader);
         installStyleHook(loader);
+        installPaletteCaptureHook(loader);
         installLeicaLooksEntries(loader);
         installFilterStripEntries(loader);
         if (!problems.isEmpty() && stage.equals("onPackageLoaded")) {
@@ -264,23 +269,6 @@ public class ModuleMain extends XposedModule {
         }
         try {
             Class<?> props = Class.forName("android.os.SystemProperties");
-            // Remember the real LCC state before installing the override.
-            try {
-                Method getStr = props.getDeclaredMethod("get", String.class, String.class);
-                getStr.setAccessible(true);
-                String theme = (String) getStr.invoke(null, RO_THEME_KEY, "");
-                boolean debug = false;
-                try {
-                    Method getBool = props.getDeclaredMethod("getBoolean", String.class,
-                            boolean.class);
-                    getBool.setAccessible(true);
-                    debug = (Boolean) getBool.invoke(null, THEME_DEBUG_KEY, false);
-                } catch (Throwable ignored) {
-                }
-                realLccTheme = "LCC".equals(theme) && !debug;
-            } catch (Throwable t) {
-                realLccTheme = false;
-            }
             hook(props.getDeclaredMethod("getInt", String.class, int.class)).intercept(chain -> {
                 Object result = chain.proceed();
                 if (STYLE_VERSION_KEY.equals(chain.getArg(0)) && (Integer) result < STYLE_VERSION) {
@@ -289,77 +277,89 @@ public class ModuleMain extends XposedModule {
                 return result;
             });
             hook(props.getDeclaredMethod("get", String.class, String.class)).intercept(chain -> {
-                String key = (String) chain.getArg(0);
-                if (RO_THEME_KEY.equals(key)) {
-                    return leicaThemeEnabled() ? "LCC" : "";
-                }
                 Object result = chain.proceed();
-                if (STYLE_VERSION_KEY.equals(key) && parse(result) < STYLE_VERSION) {
+                if (STYLE_VERSION_KEY.equals(chain.getArg(0)) && parse(result) < STYLE_VERSION) {
                     return String.valueOf(STYLE_VERSION);
                 }
                 return result;
             });
             hook(props.getDeclaredMethod("get", String.class)).intercept(chain -> {
-                String key = (String) chain.getArg(0);
-                if (RO_THEME_KEY.equals(key)) {
-                    return leicaThemeEnabled() ? "LCC" : "";
-                }
                 Object result = chain.proceed();
-                if (STYLE_VERSION_KEY.equals(key) && parse(result) < STYLE_VERSION) {
+                if (STYLE_VERSION_KEY.equals(chain.getArg(0)) && parse(result) < STYLE_VERSION) {
                     return String.valueOf(STYLE_VERSION);
                 }
                 return result;
             });
-            try {
-                hook(props.getDeclaredMethod("getBoolean", String.class, boolean.class))
-                        .intercept(chain -> {
-                            if (THEME_DEBUG_KEY.equals(chain.getArg(0))) {
-                                return !leicaThemeEnabled();
-                            }
-                            return chain.proceed();
-                        });
-            } catch (NoSuchMethodException ignored) {
-            }
-            try {
-                hook(props.getDeclaredMethod("getBoolean", String.class)).intercept(chain -> {
-                    if (THEME_DEBUG_KEY.equals(chain.getArg(0))) {
-                        return !leicaThemeEnabled();
-                    }
-                    return chain.proceed();
-                });
-            } catch (NoSuchMethodException ignored) {
-            }
             propertiesHooked = true;
             log(Log.INFO, TAG, "hooked SystemProperties (" + STYLE_VERSION_KEY + " >= "
-                    + STYLE_VERSION + ", realLcc=" + realLccTheme + ")");
+                    + STYLE_VERSION + ")");
         } catch (Throwable t) {
             log(Log.WARN, TAG, "cannot hook SystemProperties: " + t);
         }
+        installHalGateHook();
     }
 
-    private boolean leicaThemeEnabled() {
+    // The camera caches camera.debug.mivi3.output.jpeg in a static field on first use
+    // (f16477e.B8() || Va.b.f17711X), so it must be answered before the app touches it. Hooking
+    // the property reads gives the same effect as setprop, per module preference.
+    private void installHalGateHook() {
+        if (halGateHooked) {
+            return;
+        }
+        try {
+            Class<?> props = Class.forName("android.os.SystemProperties");
+            hook(props.getDeclaredMethod("getBoolean", String.class, boolean.class)).intercept(chain -> {
+                Object result = chain.proceed();
+                if (HAL_GATE_KEY.equals(chain.getArg(0))
+                        && !Boolean.TRUE.equals(result) && halLutSlotEnabled()) {
+                    return true;
+                }
+                return result;
+            });
+            try {
+                hook(props.getDeclaredMethod("getBoolean", String.class)).intercept(chain -> {
+                    Object result = chain.proceed();
+                    if (HAL_GATE_KEY.equals(chain.getArg(0))
+                            && !Boolean.TRUE.equals(result) && halLutSlotEnabled()) {
+                        return true;
+                    }
+                    return result;
+                });
+            } catch (NoSuchMethodException ignored) {
+            }
+            hook(props.getDeclaredMethod("get", String.class, String.class)).intercept(chain -> {
+                Object result = chain.proceed();
+                if (HAL_GATE_KEY.equals(chain.getArg(0)) && halLutSlotEnabled()) {
+                    return "true";
+                }
+                return result;
+            });
+            hook(props.getDeclaredMethod("get", String.class)).intercept(chain -> {
+                Object result = chain.proceed();
+                if (HAL_GATE_KEY.equals(chain.getArg(0)) && halLutSlotEnabled()) {
+                    return "true";
+                }
+                return result;
+            });
+            halGateHooked = true;
+            log(Log.INFO, TAG, "hooked SystemProperties (" + HAL_GATE_KEY + " -> HAL when enabled)");
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot hook " + HAL_GATE_KEY + ": " + t);
+        }
+    }
+
+    private volatile boolean halGateHooked;
+
+    private boolean halLutSlotEnabled() {
         try {
             android.content.SharedPreferences p = getRemotePreferences("hypercameramod");
-            if (p != null && p.contains(LEICA_THEME_KEY)) {
-                return p.getBoolean(LEICA_THEME_KEY, realLccTheme);
+            if (p != null) {
+                return p.getBoolean(HAL_LUT_SLOT_KEY, false);
             }
         } catch (Throwable t) {
-            log(Log.WARN, TAG, "cannot read " + LEICA_THEME_KEY + ": " + t);
+            log(Log.WARN, TAG, "cannot read " + HAL_LUT_SLOT_KEY + ": " + t);
         }
-        return realLccTheme;
-    }
-
-    // The provider table is chosen in S9.a's static initializer. Hooking Te.b.V() keeps
-    // the choice in sync with the module setting even if a class was loaded early.
-    private void installThemeHook(ClassLoader loader) {
-        try {
-            Class<?> te = Class.forName("Te.b", false, loader);
-            Method v = te.getDeclaredMethod("V");
-            hook(v).intercept(chain -> leicaThemeEnabled());
-            log(Log.INFO, TAG, "hooked Te.b.V (Leica UI theme)");
-        } catch (Throwable t) {
-            log(Log.WARN, TAG, "cannot hook Te.b.V: " + t);
-        }
+        return false;
     }
 
     private static int parse(Object value) {
@@ -704,10 +704,14 @@ public class ModuleMain extends XposedModule {
     }
 
     private volatile boolean blurRadiusHooked;
+    private volatile boolean lutHooked;
     private final java.util.Map<String, LeicaLut> lutCache =
             new java.util.concurrent.ConcurrentHashMap<>();
-    private static final ThreadLocal<Boolean> IN_LUT = new ThreadLocal<>();
+
+    // Applies the reproduced Leica 64^3 LUT to the full-size bitmap right before JPEG encoding.
+    // Only active when the compatibility fallback is enabled and the app requested M9/M3.
     private volatile boolean watcherStarted;
+    private static final ThreadLocal<Boolean> IN_LUT = new ThreadLocal<>();
 
     // Post-process the saved JPEG when the camera app writes it. This avoids depending on the
     // app's internal encoder, which does not use Bitmap.compress on this build.
@@ -1155,18 +1159,6 @@ public class ModuleMain extends XposedModule {
 
     // Genuine Moment App pipeline (from Moment App). Off by default; all native work
     // happens in the module's :essential process.
-    private boolean halLutSlotEnabled() {
-        try {
-            android.content.SharedPreferences p = getRemotePreferences("hypercameramod");
-            if (p != null) {
-                return p.getBoolean(HAL_LUT_SLOT_KEY, false);
-            }
-        } catch (Throwable t) {
-            log(Log.WARN, TAG, "cannot read " + HAL_LUT_SLOT_KEY + ": " + t);
-        }
-        return false;
-    }
-
     private boolean essentialPipelineEnabled() {
         if (propertyOn(ESSENTIAL_PIPELINE_PROP)) {
             return true;
@@ -1819,31 +1811,22 @@ public class ModuleMain extends XposedModule {
             java.util.concurrent.ConcurrentHashMap.newKeySet();
     private static final String LOOKS_ENTRIES_KEY = "looks_entries_enabled";
     private volatile boolean looksEntriesHooked;
-    private volatile boolean uiHooksInstalled;
     private volatile boolean lookTextHooked;
 
-    private void installLeicaLooksEntries(ClassLoader loader) {
-        if (loader == null) {
-            return;
+    private boolean looksEntriesEnabled() {
+        try {
+            android.content.SharedPreferences p = getRemotePreferences("hypercameramod");
+            if (p != null) {
+                return p.getBoolean(LOOKS_ENTRIES_KEY, true);
+            }
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot read " + LOOKS_ENTRIES_KEY + ": " + t);
         }
-        // Capture, preview and label hooks must run on every UI: both the standard FILTER
-        // strip and the Leica Looks panel use the module's own two-line label drawables.
-        if (!uiHooksInstalled) {
-            installLookLutHooks(loader);
-            installPreviewLutHook(loader);
-            installStripIconHooks();
-            uiHooksInstalled = true;
-        }
+        return false;
+    }
 
-        if (looksEntriesHooked) {
-            return;
-        }
-        if (!essentialStdEnabled()) {
-            log(Log.INFO, TAG, "M3/M9 disabled; skipping the Leica Looks entries");
-            return;
-        }
-        if (!leicaThemeEnabled()) {
-            log(Log.INFO, TAG, "standard UI; skipping the Leica Looks entries");
+    private void installLeicaLooksEntries(ClassLoader loader) {
+        if (looksEntriesHooked || loader == null || !looksEntriesEnabled()) {
             return;
         }
         try {
@@ -1900,150 +1883,23 @@ public class ModuleMain extends XposedModule {
             }
             installLookTextHook();
             final int foIcon = monochromeIcon;
-            // Capture the stock Positive/Negative items before installing the Looks hook.
-            // Calling EffectController.q(10) from inside E9.h.c recurses into Looks and
-            // overflows the stack; the static Ii.i0.d() list is safe to read here.
-            final Object[] stockItems = new Object[2];
-            final Field[] stockFields = new Field[6];
-            try {
-                Class<?> standardList = Class.forName("Ii.i0", false, loader);
-                Method d = standardList.getDeclaredMethod("d");
-                d.setAccessible(true);
-                Object source = d.invoke(null);
-                if (source instanceof java.util.List<?> list) {
-                    Class<?> stockItem = Class.forName("j3.b", false, loader);
-                    stockFields[0] = field(stockItem, "b");
-                    stockFields[1] = field(stockItem, "c");
-                    stockFields[2] = field(stockItem, "e");
-                    stockFields[3] = field(stockItem, "f");
-                    stockFields[4] = field(stockItem, "g");
-                    stockFields[5] = field(stockItem, "h");
-                    for (Object entry : list) {
-                        int ord = stockFields[0].getInt(entry);
-                        if (ord == 230) {
-                            stockItems[0] = entry;
-                        } else if (ord == 231) {
-                            stockItems[1] = entry;
-                        }
-                    }
-                }
-            } catch (Throwable t) {
-                log(Log.WARN, TAG, "looks: cannot capture Positive/Negative: " + t);
-            }
             hook(back).intercept(chain -> {
                 Object result = chain.proceed();
                 if (!(result instanceof java.util.List<?> list)) {
-                    log(Log.INFO, TAG, "looks: c() returned " + result);
                     return result;
                 }
-                log(Log.INFO, TAG, "looks: c() returned " + list.size() + " items");
                 try {
                     @SuppressWarnings("unchecked")
                     java.util.List<Object> target = (java.util.List<Object>) list;
                     String[] names = {"M3", "M9", "M10R"};
                     int[] ordinals = {LOOK_M3, LOOK_M9, LOOK_M10R};
-                    android.content.Context ctx = currentApplication();
-                    android.content.res.Resources res = ctx != null ? ctx.getResources() : null;
-                    int[] lookIcons = new int[3];
-                    int[] lookTemplates = new int[3];
-                    if (res != null) {
-                        lookIcons[0] = res.getIdentifier("legendary_leica_m3_icon",
-                                "drawable", CAMERA_PACKAGE);
-                        lookIcons[1] = res.getIdentifier("legendary_leica_m9_icon",
-                                "drawable", CAMERA_PACKAGE);
-                        lookIcons[2] = res.getIdentifier("legendary_leica_m10r_icon",
-                                "drawable", CAMERA_PACKAGE);
-                        lookTemplates[0] = res.getIdentifier("legendary_leica_m3_template",
-                                "drawable", CAMERA_PACKAGE);
-                        lookTemplates[1] = res.getIdentifier("legendary_leica_m9_template",
-                                "drawable", CAMERA_PACKAGE);
-                        lookTemplates[2] = res.getIdentifier("legendary_leica_m10r_template",
-                                "drawable", CAMERA_PACKAGE);
-                    }
                     for (int i = 0; i < ordinals.length; i++) {
-                        int lookIcon = lookIcons[i] != 0 ? lookIcons[i] : foIcon;
-                        int lookNameIcon = STRIP_ICON_BASE | (i == 2 ? 5 : i + 1);
-                        java.util.ArrayList<Integer> effects = new java.util.ArrayList<>();
-                        if (lookTemplates[i] != 0) {
-                            effects.add(lookTemplates[i]);
-                        } else {
-                            Object baseSamples = samples.get(baseCfg);
-                            if (baseSamples instanceof java.util.ArrayList<?> sampleList) {
-                                for (Object sample : sampleList) {
-                                    if (sample instanceof Integer id) {
-                                        effects.add(id);
-                                    }
-                                }
-                            }
-                        }
-                        effects.add(lookIcon);
-                        java.util.ArrayList<Integer> effectLabels = new java.util.ArrayList<>();
-                        effectLabels.add(lookNameIcon);
-                        effectLabels.add(lookIcon);
-                        int order = 22 - i;   // descending: M3, M9, M10R, POS, NEG
-                        Object cfg = makeConfig.newInstance(order, -1, -1,
-                                LOOK_TEXT_BASE | (i + 1), lookIcon, lookNameIcon, 0, null, -1,
-                                effects, effectLabels);
-                        Object specialEntry = build.invoke(null, values[ordinals[i]], 10, cfg);
-                        target.add(specialEntry);
+                        Object cfg = makeConfig.newInstance(13 + i, -1, -1,
+                                LOOK_TEXT_BASE | (i + 1), foIcon, foIcon, 0, null, -1,
+                                samples.get(baseCfg), labels.get(baseCfg));
+                        target.add(build.invoke(null, values[ordinals[i]], 10, cfg));
                         log(Log.INFO, TAG, "looks: added " + names[i] + " entry (ordinal "
-                                + ordinals[i] + ", icon=" + lookIcon + ", nameIcon="
-                                + lookNameIcon + ")");
-                    }
-                    if (values.length > 231 && stockFields[1] != null) {
-                        // The Looks panel inserts an unknown item at position 1, so add the
-                        // Negative first and Positive last to display "POS, NEG".
-                        for (int si = 0; si < 2; si++) {
-                            Object src = stockItems[si];
-                            if (src == null) {
-                                continue;
-                            }
-                            try {
-                                int stockTitle = stockFields[1].getInt(src);
-                                int stockIcon = stockFields[2].getInt(src);
-                                // 3 = FLM POS, 4 = FLM NEG in stripLabel; the M10R look
-                                // card moved to id 5 so the three labels stay distinct.
-                                int stockNameIcon = STRIP_ICON_BASE | (3 + si);
-                                java.util.ArrayList<Integer> effects =
-                                        new java.util.ArrayList<>();
-                                Object sampleValue = stockFields[4].get(src);
-                                if (sampleValue instanceof java.util.List<?> sampleList) {
-                                    for (Object sample : sampleList) {
-                                        if (sample instanceof Integer id) {
-                                            effects.add(id);
-                                        }
-                                    }
-                                }
-                                java.util.ArrayList<Integer> effectLabels =
-                                        new java.util.ArrayList<>();
-                                Object labelValue = stockFields[5].get(src);
-                                if (labelValue instanceof java.util.List<?> labelList) {
-                                    for (Object label : labelList) {
-                                        if (label instanceof Integer id) {
-                                            effectLabels.add(id);
-                                        }
-                                    }
-                                }
-                                if (effects.isEmpty()) {
-                                    effects.add(stockIcon);
-                                }
-                                effectLabels.clear();
-                                effectLabels.add(stockNameIcon);
-                                int stockOrder = si == 0 ? 18 : 17;
-                                Object cfg = makeConfig.newInstance(stockOrder, -1, -1,
-                                        stockTitle, stockIcon, stockNameIcon, 0, null, -1,
-                                        effects, effectLabels);
-                                int ordinal = si == 0 ? 230 : 231;
-                                Object stockEntry = build.invoke(null, values[ordinal], 10, cfg);
-                                target.add(stockEntry);
-                                log(Log.INFO, TAG, "looks: added stock "
-                                        + (si == 0 ? "Positive" : "Negative")
-                                        + " entry (ordinal " + ordinal + ")");
-                            } catch (Throwable t) {
-                                log(Log.WARN, TAG, "looks: cannot add stock "
-                                        + (si == 0 ? "Positive" : "Negative") + ": " + t);
-                            }
-                        }
+                                + ordinals[i] + ")");
                     }
                 } catch (Throwable t) {
                     log(Log.WARN, TAG, "looks: cannot add M3/M9 entries: " + t);
@@ -2066,15 +1922,7 @@ public class ModuleMain extends XposedModule {
     private volatile boolean stripEntriesHooked;
 
     private void installFilterStripEntries(ClassLoader loader) {
-        if (stripEntriesHooked || loader == null) {
-            return;
-        }
-        if (!essentialStdEnabled()) {
-            log(Log.INFO, TAG, "M3/M9 disabled; skipping the standard filter strip entries");
-            return;
-        }
-        if (leicaThemeEnabled()) {
-            log(Log.INFO, TAG, "Leica UI; skipping the standard filter strip entries");
+        if (stripEntriesHooked || loader == null || !looksEntriesEnabled()) {
             return;
         }
         try {
@@ -2161,12 +2009,12 @@ public class ModuleMain extends XposedModule {
                         samplesField, labelsField, descField, cloudField));
             }
             if (!hasM9) {
-                target.add(stripItem(make, LOOK_M9, LOOK_TEXT_BASE | 2, STRIP_ICON_BASE | 2,
+                target.add(stripItem(make, LOOK_M9, LOOK_TEXT_BASE | 2, nameIcon,
                         icon, nameIcon, samples, labels, desc, order, ordinalField,
                         samplesField, labelsField, descField, cloudField));
             }
             if (!hasM3) {
-                target.add(stripItem(make, LOOK_M3, LOOK_TEXT_BASE | 1, STRIP_ICON_BASE | 1,
+                target.add(stripItem(make, LOOK_M3, LOOK_TEXT_BASE | 1, nameIcon,
                         icon, nameIcon, samples, labels, desc, order + 1, ordinalField,
                         samplesField, labelsField, descField, cloudField));
             }
@@ -2194,12 +2042,7 @@ public class ModuleMain extends XposedModule {
         return item;
     }
 
-    private volatile boolean stripIconHooksInstalled;
-
     private void installStripIconHooks() {
-        if (stripIconHooksInstalled) {
-            return;
-        }
         try {
             hook(ImageView.class.getDeclaredMethod("setImageResource", int.class)).intercept(chain -> {
                 int id = (Integer) chain.getArg(0);
@@ -2225,38 +2068,22 @@ public class ModuleMain extends XposedModule {
         } catch (Throwable t) {
             log(Log.WARN, TAG, "strip: no getDrawable hook: " + t);
         }
-        stripIconHooksInstalled = true;
     }
 
     private static Drawable stripLabel(Resources res, int which) {
+        String text = which == 1 ? "M3" : "M9";
         float density = res == null ? 2.75f : res.getDisplayMetrics().density;
         int size = Math.round(36 * density);
         Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bitmap);
-        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         paint.setColor(Color.WHITE);
+        paint.setTextSize(size * 0.42f);
         paint.setTextAlign(Paint.Align.CENTER);
-        paint.setTypeface(stripTypeface());
-        String top = which == 3 || which == 4 ? "FLM" : "ESTL";
-        String bottom = which == 1 ? "M3" : which == 2 ? "M9"
-                : which == 3 ? "POS" : which == 4 ? "NEG" : which == 5 ? "M10R" : "NEG";
-        paint.setTextSize(size * 0.335f);
-        canvas.drawText(top, size / 2f, size * 0.47f, paint);
-        canvas.drawText(bottom, size / 2f, size * 0.80f, paint);
+        paint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        Paint.FontMetrics metrics = paint.getFontMetrics();
+        canvas.drawText(text, size / 2f, size / 2f - (metrics.ascent + metrics.descent) / 2f, paint);
         return new BitmapDrawable(res, bitmap);
-    }
-
-    private static android.graphics.Typeface stripTypeface() {
-        try {
-            Application app = currentApplication();
-            if (app != null) {
-                return android.graphics.Typeface.createFromAsset(app.getAssets(),
-                        "watermarks/leica/111/lg1056_regular.otf");
-            }
-        } catch (Throwable ignored) {
-        }
-        return android.graphics.Typeface.create("sans-serif-condensed",
-                android.graphics.Typeface.NORMAL);
     }
 
     private static Field configField(Class<?> config, String name) throws NoSuchFieldException {
@@ -2276,15 +2103,17 @@ public class ModuleMain extends XposedModule {
                 if ((id & 0xFFFF0000) != LOOK_TEXT_BASE) {
                     return chain.proceed();
                 }
-                return (id & 0xFFFF) == 1 ? "ESTL\nM3"
-                        : (id & 0xFFFF) == 3 ? "ESTL\nM10R" : "ESTL\nM9";            });
+                return (id & 0xFFFF) == 1 ? "M3"
+                        : (id & 0xFFFF) == 3 ? "M10R" : "M9";
+            });
             hook(Resources.class.getDeclaredMethod("getString", int.class)).intercept(chain -> {
                 int id = (Integer) chain.getArg(0);
                 if ((id & 0xFFFF0000) != LOOK_TEXT_BASE) {
                     return chain.proceed();
                 }
-                return (id & 0xFFFF) == 1 ? "ESTL\nM3"
-                        : (id & 0xFFFF) == 3 ? "ESTL\nM10R" : "ESTL\nM9";            });
+                return (id & 0xFFFF) == 1 ? "M3"
+                        : (id & 0xFFFF) == 3 ? "M10R" : "M9";
+            });
             lookTextHooked = true;
         } catch (Throwable t) {
             log(Log.WARN, TAG, "cannot hook Resources.getText (look labels): " + t);
@@ -2943,6 +2772,120 @@ public class ModuleMain extends XposedModule {
             }
         }
         return new BitmapDrawable(resources, bitmap);
+    }
+
+    private void installPaletteCaptureHook(ClassLoader loader) {
+        if (paletteCaptureHooked) {
+            return;
+        }
+        try {
+            Class<?> miCamera2 = Class.forName("n9.A0", false, loader);
+            Class<?> configMgr = Class.forName("n9.d0", false, loader);
+            Class<?> vendorTagHelper = Class.forName("la.F0", false, loader);
+            Class<?> vendorTags = Class.forName("la.B0", false, loader);
+            Class<?> vendorKey = Class.forName("la.E0", false, loader);
+            Class<?> effectCtrl = Class.forName("com.xiaomi.camera.effect.EffectController",
+                    false, loader);
+
+            Object renderTypeKey = vendorTags.getField("c").get(null);
+            Object filterAppliedKey = vendorTags.getField("h4").get(null);
+            Method getTag = vendorTagHelper.getDeclaredMethod("j",
+                    android.hardware.camera2.CaptureRequest.Builder.class, vendorKey, int.class);
+            Method setTag = vendorTagHelper.getDeclaredMethod("f",
+                    android.hardware.camera2.CaptureRequest.Builder.class, vendorKey, Object.class);
+            Method applyRender = miCamera2.getDeclaredMethod("K1",
+                    android.hardware.camera2.CaptureRequest.Builder.class);
+            Method setCaptureFilter = configMgr.getDeclaredMethod("s", boolean.class);
+            Method getEffectCtrl = effectCtrl.getDeclaredMethod("u");
+            Method getPictureStyle = effectCtrl.getDeclaredMethod("c");
+            Field styleField = Class.forName("Wu.g", false, loader).getField("c");
+            Field softLightField = Class.forName("Wu.g", false, loader).getField("k");
+            Method getPreviewBuilder = miCamera2.getMethod("C");
+            Class<?> cam2Module = Class.forName("com.android.camera.module.Camera2Module",
+                    false, loader);
+            Method getCameraManager = cam2Module.getMethod("getCameraManager");
+            Method getConfigMgr = getCameraManager.getReturnType().getMethod("J0");
+            Method getFilterId = effectCtrl.getDeclaredMethod("n");
+            int filterNone = Class.forName("j3.b", false, loader).getField("O").getInt(null);
+
+            // Camera2Module.updateFilter() only sets captureSat.isFilterApplied when a LUT
+            // filter is active, causing LEICA STD + Palette/Parameters (renderType=512) to
+            // take satsnapshotjpeg and skip FilterPlugin. Force isFilterApplied=true whenever
+            // StyleAdjustEffect or any MIVIRenderTag effect is active, including when sliders
+            // change in-place via updateStyle*().
+            java.util.function.Supplier<Boolean> isStyleActive = () -> {
+                try {
+                    Object ec = getEffectCtrl.invoke(null);
+                    Object ps = getPictureStyle.invoke(ec);
+                    return ps != null && (styleField.getInt(ps) > 0
+                            || softLightField.getInt(ps) > 0);
+                } catch (Throwable ignored) {
+                    return false;
+                }
+            };
+
+            hook(setCaptureFilter).intercept(chain -> {
+                if (Boolean.FALSE.equals(chain.getArg(0)) && isStyleActive.get()) {
+                    return chain.proceed(new Object[]{Boolean.TRUE});
+                }
+                return chain.proceed();
+            });
+
+            String[] styleMethods = {
+                    "updateStyleVibrance", "updateStyleTone", "updateStyleTemperature",
+                    "updateStyleTune", "updateStyleTexture", "updateStyleNoise",
+                    "updateStyleSoftLight", "updateStyleVignette"
+            };
+            for (String mName : styleMethods) {
+                hook(cam2Module.getDeclaredMethod(mName)).intercept(chain -> {
+                    Object res = chain.proceed();
+                    try {
+                        Object cm = getCameraManager.invoke(chain.getThisObject());
+                        Object d0 = getConfigMgr.invoke(cm);
+                        Object ec = getEffectCtrl.invoke(null);
+                        int fid = (Integer) getFilterId.invoke(ec);
+                        boolean active = isStyleActive.get() || fid != filterNone;
+                        setCaptureFilter.invoke(d0, active);
+                    } catch (Throwable t) {
+                        log(Log.WARN, TAG, mName + " captureSat hook failed: " + t);
+                    }
+                    return res;
+                });
+            }
+
+            hook(applyRender).intercept(chain -> {
+                Object result = chain.proceed();
+                try {
+                    Object builder = chain.getArg(0);
+                    if (builder != null) {
+                        Object rt = getTag.invoke(null, builder, renderTypeKey, 47806);
+                        if (rt instanceof Integer && (Integer) rt != 0) {
+                            int renderType = (Integer) rt;
+                            if ((renderType & 1) == 0 && (renderType & 512) != 0) {
+                                setTag.invoke(null, builder, renderTypeKey, renderType | 1);
+                            }
+                            setTag.invoke(null, builder, filterAppliedKey, Boolean.TRUE);
+                            Object previewBuilder = getPreviewBuilder.invoke(chain.getThisObject());
+                            if (previewBuilder != null && previewBuilder != builder) {
+                                setTag.invoke(null, previewBuilder, filterAppliedKey, Boolean.TRUE);
+                            }
+                            if ((renderType & 512) != 0) {
+                                log(Log.INFO, TAG, "palette capture: renderType=" + renderType
+                                        + " -> captureSat.isFilterApplied=true");
+                            }
+                        }
+                    }
+                } catch (Throwable t) {
+                    log(Log.WARN, TAG, "palette capture hook failed: " + t);
+                }
+                return result;
+            });
+
+            paletteCaptureHooked = true;
+            log(Log.INFO, TAG, "installed LEICA STD Palette/Parameters capture hook");
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot install palette capture hook: " + t);
+        }
     }
 
     // ---- telling the user ---------------------------------------------------------------------
