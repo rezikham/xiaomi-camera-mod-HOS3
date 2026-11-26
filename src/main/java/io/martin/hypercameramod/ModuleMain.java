@@ -1903,24 +1903,32 @@ public class ModuleMain extends XposedModule {
     private static volatile java.lang.reflect.Field EFFECT_CONTROLLER_FILTER;
     private static final java.util.Set<String> PREVIEW_LOGGED =
             java.util.concurrent.ConcurrentHashMap.newKeySet();
-    private static final String LOOKS_ENTRIES_KEY = "looks_entries_enabled";
     private volatile boolean looksEntriesHooked;
+    private volatile boolean uiHooksInstalled;
     private volatile boolean lookTextHooked;
 
-    private boolean looksEntriesEnabled() {
-        try {
-            android.content.SharedPreferences p = getRemotePreferences("hypercameramod");
-            if (p != null) {
-                return p.getBoolean(LOOKS_ENTRIES_KEY, true);
-            }
-        } catch (Throwable t) {
-            log(Log.WARN, TAG, "cannot read " + LOOKS_ENTRIES_KEY + ": " + t);
-        }
-        return false;
-    }
-
     private void installLeicaLooksEntries(ClassLoader loader) {
-        if (looksEntriesHooked || loader == null || !looksEntriesEnabled()) {
+        if (loader == null) {
+            return;
+        }
+        // Capture, preview and label hooks must run on every UI: both the standard FILTER
+        // strip and the Leica Looks panel use the module's own two-line label drawables.
+        if (!uiHooksInstalled) {
+            installLookLutHooks(loader);
+            installPreviewLutHook(loader);
+            installStripIconHooks();
+            uiHooksInstalled = true;
+        }
+
+        if (looksEntriesHooked) {
+            return;
+        }
+        if (!essentialStdEnabled()) {
+            log(Log.INFO, TAG, "M3/M9 disabled; skipping the Leica Looks entries");
+            return;
+        }
+        if (!leicaThemeEnabled()) {
+            log(Log.INFO, TAG, "standard UI; skipping the Leica Looks entries");
             return;
         }
         try {
@@ -1977,31 +1985,156 @@ public class ModuleMain extends XposedModule {
             }
             installLookTextHook();
             final int foIcon = monochromeIcon;
+            // Capture the stock Positive/Negative items before installing the Looks hook.
+            // Calling EffectController.q(10) from inside E9.h.c recurses into Looks and
+            // overflows the stack; the static Ii.i0.d() list is safe to read here.
+            final Object[] stockItems = new Object[2];
+            final Field[] stockFields = new Field[6];
+            try {
+                Class<?> standardList = Class.forName("Ii.i0", false, loader);
+                Method d = standardList.getDeclaredMethod("d");
+                d.setAccessible(true);
+                Object source = d.invoke(null);
+                if (source instanceof java.util.List<?> list) {
+                    Class<?> stockItem = Class.forName("j3.b", false, loader);
+                    stockFields[0] = field(stockItem, "b");
+                    stockFields[1] = field(stockItem, "c");
+                    stockFields[2] = field(stockItem, "e");
+                    stockFields[3] = field(stockItem, "f");
+                    stockFields[4] = field(stockItem, "g");
+                    stockFields[5] = field(stockItem, "h");
+                    for (Object entry : list) {
+                        int ord = stockFields[0].getInt(entry);
+                        if (ord == 230) {
+                            stockItems[0] = entry;
+                        } else if (ord == 231) {
+                            stockItems[1] = entry;
+                        }
+                    }
+                }
+            } catch (Throwable t) {
+                log(Log.WARN, TAG, "looks: cannot capture Positive/Negative: " + t);
+            }
             hook(back).intercept(chain -> {
                 Object result = chain.proceed();
                 if (!(result instanceof java.util.List<?> list)) {
+                    log(Log.INFO, TAG, "looks: c() returned " + result);
                     return result;
                 }
+                log(Log.INFO, TAG, "looks: c() returned " + list.size() + " items");
                 try {
                     @SuppressWarnings("unchecked")
                     java.util.List<Object> target = (java.util.List<Object>) list;
                     String[] names = {"M3", "M9", "M10R"};
                     int[] ordinals = {LOOK_M3, LOOK_M9, LOOK_M10R};
+                    android.content.Context ctx = currentApplication();
+                    android.content.res.Resources res = ctx != null ? ctx.getResources() : null;
+                    int[] lookIcons = new int[3];
+                    int[] lookTemplates = new int[3];
+                    if (res != null) {
+                        lookIcons[0] = res.getIdentifier("legendary_leica_m3_icon",
+                                "drawable", CAMERA_PACKAGE);
+                        lookIcons[1] = res.getIdentifier("legendary_leica_m9_icon",
+                                "drawable", CAMERA_PACKAGE);
+                        lookIcons[2] = res.getIdentifier("legendary_leica_m10r_icon",
+                                "drawable", CAMERA_PACKAGE);
+                        lookTemplates[0] = res.getIdentifier("legendary_leica_m3_template",
+                                "drawable", CAMERA_PACKAGE);
+                        lookTemplates[1] = res.getIdentifier("legendary_leica_m9_template",
+                                "drawable", CAMERA_PACKAGE);
+                        lookTemplates[2] = res.getIdentifier("legendary_leica_m10r_template",
+                                "drawable", CAMERA_PACKAGE);
+                    }
                     for (int i = 0; i < ordinals.length; i++) {
-                        Object cfg = makeConfig.newInstance(13 + i, -1, -1,
-                                LOOK_TEXT_BASE | (i + 1), foIcon, foIcon, 0, null, -1,
-                                samples.get(baseCfg), labels.get(baseCfg));
-                        target.add(build.invoke(null, values[ordinals[i]], 10, cfg));
+                        int lookIcon = lookIcons[i] != 0 ? lookIcons[i] : foIcon;
+                        int lookNameIcon = STRIP_ICON_BASE | (i == 2 ? 5 : i + 1);
+                        java.util.ArrayList<Integer> effects = new java.util.ArrayList<>();
+                        if (lookTemplates[i] != 0) {
+                            effects.add(lookTemplates[i]);
+                        } else {
+                            Object baseSamples = samples.get(baseCfg);
+                            if (baseSamples instanceof java.util.ArrayList<?> sampleList) {
+                                for (Object sample : sampleList) {
+                                    if (sample instanceof Integer id) {
+                                        effects.add(id);
+                                    }
+                                }
+                            }
+                        }
+                        effects.add(lookIcon);
+                        java.util.ArrayList<Integer> effectLabels = new java.util.ArrayList<>();
+                        effectLabels.add(lookNameIcon);
+                        effectLabels.add(lookIcon);
+                        int order = 22 - i;   // descending: M3, M9, M10R, POS, NEG
+                        Object cfg = makeConfig.newInstance(order, -1, -1,
+                                LOOK_TEXT_BASE | (i + 1), lookIcon, lookNameIcon, 0, null, -1,
+                                effects, effectLabels);
+                        Object specialEntry = build.invoke(null, values[ordinals[i]], 10, cfg);
+                        target.add(specialEntry);
                         log(Log.INFO, TAG, "looks: added " + names[i] + " entry (ordinal "
-                                + ordinals[i] + ")");
+                                + ordinals[i] + ", icon=" + lookIcon + ", nameIcon="
+                                + lookNameIcon + ")");
+                    }
+                    if (values.length > 231 && stockFields[1] != null) {
+                        // The Looks panel inserts an unknown item at position 1, so add the
+                        // Negative first and Positive last to display "POS, NEG".
+                        for (int si = 0; si < 2; si++) {
+                            Object src = stockItems[si];
+                            if (src == null) {
+                                continue;
+                            }
+                            try {
+                                int stockTitle = stockFields[1].getInt(src);
+                                int stockIcon = stockFields[2].getInt(src);
+                                // 3 = FLM POS, 4 = FLM NEG in stripLabel; the M10R look
+                                // card moved to id 5 so the three labels stay distinct.
+                                int stockNameIcon = STRIP_ICON_BASE | (3 + si);
+                                java.util.ArrayList<Integer> effects =
+                                        new java.util.ArrayList<>();
+                                Object sampleValue = stockFields[4].get(src);
+                                if (sampleValue instanceof java.util.List<?> sampleList) {
+                                    for (Object sample : sampleList) {
+                                        if (sample instanceof Integer id) {
+                                            effects.add(id);
+                                        }
+                                    }
+                                }
+                                java.util.ArrayList<Integer> effectLabels =
+                                        new java.util.ArrayList<>();
+                                Object labelValue = stockFields[5].get(src);
+                                if (labelValue instanceof java.util.List<?> labelList) {
+                                    for (Object label : labelList) {
+                                        if (label instanceof Integer id) {
+                                            effectLabels.add(id);
+                                        }
+                                    }
+                                }
+                                if (effects.isEmpty()) {
+                                    effects.add(stockIcon);
+                                }
+                                effectLabels.clear();
+                                effectLabels.add(stockNameIcon);
+                                int stockOrder = si == 0 ? 18 : 17;
+                                Object cfg = makeConfig.newInstance(stockOrder, -1, -1,
+                                        stockTitle, stockIcon, stockNameIcon, 0, null, -1,
+                                        effects, effectLabels);
+                                int ordinal = si == 0 ? 230 : 231;
+                                Object stockEntry = build.invoke(null, values[ordinal], 10, cfg);
+                                target.add(stockEntry);
+                                log(Log.INFO, TAG, "looks: added stock "
+                                        + (si == 0 ? "Positive" : "Negative")
+                                        + " entry (ordinal " + ordinal + ")");
+                            } catch (Throwable t) {
+                                log(Log.WARN, TAG, "looks: cannot add stock "
+                                        + (si == 0 ? "Positive" : "Negative") + ": " + t);
+                            }
+                        }
                     }
                 } catch (Throwable t) {
                     log(Log.WARN, TAG, "looks: cannot add M3/M9 entries: " + t);
                 }
                 return result;
             });
-            installLookLutHooks(loader);
-            installPreviewLutHook(loader);
             looksEntriesHooked = true;
             log(Log.INFO, TAG, "installed M3/M9 Looks entries");
         } catch (Throwable t) {
@@ -2016,7 +2149,15 @@ public class ModuleMain extends XposedModule {
     private volatile boolean stripEntriesHooked;
 
     private void installFilterStripEntries(ClassLoader loader) {
-        if (stripEntriesHooked || loader == null || !looksEntriesEnabled()) {
+        if (stripEntriesHooked || loader == null) {
+            return;
+        }
+        if (!essentialStdEnabled()) {
+            log(Log.INFO, TAG, "M3/M9 disabled; skipping the standard filter strip entries");
+            return;
+        }
+        if (leicaThemeEnabled()) {
+            log(Log.INFO, TAG, "Leica UI; skipping the standard filter strip entries");
             return;
         }
         try {
@@ -2098,17 +2239,17 @@ public class ModuleMain extends XposedModule {
             // The name icon is the stock one: the palette editor draws that field large, and
             // a generated label there shows up as text over a transparency checkerboard.
             if (!hasM10R) {
-                target.add(stripItem(make, LOOK_M10R, LOOK_TEXT_BASE | 3, nameIcon,
+                target.add(stripItem(make, LOOK_M10R, LOOK_TEXT_BASE | 3, STRIP_ICON_BASE | 5,
                         icon, nameIcon, samples, labels, desc, order - 1, ordinalField,
                         samplesField, labelsField, descField, cloudField));
             }
             if (!hasM9) {
-                target.add(stripItem(make, LOOK_M9, LOOK_TEXT_BASE | 2, nameIcon,
+                target.add(stripItem(make, LOOK_M9, LOOK_TEXT_BASE | 2, STRIP_ICON_BASE | 2,
                         icon, nameIcon, samples, labels, desc, order, ordinalField,
                         samplesField, labelsField, descField, cloudField));
             }
             if (!hasM3) {
-                target.add(stripItem(make, LOOK_M3, LOOK_TEXT_BASE | 1, nameIcon,
+                target.add(stripItem(make, LOOK_M3, LOOK_TEXT_BASE | 1, STRIP_ICON_BASE | 1,
                         icon, nameIcon, samples, labels, desc, order + 1, ordinalField,
                         samplesField, labelsField, descField, cloudField));
             }
@@ -2136,7 +2277,12 @@ public class ModuleMain extends XposedModule {
         return item;
     }
 
+    private volatile boolean stripIconHooksInstalled;
+
     private void installStripIconHooks() {
+        if (stripIconHooksInstalled) {
+            return;
+        }
         try {
             hook(ImageView.class.getDeclaredMethod("setImageResource", int.class)).intercept(chain -> {
                 int id = (Integer) chain.getArg(0);
@@ -2162,22 +2308,38 @@ public class ModuleMain extends XposedModule {
         } catch (Throwable t) {
             log(Log.WARN, TAG, "strip: no getDrawable hook: " + t);
         }
+        stripIconHooksInstalled = true;
     }
 
     private static Drawable stripLabel(Resources res, int which) {
-        String text = which == 1 ? "M3" : "M9";
         float density = res == null ? 2.75f : res.getDisplayMetrics().density;
         int size = Math.round(36 * density);
         Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bitmap);
-        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
         paint.setColor(Color.WHITE);
-        paint.setTextSize(size * 0.42f);
         paint.setTextAlign(Paint.Align.CENTER);
-        paint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        Paint.FontMetrics metrics = paint.getFontMetrics();
-        canvas.drawText(text, size / 2f, size / 2f - (metrics.ascent + metrics.descent) / 2f, paint);
+        paint.setTypeface(stripTypeface());
+        String top = which == 3 || which == 4 ? "FLM" : "ESTL";
+        String bottom = which == 1 ? "M3" : which == 2 ? "M9"
+                : which == 3 ? "POS" : which == 4 ? "NEG" : which == 5 ? "M10R" : "NEG";
+        paint.setTextSize(size * 0.335f);
+        canvas.drawText(top, size / 2f, size * 0.47f, paint);
+        canvas.drawText(bottom, size / 2f, size * 0.80f, paint);
         return new BitmapDrawable(res, bitmap);
+    }
+
+    private static android.graphics.Typeface stripTypeface() {
+        try {
+            Application app = currentApplication();
+            if (app != null) {
+                return android.graphics.Typeface.createFromAsset(app.getAssets(),
+                        "watermarks/leica/111/lg1056_regular.otf");
+            }
+        } catch (Throwable ignored) {
+        }
+        return android.graphics.Typeface.create("sans-serif-condensed",
+                android.graphics.Typeface.NORMAL);
     }
 
     private static Field configField(Class<?> config, String name) throws NoSuchFieldException {
@@ -2197,16 +2359,16 @@ public class ModuleMain extends XposedModule {
                 if ((id & 0xFFFF0000) != LOOK_TEXT_BASE) {
                     return chain.proceed();
                 }
-                return (id & 0xFFFF) == 1 ? "M3"
-                        : (id & 0xFFFF) == 3 ? "M10R" : "M9";
+                return (id & 0xFFFF) == 1 ? "ESTL\nM3"
+                        : (id & 0xFFFF) == 3 ? "ESTL\nM10R" : "ESTL\nM9";
             });
             hook(Resources.class.getDeclaredMethod("getString", int.class)).intercept(chain -> {
                 int id = (Integer) chain.getArg(0);
                 if ((id & 0xFFFF0000) != LOOK_TEXT_BASE) {
                     return chain.proceed();
                 }
-                return (id & 0xFFFF) == 1 ? "M3"
-                        : (id & 0xFFFF) == 3 ? "M10R" : "M9";
+                return (id & 0xFFFF) == 1 ? "ESTL\nM3"
+                        : (id & 0xFFFF) == 3 ? "ESTL\nM10R" : "ESTL\nM9";
             });
             lookTextHooked = true;
         } catch (Throwable t) {
