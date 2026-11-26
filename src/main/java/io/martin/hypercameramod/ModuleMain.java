@@ -153,6 +153,7 @@ public class ModuleMain extends XposedModule {
     private volatile boolean assetsHooked;
     private volatile boolean styleHooked;
     private volatile boolean textHooked;
+    private volatile boolean paletteCaptureHooked;
     // -1 = not read yet, 0 = off, 1 = on. Read once per Camera process.
     private volatile int originalPortraitState = -1;
     // LUT files staged to /data/vendor/camera/ on first M3/M9 selection.
@@ -200,6 +201,7 @@ public class ModuleMain extends XposedModule {
         installBlurRadiusHook(loader);
         installLegendHook(loader);
         installStyleHook(loader);
+        installPaletteCaptureHook(loader);
         installLeicaLooksEntries(loader);
         installFilterStripEntries(loader);
         if (!problems.isEmpty() && stage.equals("onPackageLoaded")) {
@@ -2770,6 +2772,120 @@ public class ModuleMain extends XposedModule {
             }
         }
         return new BitmapDrawable(resources, bitmap);
+    }
+
+    private void installPaletteCaptureHook(ClassLoader loader) {
+        if (paletteCaptureHooked) {
+            return;
+        }
+        try {
+            Class<?> miCamera2 = Class.forName("n9.A0", false, loader);
+            Class<?> configMgr = Class.forName("n9.d0", false, loader);
+            Class<?> vendorTagHelper = Class.forName("la.F0", false, loader);
+            Class<?> vendorTags = Class.forName("la.B0", false, loader);
+            Class<?> vendorKey = Class.forName("la.E0", false, loader);
+            Class<?> effectCtrl = Class.forName("com.xiaomi.camera.effect.EffectController",
+                    false, loader);
+
+            Object renderTypeKey = vendorTags.getField("c").get(null);
+            Object filterAppliedKey = vendorTags.getField("h4").get(null);
+            Method getTag = vendorTagHelper.getDeclaredMethod("j",
+                    android.hardware.camera2.CaptureRequest.Builder.class, vendorKey, int.class);
+            Method setTag = vendorTagHelper.getDeclaredMethod("f",
+                    android.hardware.camera2.CaptureRequest.Builder.class, vendorKey, Object.class);
+            Method applyRender = miCamera2.getDeclaredMethod("K1",
+                    android.hardware.camera2.CaptureRequest.Builder.class);
+            Method setCaptureFilter = configMgr.getDeclaredMethod("s", boolean.class);
+            Method getEffectCtrl = effectCtrl.getDeclaredMethod("u");
+            Method getPictureStyle = effectCtrl.getDeclaredMethod("c");
+            Field styleField = Class.forName("Wu.g", false, loader).getField("c");
+            Field softLightField = Class.forName("Wu.g", false, loader).getField("k");
+            Method getPreviewBuilder = miCamera2.getMethod("C");
+            Class<?> cam2Module = Class.forName("com.android.camera.module.Camera2Module",
+                    false, loader);
+            Method getCameraManager = cam2Module.getMethod("getCameraManager");
+            Method getConfigMgr = getCameraManager.getReturnType().getMethod("J0");
+            Method getFilterId = effectCtrl.getDeclaredMethod("n");
+            int filterNone = Class.forName("j3.b", false, loader).getField("O").getInt(null);
+
+            // Camera2Module.updateFilter() only sets captureSat.isFilterApplied when a LUT
+            // filter is active, causing LEICA STD + Palette/Parameters (renderType=512) to
+            // take satsnapshotjpeg and skip FilterPlugin. Force isFilterApplied=true whenever
+            // StyleAdjustEffect or any MIVIRenderTag effect is active, including when sliders
+            // change in-place via updateStyle*().
+            java.util.function.Supplier<Boolean> isStyleActive = () -> {
+                try {
+                    Object ec = getEffectCtrl.invoke(null);
+                    Object ps = getPictureStyle.invoke(ec);
+                    return ps != null && (styleField.getInt(ps) > 0
+                            || softLightField.getInt(ps) > 0);
+                } catch (Throwable ignored) {
+                    return false;
+                }
+            };
+
+            hook(setCaptureFilter).intercept(chain -> {
+                if (Boolean.FALSE.equals(chain.getArg(0)) && isStyleActive.get()) {
+                    return chain.proceed(new Object[]{Boolean.TRUE});
+                }
+                return chain.proceed();
+            });
+
+            String[] styleMethods = {
+                    "updateStyleVibrance", "updateStyleTone", "updateStyleTemperature",
+                    "updateStyleTune", "updateStyleTexture", "updateStyleNoise",
+                    "updateStyleSoftLight", "updateStyleVignette"
+            };
+            for (String mName : styleMethods) {
+                hook(cam2Module.getDeclaredMethod(mName)).intercept(chain -> {
+                    Object res = chain.proceed();
+                    try {
+                        Object cm = getCameraManager.invoke(chain.getThisObject());
+                        Object d0 = getConfigMgr.invoke(cm);
+                        Object ec = getEffectCtrl.invoke(null);
+                        int fid = (Integer) getFilterId.invoke(ec);
+                        boolean active = isStyleActive.get() || fid != filterNone;
+                        setCaptureFilter.invoke(d0, active);
+                    } catch (Throwable t) {
+                        log(Log.WARN, TAG, mName + " captureSat hook failed: " + t);
+                    }
+                    return res;
+                });
+            }
+
+            hook(applyRender).intercept(chain -> {
+                Object result = chain.proceed();
+                try {
+                    Object builder = chain.getArg(0);
+                    if (builder != null) {
+                        Object rt = getTag.invoke(null, builder, renderTypeKey, 47806);
+                        if (rt instanceof Integer && (Integer) rt != 0) {
+                            int renderType = (Integer) rt;
+                            if ((renderType & 1) == 0 && (renderType & 512) != 0) {
+                                setTag.invoke(null, builder, renderTypeKey, renderType | 1);
+                            }
+                            setTag.invoke(null, builder, filterAppliedKey, Boolean.TRUE);
+                            Object previewBuilder = getPreviewBuilder.invoke(chain.getThisObject());
+                            if (previewBuilder != null && previewBuilder != builder) {
+                                setTag.invoke(null, previewBuilder, filterAppliedKey, Boolean.TRUE);
+                            }
+                            if ((renderType & 512) != 0) {
+                                log(Log.INFO, TAG, "palette capture: renderType=" + renderType
+                                        + " -> captureSat.isFilterApplied=true");
+                            }
+                        }
+                    }
+                } catch (Throwable t) {
+                    log(Log.WARN, TAG, "palette capture hook failed: " + t);
+                }
+                return result;
+            });
+
+            paletteCaptureHooked = true;
+            log(Log.INFO, TAG, "installed LEICA STD Palette/Parameters capture hook");
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot install palette capture hook: " + t);
+        }
     }
 
     // ---- telling the user ---------------------------------------------------------------------

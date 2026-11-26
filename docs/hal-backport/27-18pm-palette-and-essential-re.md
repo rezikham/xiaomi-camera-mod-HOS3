@@ -40,7 +40,13 @@ Target: Xiaomi 14 Ultra (`aurora`, `1c4e4dec`, SM8650 / HTP V75, HyperOS 3, Came
     CandySDK: VideoFilter::Process in_frame->width: 4096 in_frame->height: 3072 totalProcess 43 uploadProcess 37 renderProcss 6 downloadProcess 0
     ```
   - Pixel verification: `3072×4096`, `mean_sat = 0.0000`, `p95_sat = 0.0000`, `mean_chroma = 0.00`, `max|R-B| = 0.0` — 1:1 18PM `StyleAdjustEffect` GPU rendering in 43 ms inside the stock HAL.
-  - Note: on `LEICA STD` (no filter active), Camera 6.7 leaves `com.xiaomi.mivi2.renderType = 0`, so `FilterPlugin::isEnabled()` skips the filter node; when any Leica Look / Film filter is active, `com.xiaomi.mivi2.renderType != 0` and both `CubeLutEffect` + `StyleAdjustEffect` execute on GPU.
+  - **`LEICA STD` (no LUT filter active) capture fix (`ModuleMain.java` `installPaletteCaptureHook`):**
+    - On `LEICA STD` (`filterId = 0x10200`), `Camera2Module.updateFilter()` sets `com.xiaomi.camera.captureSat.isFilterApplied = false` and `updateStyle*()` never updates it, while `MIVIRenderTag` sets `renderType = 512` (`PICTURE_STYLE` only, bit 0 = 0), causing HAL to route through `CamX nonZSL` / `satsnapshotjpeg.json` and skip `FilterPlugin`.
+    - Hooked `CameraConfigManager.s(boolean)`, `Camera2Module.updateStyle*()`, and `MiCamera2.K1(CaptureRequest.Builder)` to keep `captureSat.isFilterApplied = true` and set `renderType | 1` whenever `StyleAdjustEffect` is active on `LEICA STD`.
+    - Live verification (`IMG_20261126_150615.jpg`, Photo mode `LEICA STD` + `Saturation = -100`): `CandySDK: VideoFilter::Process ... 4096x3072 totalProcess 46 ms`, `meanRGB = (67.15, 67.15, 67.15)`, `max|R-B| = 0.0`.
+- **EXIF / XMP / XML Parity Audit (18PM vs 14U):**
+  - **Essential / Legendary tag (`0x88b0`):** `ExifUtils.injectLegendMode` writes `IFD0:0x88b0` (`1=M9`, `2=M3`, `3=M10R`) on all Essential captures; `EssentialProcessor.copyExif()` also preserves `APP1` XMP segments.
+  - **18PM `FullLinkEditableJpeg` & `LegendMsg`:** 18PM `jpegrAggr.so` / `heifedit.so` embed `FilterBeanMsg` (`filterScript`, `miCamStyle`, `generalFilterId`) and `LegendMsg` (`Legend.MONOPAN`) protobufs referenced via `http://ns.xiaomi.com/photos/1.0/camera/reedit` + `MiCamera:XMPMeta`. Scanning all dexes of 14U's `MIUIGalleryGlobal.apk` and 14U's `jpegrAggr.so` / `heifedit.so` confirmed neither `FilterBeanMsg` nor `LegendMsg` exists on 14U, so `0x88b0` in IFD0 is the active Gallery-recognized Essential tag on 14U.
 
 ---
 
