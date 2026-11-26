@@ -219,7 +219,8 @@ public class ModuleMain extends XposedModule {
         }
         try {
             copyAssetToSystem("leica_luts/M3_Monopan.png", "/data/vendor/camera/lut_m3.png");
-            copyAssetToSystem("leica_luts/130_LeicaNatural.png", "/data/vendor/camera/lut_m9.png");
+            copyAssetToSystem("leica_luts/M9_Ccd.png", "/data/vendor/camera/lut_m9.png");
+            copyAssetToSystem("leica_luts/M10R_Cmos.png", "/data/vendor/camera/lut_m10r.png");
             lutFilesInstalled = true;
             android.util.Log.i(TAG, "LUT files staged to /data/vendor/camera/");
         } catch (Throwable t) {
@@ -861,7 +862,7 @@ public class ModuleMain extends XposedModule {
             log(Log.INFO, TAG, "LUT candidate " + file.getName() + " legend=" + legend
                     + " apk=" + (moduleApk != null) + " size=" + file.length());
             legend = legendFromPrefs();
-            String asset = legend == 1 ? "leica_luts/130_LeicaNatural.png"
+            String asset = legend == 1 ? "leica_luts/M9_Ccd.png"
                     : legend == 2 ? "leica_luts/M3_Monopan.png"
                     : legend == 3 ? "leica_luts/M10R_Cmos.png" : null;
             if (asset == null || moduleApk == null) {
@@ -1098,7 +1099,7 @@ public class ModuleMain extends XposedModule {
                     if (legend == 0) {
                         legend = legendFromPrefs();
                     }
-                    String asset = legend == 1 ? "leica_luts/130_LeicaNatural.png"
+                    String asset = legend == 1 ? "leica_luts/M9_Ccd.png"
                             : legend == 2 ? "leica_luts/M3_Monopan.png"
                             : legend == 3 ? "leica_luts/M10R_Cmos.png" : null;
                     if (asset == null) {
@@ -1796,9 +1797,8 @@ public class ModuleMain extends XposedModule {
     // Authentic 17U M3 Monopan extraction. The old 167c769a... file was the
     // earlier reproduced fallback and must be replaced.
     private static final String M3_MD5 = "c4ff65cebdcd8edfa7146c6ab2f838f9";
-    private static final String M9_MD5 = "ecbafbf8130ba7340749e95ace25616b";
-    // Derived warm-density LUT (the 18 PM ships the M10R 3D LUTs neutral), so this
-    // file is a bake of the -0.95 EV / warmth 0.3 grade, not a Xiaomi asset.
+    // Authentic 18 Pro Max Leica M9 (CCD) 64^3 LUT upsampled from leica_filter_param_m9_preview.bin.
+    private static final String M9_MD5 = "b34771febab9723f6ce1dbe9bd3c75a4";
     // Authentic 18 Pro Max Leica M10-R (CMOS) 64^3 LUT upsampled from leica_filter_param_m10r_preview.bin.
     private static final String M10R_MD5 = "e1a95801d1a720f9ea446c290a8cc8ab";
     private static volatile int ACTIVE_LOOK = 0;
@@ -2342,7 +2342,7 @@ public class ModuleMain extends XposedModule {
 
     private Bitmap freshLookBitmap(String name) {
         String asset = "lut_m3".equals(name) ? "leica_luts/M3_Monopan.png"
-                : "lut_m9".equals(name) ? "leica_luts/130_LeicaNatural.png"
+                : "lut_m9".equals(name) ? "leica_luts/M9_Ccd.png"
                 : "lut_m10r".equals(name) ? "leica_luts/M10R_Cmos.png" : null;
         if (moduleApk == null) {
             return null;
@@ -2476,7 +2476,7 @@ public class ModuleMain extends XposedModule {
     // filters; nothing stock is touched.
     private void ensureLookFile(String name) {
         String asset = "lut_m3".equals(name) ? "leica_luts/M3_Monopan.png"
-                : "lut_m9".equals(name) ? "leica_luts/130_LeicaNatural.png"
+                : "lut_m9".equals(name) ? "leica_luts/M9_Ccd.png"
                 : "lut_m10r".equals(name) ? "leica_luts/M10R_Cmos.png" : null;
         if (moduleApk == null || asset == null) {
             return;
@@ -2515,7 +2515,7 @@ public class ModuleMain extends XposedModule {
 
     private boolean writeLookAsset(String name, java.nio.file.Path dst) {
         String asset = "lut_m3".equals(name) ? "leica_luts/M3_Monopan.png"
-                : "lut_m9".equals(name) ? "leica_luts/130_LeicaNatural.png"
+                : "lut_m9".equals(name) ? "leica_luts/M9_Ccd.png"
                 : "lut_m10r".equals(name) ? "leica_luts/M10R_Cmos.png" : null;
         if (moduleApk == null || asset == null) {
             return false;

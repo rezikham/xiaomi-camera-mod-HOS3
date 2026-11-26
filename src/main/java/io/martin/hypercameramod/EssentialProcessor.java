@@ -360,7 +360,11 @@ final class EssentialProcessor {
         }
         double ev100 = Math.log((double) fNumber * fNumber / exposure) / Math.log(2.0)
                 - Math.log((double) iso / 100.0) / Math.log(2.0);
-        float lux = (float) Math.max(0.1, Math.min(10000.0, 2.5 * Math.pow(2.0, ev100)));
+        // libm9base adaptiveLut/adaptiveShading index the leica_filter_param_*.bin
+        // tables with Qualcomm AEC lux_idx (0..210 bright sunlight, 240..310 shade,
+        // 330..380 indoor, 400..470 dim indoor, 490..530 night, 550..999 very dark),
+        // NOT physical lux (which is inverted and maps daylight to night & vice versa).
+        float lux = (float) Math.max(0.0, Math.min(999.0, 470.0 - 25.0 * ev100));
         float cct = estimateCct(bitmap);
         if (!Float.isFinite(cct)) {
             cct = 5500f;
