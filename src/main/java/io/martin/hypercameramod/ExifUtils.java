@@ -1,5 +1,7 @@
 package io.martin.hypercameramod;
 
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.util.Log;
 
 import java.io.BufferedInputStream;
@@ -7,9 +9,15 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.function.Function;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * EXIF tag injection for Gallery LEICA button recognition.
@@ -424,6 +432,8 @@ public final class ExifUtils {
             legendName = "Legend.M9";
         } else if (legendMode == 2) {
             legendName = "Legend.MONOPAN";
+        } else if (legendMode == 3) {
+            legendName = "Legend.M10R";
         } else {
             return jpeg;
         }
@@ -571,6 +581,14 @@ public final class ExifUtils {
 
     public static final int TAG_MAKERNOTE = 0x927C;
     public static final int TAG_REEDIT = 0x88A4; // 34980
+    public static final int TAG_FOCUS_POINT = 0x8890; // 34960 (focusPoint)
+    public static final int TAG_DEPTH_MAP_VERSION = 0x8898; // 34968 (depthMapVersion)
+    public static final int TAG_CV_SESSION_KEY_TYPE = 0x889F; // 34975 (XiaomiCvSessionkeyType)
+    public static final int CV_SESSION_ORIGINAL_PORTRAIT = 104; // PhotoLeicaStyle.NATURAL_PORTRAIT
+
+    private static final byte[] EXIF_APP1_HEADER = {'E', 'x', 'i', 'f', 0, 0};
+    private static final byte[] XMP_APP1_HEADER =
+            "http://ns.adobe.com/xap/1.0/\0".getBytes(StandardCharsets.US_ASCII);
 
     /**
      * Writes Xiaomi MakerNote V2 ("Xiaomi\0\1MM", MomentVersion=0x00020000, MomentType=0,
@@ -615,20 +633,127 @@ public final class ExifUtils {
         }
     }
 
+    /** Sets ExifIFD XiaomiCvSessionkeyType (0x889F, BYTE) so Gallery shows the matching Leica style. */
+    public static byte[] setCvSessionKeyType(byte[] jpeg, int value) {
+        if (!isJpeg(jpeg)) {
+            return jpeg;
+        }
+        try {
+            return upsertExifEntry(jpeg, TAG_CV_SESSION_KEY_TYPE, TYPE_BYTE, 1,
+                    new byte[] {(byte) value, 0, 0, 0}, null);
+        } catch (Throwable t) {
+            Log.w(TAG, "setCvSessionKeyType failed: " + t);
+            return jpeg;
+        }
+    }
+
+    /** Sets ExifIFD XiaomiCvSessionkeyType (0x889F, BYTE) in a JPEG file in place. */
+    public static void setCvSessionKeyTypeInFile(File file, int value) {
+        try {
+            byte[] data = Files.readAllBytes(file.toPath());
+            byte[] out = setCvSessionKeyType(data, value);
+            if (out != data) {
+                Files.write(file.toPath(), out);
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "setCvSessionKeyTypeInFile failed: " + t);
+        }
+    }
+
+    /**
+     * Removes {@link #TAG_DEPTH_MAP_VERSION} ({@code 0x8898}) and {@link #TAG_FOCUS_POINT}
+     * ({@code 0x8890}) from ExifIFD so Gallery hides the bokeh button when no depth container exists.
+     */
+    public static void stripRefocusTagsInFile(File file) {
+        try {
+            byte[] data = Files.readAllBytes(file.toPath());
+            byte[] out = stripRefocusTags(data);
+            if (out != data) {
+                Files.write(file.toPath(), out);
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "stripRefocusTagsInFile failed: " + t);
+        }
+    }
+
+    /** Removes portrait refocus tags from ExifIFD while keeping all remaining TIFF offsets valid. */
+    public static byte[] stripRefocusTags(byte[] jpeg) {
+        if (!isJpeg(jpeg)) {
+            return jpeg;
+        }
+        int[] exifSeg = findExifApp1Segment(jpeg);
+        if (exifSeg == null) {
+            return jpeg;
+        }
+        int exifOffset = exifSeg[0];
+        int exifLength = exifSeg[1];
+        int tiffOffset = exifOffset + 10;
+        int tiffLength = exifLength - 8;
+        if (tiffLength < 8 || tiffOffset + tiffLength > jpeg.length) {
+            return jpeg;
+        }
+        ByteOrder order = jpeg[tiffOffset] == 'M' ? ByteOrder.BIG_ENDIAN : ByteOrder.LITTLE_ENDIAN;
+        byte[] tiff = new byte[tiffLength];
+        System.arraycopy(jpeg, tiffOffset, tiff, 0, tiffLength);
+
+        int ifd0 = read32(tiff, 4, order);
+        int exifIfd = findExifIfdOffset(tiff, ifd0, order);
+        if (exifIfd <= 0 || exifIfd + 2 > tiff.length) {
+            return jpeg;
+        }
+
+        boolean modified = false;
+        while (true) {
+            int cnt = read16(tiff, exifIfd, order);
+            int start = exifIfd + 2;
+            if (cnt <= 0 || start + cnt * 12 + 4 > tiff.length) {
+                break;
+            }
+            int removePos = -1;
+            for (int n = 0; n < cnt; n++) {
+                int e = start + n * 12;
+                int t = read16(tiff, e, order);
+                if (t == TAG_DEPTH_MAP_VERSION || t == TAG_FOCUS_POINT) {
+                    removePos = e;
+                    break;
+                }
+            }
+            if (removePos < 0 || removePos <= ifd0) {
+                break;
+            }
+            shiftOffsetsFrom(tiff, ifd0, removePos + 12, -12, order, new java.util.HashSet<>());
+            put16(tiff, exifIfd, cnt - 1, order);
+            byte[] shrunk = new byte[tiff.length - 12];
+            System.arraycopy(tiff, 0, shrunk, 0, removePos);
+            System.arraycopy(tiff, removePos + 12, shrunk, removePos, tiff.length - (removePos + 12));
+            tiff = shrunk;
+            modified = true;
+        }
+
+        if (!modified) {
+            return jpeg;
+        }
+        return replaceApp1Tiff(jpeg, exifOffset, exifLength, 8 + tiff.length, tiffOffset, tiff);
+    }
+
     private static boolean isJpeg(byte[] j) {
         return j != null && j.length > 4 && (j[0] & 0xFF) == 0xFF && (j[1] & 0xFF) == 0xD8;
     }
 
-    /**
-     * Inserts or replaces an ExifIFD entry (kept sorted by tag). {@code inline} is the 4-byte
-     * value field for small values; otherwise {@code ext} is appended to the TIFF block and
-     * referenced by offset. Requires an existing Exif APP1 with an ExifIFD.
-     */
-    private static byte[] upsertExifEntry(byte[] jpeg, int tag, int type, int count,
-                                          byte[] inline, byte[] ext) {
+    private static boolean hasPrefixAt(byte[] data, int offset, byte[] prefix, int availLen) {
+        if (availLen < prefix.length || offset < 0 || offset + prefix.length > data.length) {
+            return false;
+        }
+        for (int k = 0; k < prefix.length; k++) {
+            if (data[offset + k] != prefix[k]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static int[] findExifApp1Segment(byte[] jpeg) {
         int i = 2;
-        int exifOffset = -1;
-        int exifLength = 0;
         while (i + 4 <= jpeg.length && (jpeg[i] & 0xFF) == 0xFF) {
             int marker = jpeg[i + 1] & 0xFF;
             if (marker == 0xDA || marker == 0xD9) {
@@ -638,32 +763,49 @@ public final class ExifUtils {
             if (length < 2 || i + length + 2 > jpeg.length) {
                 break;
             }
-            if (marker == 0xE1 && length >= 10 && jpeg[i + 4] == 'E' && jpeg[i + 5] == 'x'
-                    && jpeg[i + 6] == 'i' && jpeg[i + 7] == 'f' && jpeg[i + 8] == 0) {
-                exifOffset = i;
-                exifLength = length;
-                break;
+            if (marker == 0xE1 && hasPrefixAt(jpeg, i + 4, EXIF_APP1_HEADER, length - 2)) {
+                return new int[]{i, length};
             }
             i += length + 2;
         }
-        if (exifOffset < 0) {
+        return null;
+    }
+
+    private static int findExifIfdOffset(byte[] tiff, int ifd0, ByteOrder order) {
+        if (ifd0 < 0 || ifd0 + 2 > tiff.length) {
+            return -1;
+        }
+        int c0 = read16(tiff, ifd0, order);
+        for (int n = 0; n < c0; n++) {
+            int e = ifd0 + 2 + n * 12;
+            if (e + 12 <= tiff.length && read16(tiff, e, order) == TAG_EXIF_IFD) {
+                return read32(tiff, e + 8, order);
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Inserts or replaces an ExifIFD entry (kept sorted by tag). {@code inline} is the 4-byte
+     * value field for small values; otherwise {@code ext} is appended to the TIFF block and
+     * referenced by offset. Requires an existing Exif APP1 with an ExifIFD.
+     */
+    private static byte[] upsertExifEntry(byte[] jpeg, int tag, int type, int count,
+                                          byte[] inline, byte[] ext) {
+        int[] exifSeg = findExifApp1Segment(jpeg);
+        if (exifSeg == null) {
             Log.w(TAG, "no Exif APP1 for tag " + Integer.toHexString(tag));
             return jpeg;
         }
+        int exifOffset = exifSeg[0];
+        int exifLength = exifSeg[1];
         int tiffOffset = exifOffset + 10;
         int tiffLength = exifLength - 8;
         ByteOrder order = jpeg[tiffOffset] == 'M' ? ByteOrder.BIG_ENDIAN : ByteOrder.LITTLE_ENDIAN;
         byte[] tiff = new byte[tiffLength];
         System.arraycopy(jpeg, tiffOffset, tiff, 0, tiffLength);
         int ifd0 = read32(tiff, 4, order);
-        int c0 = read16(tiff, ifd0, order);
-        int exifIfd = -1;
-        for (int n = 0; n < c0; n++) {
-            int e = ifd0 + 2 + n * 12;
-            if (e + 12 <= tiffLength && read16(tiff, e, order) == TAG_EXIF_IFD) {
-                exifIfd = read32(tiff, e + 8, order);
-            }
-        }
+        int exifIfd = findExifIfdOffset(tiff, ifd0, order);
         if (exifIfd <= 0 || exifIfd + 2 > tiffLength) {
             Log.w(TAG, "no ExifIFD for tag " + Integer.toHexString(tag));
             return jpeg;
@@ -747,6 +889,227 @@ public final class ExifUtils {
         }
     }
 
+    /**
+     * Copies the source portrait JPEG's {@code <depthmap>} XMP APP1 segment and trailing
+     * unblurred raw JPEG + {@code MCBOKEH} depth container into {@code processed}, optionally
+     * applying {@code rawGrader} (LUT) to the embedded raw JPEG while updating {@code rawlength}
+     * and {@code rawoffset}. Returns {@code true} only when a valid depth container is preserved.
+     */
+    public static boolean preservePortraitDepthFromFile(
+            File source, File processed, Function<Bitmap, Bitmap> rawGrader) {
+        try {
+            byte[] xmpSeg = readApp1SegmentByPrefix(source, XMP_APP1_HEADER);
+            if (xmpSeg == null) {
+                Log.d(TAG, "preservePortraitDepthFromFile skipped: no XMP APP1 segment");
+                return false;
+            }
+            int payloadOffset = 4 + XMP_APP1_HEADER.length;
+            String xmp = new String(xmpSeg, payloadOffset, xmpSeg.length - payloadOffset,
+                    StandardCharsets.UTF_8);
+            if (!xmp.contains("depthmap")) {
+                Log.d(TAG, "preservePortraitDepthFromFile skipped: XMP has no depthmap");
+                return false;
+            }
+
+            int rawLength = parseXmpIntAttr(xmp, "rawlength");
+            int depthLength = parseXmpIntAttr(xmp, "depthlength");
+            int rawOffset = parseXmpIntAttr(xmp, "rawoffset");
+            int depthOffset = parseXmpIntAttr(xmp, "depthoffset");
+            if (rawLength < 10_000 || depthLength < 10_000
+                    || depthOffset < depthLength || rawOffset < depthOffset) {
+                Log.i(TAG, "preservePortraitDepthFromFile skipped: invalid XMP offsets "
+                        + rawLength + "/" + depthLength + "/" + rawOffset + "/" + depthOffset);
+                return false;
+            }
+
+            long sourceLen = source.length();
+            if (sourceLen <= rawOffset) {
+                Log.i(TAG, "preservePortraitDepthFromFile skipped: file shorter than rawoffset");
+                return false;
+            }
+            long rawStart = sourceLen - rawOffset;
+            long depthStart = sourceLen - depthOffset;
+            if (rawStart + rawLength > depthStart) {
+                Log.i(TAG, "preservePortraitDepthFromFile skipped: raw overlaps depth");
+                return false;
+            }
+
+            byte[] rawBytes = new byte[rawLength];
+            byte[] depthTail = new byte[depthOffset];
+            try (RandomAccessFile raf = new RandomAccessFile(source, "r")) {
+                raf.seek(rawStart);
+                raf.readFully(rawBytes);
+                raf.seek(depthStart);
+                raf.readFully(depthTail);
+            }
+            if ((rawBytes[0] & 0xFF) != 0xFF || (rawBytes[1] & 0xFF) != 0xD8) {
+                Log.i(TAG, "preservePortraitDepthFromFile skipped: embedded raw is not JPEG");
+                return false;
+            }
+            if (!containsAsciiBytes(depthTail, Math.min(512, depthTail.length), "MCBOKEH")) {
+                Log.i(TAG, "preservePortraitDepthFromFile skipped: missing MCBOKEH header");
+                return false;
+            }
+
+            byte[] finalRawBytes = rawBytes;
+            boolean graded = false;
+            if (rawGrader != null) {
+                try {
+                    Bitmap rawBm = BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.length);
+                    if (rawBm != null) {
+                        Bitmap outBm = rawGrader.apply(rawBm);
+                        if (outBm != rawBm) {
+                            rawBm.recycle();
+                        }
+                        if (outBm != null) {
+                            try {
+                                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                                if (outBm.compress(Bitmap.CompressFormat.JPEG, 95, baos)) {
+                                    byte[] gradedBytes = baos.toByteArray();
+                                    if (gradedBytes.length > 10_000) {
+                                        finalRawBytes = gradedBytes;
+                                        graded = true;
+                                    }
+                                }
+                            } finally {
+                                outBm.recycle();
+                            }
+                        }
+                    }
+                } catch (Throwable t) {
+                    Log.w(TAG, "preservePortraitDepthFromFile raw grading failed: " + t);
+                }
+            }
+
+            int newRawLength = finalRawBytes.length;
+            int newRawOffset = newRawLength + depthTail.length;
+            String updatedXmp = replaceXmpIntAttr(xmp, "rawlength", newRawLength);
+            updatedXmp = replaceXmpIntAttr(updatedXmp, "rawoffset", newRawOffset);
+            byte[] updatedXmpBytes = updatedXmp.getBytes(StandardCharsets.UTF_8);
+            int newSegLen = 2 + XMP_APP1_HEADER.length + updatedXmpBytes.length;
+            if (newSegLen > 0xFFFF) {
+                Log.w(TAG, "preservePortraitDepthFromFile skipped: XMP segment overflow");
+                return false;
+            }
+
+            byte[] procBytes = Files.readAllBytes(processed.toPath());
+            if (!isJpeg(procBytes)) {
+                return false;
+            }
+            int insertPos = 2;
+            int existingXmpStart = -1;
+            int existingXmpEnd = -1;
+            int i = 2;
+            while (i + 4 <= procBytes.length && (procBytes[i] & 0xFF) == 0xFF) {
+                int marker = procBytes[i + 1] & 0xFF;
+                if (marker == 0xDA || marker == 0xD9) {
+                    break;
+                }
+                if (marker == 0x01 || (marker >= 0xD0 && marker <= 0xD8)) {
+                    i += 2;
+                    continue;
+                }
+                int length = ((procBytes[i + 2] & 0xFF) << 8) | (procBytes[i + 3] & 0xFF);
+                if (length < 2 || i + length + 2 > procBytes.length) {
+                    break;
+                }
+                if (marker == 0xE1 && hasPrefixAt(procBytes, i + 4, EXIF_APP1_HEADER, length - 2)) {
+                    insertPos = i + length + 2;
+                } else if (marker == 0xE1 && existingXmpStart < 0
+                        && hasPrefixAt(procBytes, i + 4, XMP_APP1_HEADER, length - 2)) {
+                    existingXmpStart = i;
+                    existingXmpEnd = i + length + 2;
+                }
+                i += length + 2;
+            }
+
+            File tmp = new File(processed.getParentFile(), processed.getName() + ".depth");
+            try {
+                try (OutputStream out = Files.newOutputStream(tmp.toPath())) {
+                    int pos = 0;
+                    if (existingXmpStart >= 0 && existingXmpStart < insertPos) {
+                        out.write(procBytes, 0, existingXmpStart);
+                        pos = existingXmpEnd;
+                    }
+                    if (insertPos > pos) {
+                        out.write(procBytes, pos, insertPos - pos);
+                        pos = insertPos;
+                    }
+                    out.write(0xFF);
+                    out.write(0xE1);
+                    out.write((newSegLen >> 8) & 0xFF);
+                    out.write(newSegLen & 0xFF);
+                    out.write(XMP_APP1_HEADER);
+                    out.write(updatedXmpBytes);
+                    if (existingXmpStart >= pos) {
+                        if (existingXmpStart > pos) {
+                            out.write(procBytes, pos, existingXmpStart - pos);
+                        }
+                        pos = existingXmpEnd;
+                    }
+                    if (pos < procBytes.length) {
+                        out.write(procBytes, pos, procBytes.length - pos);
+                    }
+                    out.write(finalRawBytes);
+                    out.write(depthTail);
+                }
+                if (!tmp.renameTo(processed)) {
+                    Files.move(tmp.toPath(), processed.toPath(),
+                            java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                }
+            } catch (Throwable t) {
+                tmp.delete();
+                throw t;
+            }
+
+            Log.i(TAG, "preserved portrait depth: raw=" + finalRawBytes.length
+                    + " depth=" + depthTail.length + " graded=" + graded);
+            return true;
+        } catch (Throwable t) {
+            Log.w(TAG, "preservePortraitDepthFromFile failed: " + t);
+            return false;
+        }
+    }
+
+    private static int parseXmpIntAttr(String xmp, String attr) {
+        Matcher m = Pattern.compile(attr + "=(&quot;|\")(\\d+)\\1").matcher(xmp);
+        if (!m.find()) {
+            return -1;
+        }
+        try {
+            return Integer.parseInt(m.group(2));
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
+    private static String replaceXmpIntAttr(String xmp, String attr, int value) {
+        Matcher m = Pattern.compile(attr + "=(&quot;|\")(\\d+)\\1").matcher(xmp);
+        if (!m.find()) {
+            return xmp;
+        }
+        String quote = m.group(1);
+        return xmp.substring(0, m.start()) + attr + "=" + quote + value + quote
+                + xmp.substring(m.end());
+    }
+
+    private static boolean containsAsciiBytes(byte[] data, int limit, String needle) {
+        byte[] pat = needle.getBytes(StandardCharsets.US_ASCII);
+        if (limit < pat.length) {
+            return false;
+        }
+        outer:
+        for (int i = 0; i <= limit - pat.length; i++) {
+            for (int j = 0; j < pat.length; j++) {
+                if (data[i + j] != pat[j]) {
+                    continue outer;
+                }
+            }
+            return true;
+        }
+        return false;
+    }
+
     /** Set the legendmode tag in a JPEG file in place. */
     public static void setLegendModeInFile(File file, int mode) {
         try {
@@ -761,6 +1124,10 @@ public final class ExifUtils {
     }
 
     private static byte[] readExifSegment(File source) {
+        return readApp1SegmentByPrefix(source, EXIF_APP1_HEADER);
+    }
+
+    private static byte[] readApp1SegmentByPrefix(File source, byte[] prefix) {
         try (InputStream raw = new FileInputStream(source);
              BufferedInputStream in = new BufferedInputStream(raw)) {
             if (in.read() != 0xFF || in.read() != 0xD8) {
@@ -798,9 +1165,7 @@ public final class ExifUtils {
                     }
                     read += n;
                 }
-                if (marker == 0xE1 && length >= 8
-                        && segment[4] == 'E' && segment[5] == 'x' && segment[6] == 'i'
-                        && segment[7] == 'f' && segment[8] == 0 && segment[9] == 0) {
+                if (marker == 0xE1 && hasPrefixAt(segment, 4, prefix, length - 2)) {
                     return segment;
                 }
             }

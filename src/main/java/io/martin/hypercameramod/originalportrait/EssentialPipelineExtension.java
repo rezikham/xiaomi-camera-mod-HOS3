@@ -352,18 +352,28 @@ public class EssentialPipelineExtension {
         if (!BitmapUtils.saveJpeg(resultBitmap, outputFile, 95)) {
             throw new IOException("Failed to save processed JPEG");
         }
-        
-        // Keep the camera's EXIF (time, location, orientation, maker notes). The custom
-        // legendmode tag injection is disabled until its IFD rebuild is fixed; corrupting
-        // the maker notes is worse than leaving the stock portrait metadata intact.
-        ExifUtils.copyExifFromFile(jpegFile, outputFile);
-        
-        // Cleanup
+
+        // Release large bitmaps before optional depth/raw JPEG grading to keep peak heap low.
         if (resultBitmap != bitmap) {
             resultBitmap.recycle();
         }
         bitmap.recycle();
-        
+
+        // Keep the camera's EXIF (time, location, orientation, maker notes), then rewrite
+        // XiaomiCvSessionkeyType (0x889F) from Master Portrait (2) — which HAL writes during the
+        // preview-bokeh remap — to NATURAL_PORTRAIT (104) so Gallery details show "Original portrait".
+        ExifUtils.copyExifFromFile(jpegFile, outputFile);
+        ExifUtils.setCvSessionKeyTypeInFile(outputFile, ExifUtils.CV_SESSION_ORIGINAL_PORTRAIT);
+
+        boolean depthPreserved = ExifUtils.preservePortraitDepthFromFile(
+                jpegFile, outputFile,
+                colorProfile != null ? raw -> colorProfile.apply(raw) : null);
+        if (!depthPreserved) {
+            ExifUtils.stripRefocusTagsInFile(outputFile);
+        }
+        Log.i(TAG, "Original Portrait depth "
+                + (depthPreserved ? "preserved" : "unavailable (refocus tags stripped)"));
+
         return outputFile;
     }
     
