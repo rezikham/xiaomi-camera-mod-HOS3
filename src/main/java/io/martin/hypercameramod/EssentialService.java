@@ -328,7 +328,7 @@ public final class EssentialService extends Service {
             }
             byte[] withExif = copyExif(jpeg, encoded.toByteArray());
             // Inject legendmode EXIF tag (0x88B0) so Gallery shows LEICA button
-            return ExifUtils.injectLegendMode(withExif, legend);
+            return ExifUtils.finalizeLegend(withExif, jpeg, legend);
         } finally {
             bitmap.recycle();
         }

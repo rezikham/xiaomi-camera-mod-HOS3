@@ -4,6 +4,19 @@ All notable changes to HyperCameraMod. The module follows a simple scheme: stabl
 
 ## [Unreleased]
 
+### Added
+
+- **18 Pro Max palette/parameters bridge**: `patch_filter_palette_18pm.py` patches the 14U filter plugin to use 18PM `libMiPhotoFilter.so` (`StyleAdjustEffect`), so Saturation/Tone/etc. now apply on capture. `LEICA STD` captures are covered too.
+- **Authentic 18PM M3/M9/M10R data**: 18PM `libmialgo_monopan.so` (M3), M9 snapshot with `lut_snapshot_en` fixed, M10R on the 18PM non-QNN `applyOriginalFilter` path, and genuine `M9_Ccd.png`/`M10R_Cmos.png` LUTs.
+- Docs 27 and 28: palette/essential RE and 18PM photo-archive EXIF/XMP/MakerNote analysis.
+
+- **MakerNote V2 for M3/M9/M10R**: Essential output now also carries ExifIFD `0x927c` (`Xiaomi\0\1MM`, `MomentVersion=0x00020000`, `MomentSubMode` 1/2/3), which MediaEditor/CN Gallery need to recognise M10R; legacy `0x88b0` + XMP container are kept for older Gallery builds.
+- **Re-edit data writer (`ReEditWriter`)**: builds `ReEditDataBeanMsg` (clean capture + `filter` op), appends it after EOI, adds `micamedit` XMP and EXIF `reedit=1`. Opt-in via `setprop camera.feature.reedit 1` until the JPEG offset convention is verified on-device.
+
+### Fixed
+
+- Gallery "couldn't parse image" on M9/M3 caused by a duplicate APP1 XMP block.
+
 ### Changed
 
 - **All 12 film filters are exposed**: 600F, BF70, R600, P100F, F-50, KC64, V250, H400, KP160, FC400, C-50D, KG200.

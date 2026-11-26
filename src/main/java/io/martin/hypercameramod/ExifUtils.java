@@ -549,6 +549,178 @@ public final class ExifUtils {
         return out.toByteArray();
     }
 
+
+
+    /**
+     * Legend tagging for Essential output: V1 byte + XMP container (older Gallery), MakerNote V2
+     * (MediaEditor / CN Gallery, required for M10R) and, when enabled with
+     * {@code setprop camera.feature.reedit 1}, Xiaomi re-edit data holding {@code clean}.
+     */
+    public static byte[] finalizeLegend(byte[] processed, byte[] clean, int legend) {
+        byte[] out = injectMakerNoteV2(injectLegendMode(processed, legend), legend);
+        if (ReEditWriter.enabled() && clean != null) {
+            out = ReEditWriter.append(out, clean, 0, ReEditWriter.scriptFor(legend),
+                    ReEditWriter.styleName(legend));
+        }
+        return out;
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // MakerNote V2 (ExifIFD 0x927c) + re-edit tag (0x88A4)
+    // ---------------------------------------------------------------------------------------
+
+    public static final int TAG_MAKERNOTE = 0x927C;
+    public static final int TAG_REEDIT = 0x88A4; // 34980
+
+    /**
+     * Writes Xiaomi MakerNote V2 ("Xiaomi\0\1MM", MomentVersion=0x00020000, MomentType=0,
+     * MomentSubMode, MomentPro=0) as MediaEditor's LegendaryVersionResolver expects.
+     *
+     * @param subMode 1=M9, 2=M3, 3=M10R
+     */
+    public static byte[] injectMakerNoteV2(byte[] jpeg, int subMode) {
+        if (subMode < 1 || subMode > 3 || !isJpeg(jpeg)) {
+            return jpeg;
+        }
+        byte[] note = new byte[12 + 4 * 12];
+        byte[] head = {'X', 'i', 'a', 'o', 'm', 'i', 0, 1, 'M', 'M', 0, 4};
+        System.arraycopy(head, 0, note, 0, head.length);
+        int[] tags = {0x30, 0x31, 0x32, 0x33};
+        int[] vals = {0x00020000, 0, subMode, 0};
+        for (int n = 0; n < 4; n++) {
+            int o = 12 + n * 12;
+            put16(note, o, tags[n], ByteOrder.BIG_ENDIAN);
+            put16(note, o + 2, TYPE_LONG, ByteOrder.BIG_ENDIAN);
+            put32(note, o + 4, 1, ByteOrder.BIG_ENDIAN);
+            put32(note, o + 8, vals[n], ByteOrder.BIG_ENDIAN);
+        }
+        try {
+            return upsertExifEntry(jpeg, TAG_MAKERNOTE, 7, note.length, null, note);
+        } catch (Throwable t) {
+            Log.w(TAG, "MakerNote V2 injection failed: " + t);
+            return jpeg;
+        }
+    }
+
+    /** Sets ExifIFD reedit (0x88A4, BYTE) = 1 so Gallery offers re-edit. */
+    public static byte[] setReEditFlag(byte[] jpeg) {
+        if (!isJpeg(jpeg)) {
+            return jpeg;
+        }
+        try {
+            return upsertExifEntry(jpeg, TAG_REEDIT, TYPE_BYTE, 1, new byte[] {1, 0, 0, 0}, null);
+        } catch (Throwable t) {
+            Log.w(TAG, "reedit flag failed: " + t);
+            return jpeg;
+        }
+    }
+
+    private static boolean isJpeg(byte[] j) {
+        return j != null && j.length > 4 && (j[0] & 0xFF) == 0xFF && (j[1] & 0xFF) == 0xD8;
+    }
+
+    /**
+     * Inserts or replaces an ExifIFD entry (kept sorted by tag). {@code inline} is the 4-byte
+     * value field for small values; otherwise {@code ext} is appended to the TIFF block and
+     * referenced by offset. Requires an existing Exif APP1 with an ExifIFD.
+     */
+    private static byte[] upsertExifEntry(byte[] jpeg, int tag, int type, int count,
+                                          byte[] inline, byte[] ext) {
+        int i = 2;
+        int exifOffset = -1;
+        int exifLength = 0;
+        while (i + 4 <= jpeg.length && (jpeg[i] & 0xFF) == 0xFF) {
+            int marker = jpeg[i + 1] & 0xFF;
+            if (marker == 0xDA || marker == 0xD9) {
+                break;
+            }
+            int length = ((jpeg[i + 2] & 0xFF) << 8) | (jpeg[i + 3] & 0xFF);
+            if (length < 2 || i + length + 2 > jpeg.length) {
+                break;
+            }
+            if (marker == 0xE1 && length >= 10 && jpeg[i + 4] == 'E' && jpeg[i + 5] == 'x'
+                    && jpeg[i + 6] == 'i' && jpeg[i + 7] == 'f' && jpeg[i + 8] == 0) {
+                exifOffset = i;
+                exifLength = length;
+                break;
+            }
+            i += length + 2;
+        }
+        if (exifOffset < 0) {
+            Log.w(TAG, "no Exif APP1 for tag " + Integer.toHexString(tag));
+            return jpeg;
+        }
+        int tiffOffset = exifOffset + 10;
+        int tiffLength = exifLength - 8;
+        ByteOrder order = jpeg[tiffOffset] == 'M' ? ByteOrder.BIG_ENDIAN : ByteOrder.LITTLE_ENDIAN;
+        byte[] tiff = new byte[tiffLength];
+        System.arraycopy(jpeg, tiffOffset, tiff, 0, tiffLength);
+        int ifd0 = read32(tiff, 4, order);
+        int c0 = read16(tiff, ifd0, order);
+        int exifIfd = -1;
+        for (int n = 0; n < c0; n++) {
+            int e = ifd0 + 2 + n * 12;
+            if (e + 12 <= tiffLength && read16(tiff, e, order) == TAG_EXIF_IFD) {
+                exifIfd = read32(tiff, e + 8, order);
+            }
+        }
+        if (exifIfd <= 0 || exifIfd + 2 > tiffLength) {
+            Log.w(TAG, "no ExifIFD for tag " + Integer.toHexString(tag));
+            return jpeg;
+        }
+        int cnt = read16(tiff, exifIfd, order);
+        int start = exifIfd + 2;
+        if (start + cnt * 12 + 4 > tiffLength) {
+            return jpeg;
+        }
+        int existing = -1;
+        int insertAt = start + cnt * 12;
+        for (int n = 0; n < cnt; n++) {
+            int e = start + n * 12;
+            int t = read16(tiff, e, order);
+            if (t == tag) {
+                existing = e;
+                break;
+            }
+            if (t > tag && insertAt == start + cnt * 12) {
+                insertAt = e;
+            }
+        }
+        int extLen = ext == null ? 0 : ext.length + (ext.length & 1);
+        int delta = existing >= 0 ? 0 : 12;
+        int newLength = tiffLength + delta + extLen;
+        if (exifLength + delta + extLen > 0xFFFF) {
+            Log.w(TAG, "EXIF segment would overflow");
+            return jpeg;
+        }
+        byte[] out;
+        int entryPos;
+        if (existing >= 0) {
+            out = new byte[newLength];
+            System.arraycopy(tiff, 0, out, 0, tiffLength);
+            entryPos = existing;
+        } else {
+            shiftOffsetsFrom(tiff, ifd0, insertAt, 12, order, new java.util.HashSet<>());
+            put16(tiff, exifIfd, cnt + 1, order);
+            out = new byte[newLength];
+            System.arraycopy(tiff, 0, out, 0, insertAt);
+            System.arraycopy(tiff, insertAt, out, insertAt + 12, tiffLength - insertAt);
+            entryPos = insertAt;
+        }
+        put16(out, entryPos, tag, order);
+        put16(out, entryPos + 2, type, order);
+        put32(out, entryPos + 4, count, order);
+        if (ext != null) {
+            int extPos = tiffLength + delta;
+            System.arraycopy(ext, 0, out, extPos, ext.length);
+            put32(out, entryPos + 8, extPos, order);
+        } else {
+            System.arraycopy(inline, 0, out, entryPos + 8, 4);
+        }
+        return replaceApp1Tiff(jpeg, exifOffset, exifLength, exifLength + delta + extLen,
+                tiffOffset, out);
+    }
+
     /** Copy the source JPEG's EXIF APP1 segment into the processed JPEG. */
     public static void copyExifFromFile(File source, File processed) {
         try {
