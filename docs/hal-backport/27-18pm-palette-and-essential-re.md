@@ -29,6 +29,18 @@ Target: Xiaomi 14 Ultra (`aurora`, `1c4e4dec`, SM8650 / HTP V75, HyperOS 3, Came
 - **Bridge tool (`tools/hal-port/aurora/patch_filter_palette_18pm.py`):**
   - Patches those 4 instructions in a copy of 14U `com.xiaomi.plugin.filter.so` (`+0x50 -> +0x58`, `+0x60 -> +0x68`) and renames its `DT_NEEDED` (and 18PM `libMiPhotoFilter.so`'s `DT_SONAME`) in-place from `libMiPhotoFilter.so` to `libMiPhotoFlt18p.so` (exact 19-byte `.dynstr` match).
   - Leaves stock `/odm/lib64/libMiPhotoFilter.so` completely untouched for `com.xiaomi.plugin.watermark.so`.
+- **Live on-device verification (`1c4e4dec`, `/data/adb/modules/hcm-palette-18pm`):**
+  - Mounted via KernelSU `$MODDIR/system/odm/lib64/{libMiPhotoFlt18p.so,camera/plugins/com.xiaomi.plugin.filter.so}` (`0644`, `u:object_r:vendor_file:s0`).
+  - `vendor.qti.camera.provider-service_64` loaded both `libMiPhotoFlt18p.so` (for `com.xiaomi.plugin.filter.so`) and stock `libMiPhotoFilter.so` (for `com.xiaomi.plugin.watermark.so`) cleanly with zero linker or SELinux errors.
+  - Capture test `IMG_20261126_104557.jpg` (`ESTL M10R` + `Saturation = -1.0`):
+    ```text
+    CandySDK: process effect StyleAdjustEffect
+    CandySDK: effect_name: StyleAdjustEffect, params_name: Algos, params_value: 4.000000
+    CandySDK: effect_name: StyleAdjustEffect, params_name: SaturationIntensity, params_value: -1.000000
+    CandySDK: VideoFilter::Process in_frame->width: 4096 in_frame->height: 3072 totalProcess 43 uploadProcess 37 renderProcss 6 downloadProcess 0
+    ```
+  - Pixel verification: `3072×4096`, `mean_sat = 0.0000`, `p95_sat = 0.0000`, `mean_chroma = 0.00`, `max|R-B| = 0.0` — 1:1 18PM `StyleAdjustEffect` GPU rendering in 43 ms inside the stock HAL.
+  - Note: on `LEICA STD` (no filter active), Camera 6.7 leaves `com.xiaomi.mivi2.renderType = 0`, so `FilterPlugin::isEnabled()` skips the filter node; when any Leica Look / Film filter is active, `com.xiaomi.mivi2.renderType != 0` and both `CubeLutEffect` + `StyleAdjustEffect` execute on GPU.
 
 ---
 
