@@ -53,6 +53,8 @@ import io.github.libxposed.api.XposedModule;
 public class ModuleMain extends XposedModule {
     private static final String TAG = "HyperCameraMod";
     private static final String CAMERA_PACKAGE = "com.android.camera";
+    private static final String GALLERY_PACKAGE = "com.miui.gallery";
+    private static final String MEDIA_EDITOR_PACKAGE = "com.miui.mediaeditor";
 
     // 1. Palette and Parameters
     private static final String STYLE_VERSION_KEY = "camera.feature.styleVersion";
@@ -154,6 +156,8 @@ public class ModuleMain extends XposedModule {
     private volatile boolean styleHooked;
     private volatile boolean textHooked;
     private volatile boolean paletteCaptureHooked;
+    private volatile boolean galleryHooked;
+    private volatile boolean mediaEditorHooked;
     // -1 = not read yet, 0 = off, 1 = on. Read once per Camera process.
     private volatile int originalPortraitState = -1;
     // LUT files staged to /data/vendor/camera/ on first M3/M9 selection.
@@ -176,7 +180,18 @@ public class ModuleMain extends XposedModule {
     }
 
     private void install(String stage, String pkg, ClassLoader loader) {
-        if (!CAMERA_PACKAGE.equals(pkg) || loader == null) {
+        if (loader == null) {
+            return;
+        }
+        if (GALLERY_PACKAGE.equals(pkg)) {
+            installGalleryHooks(loader);
+            return;
+        }
+        if (MEDIA_EDITOR_PACKAGE.equals(pkg)) {
+            installMediaEditorHooks(loader);
+            return;
+        }
+        if (!CAMERA_PACKAGE.equals(pkg)) {
             return;
         }
         try {
@@ -2940,6 +2955,75 @@ public class ModuleMain extends XposedModule {
                     .getMethod("currentApplication").invoke(null);
         } catch (Throwable t) {
             return null;
+        }
+    }
+
+    // ---- Gallery & MediaEditor Essential Hooks ----------------------------------------------
+
+    private void installGalleryHooks(ClassLoader loader) {
+        if (galleryHooked) {
+            return;
+        }
+        try {
+            Class<?> apiHelper = Class.forName(
+                    "com.miui.mediaeditor.api.MediaEditorApiHelper", false, loader);
+            Method isSupport = apiHelper.getDeclaredMethod("isDeviceSupportEssential");
+            hook(isSupport).intercept(chain -> Boolean.TRUE);
+
+            Class<?> exifUtil = Class.forName("com.miui.gallery.util.ExifUtil", false, loader);
+            Class<?> exifIface = Class.forName("com.miui.gallery3d.exif.ExifInterface", false, loader);
+            Method isEssentialPhoto = exifUtil.getDeclaredMethod("isEssentialPhoto", exifIface);
+            Method getTag = exifIface.getMethod("getTag", int.class, int.class);
+            hook(isEssentialPhoto).intercept(chain -> {
+                Object res = chain.proceed();
+                if (Boolean.TRUE.equals(res)) {
+                    return Boolean.TRUE;
+                }
+                Object exif = chain.getArg(0);
+                if (exif == null) {
+                    return Boolean.FALSE;
+                }
+                Object tag = getTag.invoke(exif, ExifUtils.TAG_LEGENDMODE, 2);
+                if (tag == null) {
+                    return Boolean.FALSE;
+                }
+                Method forceStr = tag.getClass().getMethod("forceGetValueAsString");
+                String val = String.valueOf(forceStr.invoke(tag)).trim();
+                return val.contains("1") || val.contains("2") || val.contains("3");
+            });
+
+            galleryHooked = true;
+            log(Log.INFO, TAG, "Gallery Essential hooks installed");
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "Gallery Essential hooks failed: " + t);
+        }
+    }
+
+    private void installMediaEditorHooks(ClassLoader loader) {
+        if (mediaEditorHooked) {
+            return;
+        }
+        try {
+            Class<?> provider = Class.forName(
+                    "com.miui.mediaeditor.provider.MediaEditorProviderForGallery", false, loader);
+            Method call = provider.getDeclaredMethod("call",
+                    String.class, String.class, android.os.Bundle.class);
+            hook(call).intercept(chain -> {
+                Object res = chain.proceed();
+                if (res instanceof android.os.Bundle bundle) {
+                    String method = (String) chain.getArg(0);
+                    if ("method_is_legend_available".equals(method)) {
+                        bundle.putBoolean("key_common_is_available", true);
+                    } else if (bundle.containsKey("method_is_legend_available")) {
+                        bundle.putBoolean("method_is_legend_available", true);
+                    }
+                }
+                return res;
+            });
+            mediaEditorHooked = true;
+            log(Log.INFO, TAG, "MediaEditor Essential hooks installed");
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "MediaEditor Essential hooks failed: " + t);
         }
     }
 }
