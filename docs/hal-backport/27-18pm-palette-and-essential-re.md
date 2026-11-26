@@ -65,10 +65,23 @@ Target: Xiaomi 14 Ultra (`aurora`, `1c4e4dec`, SM8650 / HTP V75, HyperOS 3, Came
   - `18PM m9_preview.bin` (`202609041131`): **114/114 non-neutral LUTs** (`5` unique lux/CCT-tuned LUTs, `mean_diff = 12.81/255` vs identity, `18.97/255` vs `130_LeicaNatural.png`, `17.79/255` vs 18PM M10R).
   - Previously, `lut_m9.png` (`ESTL M9` in the Leica Looks strip) was a copy of `130_LeicaNatural.png` (`md5 = ecbafbf8130ba7340749e95ace25616b`).
 - Extracted the genuine 18PM M9 64³ 512×512 LUT into `src/main/assets/leica_luts/M9_Ccd.png` and `camera-mod-ksu/data/vendor/camera/lut_m9.png` (`md5 = b34771febab9723f6ce1dbe9bd3c75a4`), and trimmed 18PM `leica_filter_param_m9_preview.bin` (440 bytes stripped → `1,686,102` bytes) into `src/main/assets/essential/leica_filter_param_m9_snapshot.bin`.
+- **Critical header flag fix (`0x362 = 1`):** `libm9base.so` (`applyLeicaFilter` @ `0xce78`) checks `u16[0x362]` (`lut_snapshot_en`) before calling `adaptiveLut`. In 18PM `leica_filter_param_m9_preview.bin`, `[0x360..0x367]` was `(1, 0, 1, 1)` (`lut_snap = 0`), causing `LeicaNative` to log `LUT=0` and skip all 114 M9 LUTs during capture. Patching `u16[0x362] = 1` restored `LUT=1 shading=1` on live M9 captures.
 
-### 2.3 Live Device Verification (`1c4e4dec`)
-- M9 Essential (`IMG_20261126_043857.jpg`): `3072×4096`, `IFD0 0x88b0 = 1`, intact MakerNotes (`88` B) & zero exiftool warnings.
-- M10R Essential (`IMG_20261126_043908.jpg`): `3072×4096`, `IFD0 0x88b0 = 3`, intact MakerNotes (`88` B), `leica_filter_param_m10r_snapshot.bin` (`1,597,668` B) loaded cleanly by `libm9base`/B12.
+### 2.3 18PM M3 OpenCL Model (`libmialgo_monopan.so`) & M10R Pipeline Parity
+- **18PM M3 (`libmialgo_monopan.so`, `18,858,832` B, `md5 = 43c5f99b73a4e68e39798aa8a952a0fb`):**
+  - Pure OpenCL (`mage2.0`) GPU film-grain model linking only standard NDK libs (`liblog`, `libm`, `libc++_shared`, `libdl`, `libc`) with identical `MonopanInit`/`MonopanProcess`/`MonopanDeinit` ABI.
+  - Replaced bundled 17U `libmialgo_monopan.so` (`18,312,840` B) in `src/main/jniLibs/arm64-v8a/libmialgo_monopan.so`.
+  - Verified both standalone (`libmonopan_runner.so`: `MonopanProcess result=0`, `RC=0`, grain `std = 7.310`) and end-to-end inside Xiaomi Camera (`LeicaNative: M3 original algorithm result=0 size=3072x4096`, `HCM-Essential: Monopan grain=true in 1097 ms`).
+- **18PM M10R (`EssentialProcessor.java` `m_styleTransON == 0` parity):**
+  - Previously, M10R (`legend=3`) ran `applyWarmOriginalFilter` (`M9_CLEAR_DENSITY_B12` `-0.95 EV` / `warmth=0.3` / `cream=0.702`), then `M10rPost.after()` (`restoreBalance` undoing 80% of the LUT color shift, `soften` 30% half-res blur, plus a third vignette and second grain), then 17U M9 `B43Tone`.
+  - Switched M10R to `LegendaryPostProcessor.applyOriginalFilter` on authentic 18PM `leica_filter_param_m10r_preview.bin` (108 real 17³ LUTs + 55-slot shading), matching 18PM's exact `m_styleTransON == 0` path (`LUT=1 shading=1`, `cream=0.000`, `grade_ms=0.00`, `1036 ms`).
+- **QNN `styletrans_{high,low}_{m9,m10r}.minn` hardware boundary:**
+  - All 4 neural bilateral-grid UNets (`(1,512,512,3)` `UFIXED_POINT_16` → `(1,256,256,384)`) are precompiled QNN `v2.47.0` **Hexagon HTP V85** (`SM8975`, `min_arch=85`) context binaries with no ONNX/TFLite/GPU/CPU graph; they cannot execute on 14U's HTP V75 (`SM8650`).
+
+### 2.4 Live Device Verification (`1c4e4dec`)
+- M3 Essential (`IMG_20261126_112929.jpg`): `3072×4096`, `0x88b0=2`, `meanRGB=(117.1, 117.1, 117.1)`, `mean|R-B|=0.00`, 18PM `libmialgo_monopan.so` OpenCL `result=0` (`1097 ms`), 0 exiftool warnings.
+- M9 Essential (`IMG_20261126_113702.jpg`): `3072×4096`, `0x88b0=1`, `meanRGB=(131.9, 141.3, 149.3)`, `mean|R-B|=61.20`, `LUT=1 shading=1` (18PM `m9_preview.bin` + `M9_CLEAR_DENSITY_B12` + `B43Tone`), 0 exiftool warnings.
+- M10R Essential (`IMG_20261126_113630.jpg`): `3072×4096`, `0x88b0=3`, `meanRGB=(130.2, 137.3, 143.0)`, `mean|R-B|=37.52`, `LUT=1 shading=1` (clean 18PM `m10r_preview.bin` path, `1036 ms`), 0 exiftool warnings.
 - `ESTL M10R` Leica Looks strip (`IMG_20261126_044251.jpg`): live preview (`OpenGl3dUtils LUT lut_nc -> lut_m10r`) and CandySDK capture (`512×512`) both verified using authentic 18PM `M10R_Cmos.png` (`md5 = e1a95801d1a720f9ea446c290a8cc8ab`).
 
 ---

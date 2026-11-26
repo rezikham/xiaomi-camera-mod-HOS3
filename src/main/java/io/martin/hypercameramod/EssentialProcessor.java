@@ -14,7 +14,6 @@ import android.util.Log;
 import com.codex.leicaapp.B43Tone;
 import com.codex.leicaapp.FilmInput;
 import com.codex.leicaapp.LegendaryPostProcessor;
-import com.codex.leicaapp.M10rPost;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -143,7 +142,6 @@ final class EssentialProcessor {
                     Log.w(TAG, "FilmInput tone skipped: " + t);
                 }
             }
-            float[] m10rBalance = legend == 3 ? M10rPost.balance(bitmap) : null;
             if (legend == 3) {
                 // The 18PM M10R style-transfer model, when its runtime is staged.
                 File models = new File(context.getCacheDir(), "essential/leica-v4");
@@ -164,20 +162,19 @@ final class EssentialProcessor {
                 }
             }
             boolean ok;
-            if (legend == 2) {
+            if (legend == 2 || legend == 3) {
+                // M3: FilmInput + 18PM leica_filter_param_m3.bin shading + 18PM Monopan OpenCL.
+                // M10R: 18PM m_styleTransON==0 parity — authentic 18PM m10r_preview.bin
+                // adaptive 17^3 LUT + 55-slot shading without M9 B12 CCD density,
+                // M10rPost AWB-undo/blur/triple-vignette, or 17U M9 B43Tone.
                 ok = LegendaryPostProcessor.applyOriginalFilter(
                         bitmap, model, scene.lux, scene.cct, 1.0f, phase);
             } else {
-                // M9/M10R colour stage. M10R also adds the app's M10rBin soft
-                // (+0.15 denoise) and the visible M10R post below.
-                float denoise = legend == 3
-                        ? Math.min(1f, scene.denoise + 0.15f) : scene.denoise;
+                // M9 CCD colour stage: 18PM m9_preview.bin adaptive 17^3 LUT + shading,
+                // M9 B12 density/cream grade (-0.95 EV, warmth 0.3), and 17U M9 B43Tone.
                 ok = LegendaryPostProcessor.applyWarmOriginalFilter(
                         bitmap, model, scene.lux, scene.cct, 1.0f, phase,
-                        denoise, -0.95f, 0.3f);
-                if (ok && legend == 3) {
-                    M10rPost.after(bitmap, m10rBalance);
-                }
+                        scene.denoise, -0.95f, 0.3f);
                 if (ok) {
                     B43Tone.apply(bitmap, false);
                 }
