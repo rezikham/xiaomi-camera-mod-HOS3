@@ -59,6 +59,12 @@ public class ModuleMain extends XposedModule {
     // 1. Palette and Parameters
     private static final String STYLE_VERSION_KEY = "camera.feature.styleVersion";
     private static final int STYLE_VERSION = 2;
+    // Leica UI theme selection (LCC). The camera picks the Leica provider when
+    // Te.b.V() is true, i.e. ro.theme_customize == "LCC" and the debug override is off.
+    private static final String LEICA_THEME_KEY = "leica_theme_enabled";
+    private static final String RO_THEME_KEY = "ro.theme_customize";
+    private static final String THEME_DEBUG_KEY = "camera.debug.theme_customize.disabled";
+    private static volatile boolean realLccTheme;
 
     // 2. Original colour style
     private static final String STYLIZATION_KEY = "xiaomi.capabilities.stylizationTypeMask";
@@ -204,6 +210,7 @@ public class ModuleMain extends XposedModule {
         }
         log(Log.INFO, TAG, "HAL capabilities: " + HalCapabilities.summary());
         installPropertyHook();
+        installThemeHook(loader);
         installTabHook();
         installModeListHook(loader);
         installNameStyleHook(loader);
@@ -236,7 +243,7 @@ public class ModuleMain extends XposedModule {
         }
         try {
             copyAssetToSystem("leica_luts/M3_Monopan.png", "/data/vendor/camera/lut_m3.png");
-            copyAssetToSystem("leica_luts/M9_Ccd.png", "/data/vendor/camera/lut_m9.png");
+            copyAssetToSystem("leica_luts/130_LeicaNatural.png", "/data/vendor/camera/lut_m9.png");
             copyAssetToSystem("leica_luts/M10R_Cmos.png", "/data/vendor/camera/lut_m10r.png");
             lutFilesInstalled = true;
             android.util.Log.i(TAG, "LUT files staged to /data/vendor/camera/");
@@ -284,6 +291,23 @@ public class ModuleMain extends XposedModule {
         }
         try {
             Class<?> props = Class.forName("android.os.SystemProperties");
+            // Remember the real LCC state before installing the override.
+            try {
+                Method getStr = props.getDeclaredMethod("get", String.class, String.class);
+                getStr.setAccessible(true);
+                String theme = (String) getStr.invoke(null, RO_THEME_KEY, "");
+                boolean debug = false;
+                try {
+                    Method getBool = props.getDeclaredMethod("getBoolean", String.class,
+                            boolean.class);
+                    getBool.setAccessible(true);
+                    debug = (Boolean) getBool.invoke(null, THEME_DEBUG_KEY, false);
+                } catch (Throwable ignored) {
+                }
+                realLccTheme = "LCC".equals(theme) && !debug;
+            } catch (Throwable t) {
+                realLccTheme = false;
+            }
             hook(props.getDeclaredMethod("getInt", String.class, int.class)).intercept(chain -> {
                 Object result = chain.proceed();
                 if (STYLE_VERSION_KEY.equals(chain.getArg(0)) && (Integer) result < STYLE_VERSION) {
@@ -292,22 +316,49 @@ public class ModuleMain extends XposedModule {
                 return result;
             });
             hook(props.getDeclaredMethod("get", String.class, String.class)).intercept(chain -> {
+                String key = (String) chain.getArg(0);
+                if (RO_THEME_KEY.equals(key)) {
+                    return leicaThemeEnabled() ? "LCC" : "";
+                }
                 Object result = chain.proceed();
-                if (STYLE_VERSION_KEY.equals(chain.getArg(0)) && parse(result) < STYLE_VERSION) {
+                if (STYLE_VERSION_KEY.equals(key) && parse(result) < STYLE_VERSION) {
                     return String.valueOf(STYLE_VERSION);
                 }
                 return result;
             });
             hook(props.getDeclaredMethod("get", String.class)).intercept(chain -> {
+                String key = (String) chain.getArg(0);
+                if (RO_THEME_KEY.equals(key)) {
+                    return leicaThemeEnabled() ? "LCC" : "";
+                }
                 Object result = chain.proceed();
-                if (STYLE_VERSION_KEY.equals(chain.getArg(0)) && parse(result) < STYLE_VERSION) {
+                if (STYLE_VERSION_KEY.equals(key) && parse(result) < STYLE_VERSION) {
                     return String.valueOf(STYLE_VERSION);
                 }
                 return result;
             });
+            try {
+                hook(props.getDeclaredMethod("getBoolean", String.class, boolean.class))
+                        .intercept(chain -> {
+                            if (THEME_DEBUG_KEY.equals(chain.getArg(0))) {
+                                return !leicaThemeEnabled();
+                            }
+                            return chain.proceed();
+                        });
+            } catch (NoSuchMethodException ignored) {
+            }
+            try {
+                hook(props.getDeclaredMethod("getBoolean", String.class)).intercept(chain -> {
+                    if (THEME_DEBUG_KEY.equals(chain.getArg(0))) {
+                        return !leicaThemeEnabled();
+                    }
+                    return chain.proceed();
+                });
+            } catch (NoSuchMethodException ignored) {
+            }
             propertiesHooked = true;
             log(Log.INFO, TAG, "hooked SystemProperties (" + STYLE_VERSION_KEY + " >= "
-                    + STYLE_VERSION + ")");
+                    + STYLE_VERSION + ", realLcc=" + realLccTheme + ")");
         } catch (Throwable t) {
             log(Log.WARN, TAG, "cannot hook SystemProperties: " + t);
         }
@@ -360,6 +411,31 @@ public class ModuleMain extends XposedModule {
             log(Log.INFO, TAG, "hooked SystemProperties (" + HAL_GATE_KEY + " -> HAL when enabled)");
         } catch (Throwable t) {
             log(Log.WARN, TAG, "cannot hook " + HAL_GATE_KEY + ": " + t);
+        }
+    }
+
+    private boolean leicaThemeEnabled() {
+        try {
+            android.content.SharedPreferences p = getRemotePreferences("hypercameramod");
+            if (p != null && p.contains(LEICA_THEME_KEY)) {
+                return p.getBoolean(LEICA_THEME_KEY, realLccTheme);
+            }
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot read " + LEICA_THEME_KEY + ": " + t);
+        }
+        return realLccTheme;
+    }
+
+    // The provider table is chosen in S9.a's static initializer. Hooking Te.b.V() keeps
+    // the choice in sync with the module setting even if a class was loaded early.
+    private void installThemeHook(ClassLoader loader) {
+        try {
+            Class<?> te = Class.forName("Te.b", false, loader);
+            Method v = te.getDeclaredMethod("V");
+            hook(v).intercept(chain -> leicaThemeEnabled());
+            log(Log.INFO, TAG, "hooked Te.b.V (Leica UI theme)");
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "cannot hook Te.b.V: " + t);
         }
     }
 
