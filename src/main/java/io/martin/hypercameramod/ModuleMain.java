@@ -2308,7 +2308,7 @@ public class ModuleMain extends XposedModule {
                 if ((id & 0xFFFF0000) != STRIP_ICON_BASE) {
                     return chain.proceed();
                 }
-                return stripLabel(null, id & 0xFFFF);
+                return stripLabel((Resources) chain.getThisObject(), id & 0xFFFF);
             });
         } catch (Throwable t) {
             log(Log.WARN, TAG, "strip: no getDrawable hook: " + t);
@@ -2318,8 +2318,9 @@ public class ModuleMain extends XposedModule {
 
     private static Drawable stripLabel(Resources res, int which) {
         float density = res == null ? 2.75f : res.getDisplayMetrics().density;
-        int size = Math.round(50 * density);
-        Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        int width = Math.round(36 * density);
+        int height = Math.round(28 * density);
+        Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bitmap);
         Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
         paint.setColor(Color.WHITE);
@@ -2328,10 +2329,10 @@ public class ModuleMain extends XposedModule {
         String top = which == 3 || which == 4 ? "FLM" : "ESTL";
         String bottom = which == 1 ? "M3" : which == 2 ? "M9"
                 : which == 3 ? "POS" : which == 4 ? "NEG" : which == 5 ? "M10R" : "NEG";
-        paint.setTextSize(size * 0.44f);
-        paint.setTextScaleX(0.88f);
-        canvas.drawText(top, size / 2f, size * 0.45f, paint);
-        canvas.drawText(bottom, size / 2f, size * 0.86f, paint);
+        paint.setTextSize(12.5f * density);
+        paint.setTextScaleX(0.90f);
+        canvas.drawText(top, width / 2f, height * 0.44f, paint);
+        canvas.drawText(bottom, width / 2f, height * 0.90f, paint);
         return new BitmapDrawable(res, bitmap);
     }
 
