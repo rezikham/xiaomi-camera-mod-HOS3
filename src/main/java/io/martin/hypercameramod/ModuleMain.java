@@ -243,7 +243,7 @@ public class ModuleMain extends XposedModule {
         }
         try {
             copyAssetToSystem("leica_luts/M3_Monopan.png", "/data/vendor/camera/lut_m3.png");
-            copyAssetToSystem("leica_luts/130_LeicaNatural.png", "/data/vendor/camera/lut_m9.png");
+            copyAssetToSystem("leica_luts/M9_Ccd.png", "/data/vendor/camera/lut_m9.png");
             copyAssetToSystem("leica_luts/M10R_Cmos.png", "/data/vendor/camera/lut_m10r.png");
             lutFilesInstalled = true;
             android.util.Log.i(TAG, "LUT files staged to /data/vendor/camera/");
