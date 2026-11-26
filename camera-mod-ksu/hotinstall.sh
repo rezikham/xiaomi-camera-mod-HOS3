@@ -9,7 +9,7 @@ log -t HyperCameraMod "hotinstall: LUT stage"
 
 mkdir -p /data/vendor/camera
 
-LUTS="lut_m3.png lut_m9.png
+LUTS="lut_m3.png lut_m9.png lut_m10r.png
 lut_600f.png lut_bf70.png lut_r600.png lut_p100f.png
 lut_f50.png lut_kc64.png lut_v250.png lut_h400.png
 lut_kp160.png lut_fc400.png lut_c50d.png lut_kg200.png"

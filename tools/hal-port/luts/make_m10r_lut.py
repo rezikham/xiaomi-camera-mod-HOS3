@@ -65,11 +65,14 @@ def bake_512_png(lut64: np.ndarray, out_png: Path) -> str:
 
 
 def trim_filter_bin(src_bytes: bytes, out_bin: Path) -> str:
-    """Strip 8 bytes per trailing record (440 bytes total) for libm9base/B12 compatibility."""
-    expected_len = HEADER_SIZE + LUT_COUNT * LUT17_BYTES + TAIL_RECORDS * TAIL_REC_SRC
-    if len(src_bytes) != expected_len:
-        raise ValueError(f"Unexpected bin length {len(src_bytes)} != {expected_len}")
-    tail_off = HEADER_SIZE + LUT_COUNT * LUT17_BYTES
+    """Strip 8 bytes per trailing record (440 bytes total) for libm9base/B12 compatibility.
+
+    Supports both M10R (108 LUTs -> 1,598,108 B) and M9 (114 LUTs -> 1,686,542 B) 18PM bins.
+    """
+    payload = len(src_bytes) - HEADER_SIZE - TAIL_RECORDS * TAIL_REC_SRC
+    if payload <= 0 or payload % LUT17_BYTES != 0:
+        raise ValueError(f"Unexpected bin length {len(src_bytes)} (not a 17^3 LUT + 55x40 tail bin)")
+    tail_off = HEADER_SIZE + payload
     out = bytearray(src_bytes[:tail_off])
     for i in range(TAIL_RECORDS):
         rec_off = tail_off + i * TAIL_REC_SRC
