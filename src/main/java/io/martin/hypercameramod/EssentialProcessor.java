@@ -67,24 +67,21 @@ final class EssentialProcessor {
         if (result == null) {
             return false;
         }
-        File tmp = new File(file.getParentFile(), file.getName() + ".hcm-essential.tmp");
-        try (FileOutputStream out = new FileOutputStream(tmp)) {
+        // Overwrite in-place rather than renaming a .tmp file over the JPEG: on Android 11+
+        // FUSE MediaProvider, renameTo() from an unindexed .tmp file logs
+        // "Database update failed while renaming" and drops the photo from MediaStore,
+        // breaking Camera's recent-capture Uri.
+        try (FileOutputStream out = new FileOutputStream(file)) {
             out.write(result);
         } catch (Throwable t) {
-            Log.w(TAG, "cannot write " + tmp, t);
-            tmp.delete();
+            Log.w(TAG, "cannot replace " + file, t);
             return false;
         }
-        if (!tmp.renameTo(file)) {
-            try (FileOutputStream out = new FileOutputStream(file)) {
-                out.write(result);
-            } catch (Throwable t) {
-                Log.w(TAG, "cannot replace " + file, t);
-                tmp.delete();
-                return false;
-            }
-            tmp.delete();
-        }
+        android.media.MediaScannerConnection.scanFile(
+                context,
+                new String[]{file.getAbsolutePath()},
+                new String[]{"image/jpeg"},
+                null);
         return true;
     }
 

@@ -985,16 +985,20 @@ public class ModuleMain extends XposedModule {
             if (out == null) {
                 return;
             }
-            java.io.File tmp = new java.io.File(file.getParentFile(), file.getName() + ".hcm.tmp");
-            try (java.io.FileOutputStream fos = new java.io.FileOutputStream(tmp)) {
-                out.compress(android.graphics.Bitmap.CompressFormat.JPEG, 95, fos);
-            }
+            java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+            out.compress(android.graphics.Bitmap.CompressFormat.JPEG, 95, baos);
             out.recycle();
             bm.recycle();
-            if (!tmp.renameTo(file)) {
-                tmp.delete();
-                log(Log.WARN, TAG, "could not replace " + file.getName());
-                return;
+            try (java.io.FileOutputStream fos = new java.io.FileOutputStream(file)) {
+                baos.writeTo(fos);
+            }
+            android.content.Context ctx = currentContext();
+            if (ctx != null) {
+                android.media.MediaScannerConnection.scanFile(
+                        ctx,
+                        new String[]{file.getAbsolutePath()},
+                        new String[]{"image/jpeg"},
+                        null);
             }
             log(Log.INFO, TAG, "applied Leica LUT to " + file.getName());
         } catch (Throwable t) {
