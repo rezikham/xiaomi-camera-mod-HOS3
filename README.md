@@ -31,6 +31,7 @@ Package: `io.rezikham.hypercameramod`
 | Device | Model / codename | OS | Camera | Verified |
 | ------ | ---------------- | -- | ------ | -------- |
 | Xiaomi 14 Ultra | `24031PN0DC` / aurora | HyperOS `3.0.304.0.WNAMIXM` (Android 16) | `6.7.000280.0` | Original Portrait toggle (software), film filters, HAL module experimental |
+| Xiaomi 13 Ultra | `2304FPN6DC` / ishtar | HyperOS `3.0.308.0.WMACNXM` (Android 16) | `6.7.000280.0` | Leica Looks (M3/M9/M10R, POS/NEG), film filters, Moment App post-capture, Portrait; Original Photo hangs HAL |
 | Xiaomi 14 Pro Ti | `23116PN5BC` / shennong | HyperOS `3.0.310.0.WNBCNXM` (Android 16) | `6.4.000430.0` | film filters |
 | Xiaomi 18 Pro Max | `M154FF` / madrid | HyperOS `4.0.29.0.XEOCNXM` (Android 17) | `6.8.002230.0` | film filters (static, needs a device log); Legend/M10R native |
 
@@ -52,15 +53,15 @@ The 18 Pro Max HAL analysis — provider/device versions, Legend/M10R processing
 
 The module can only expose what the phone's camera hardware layer (`camera.qcom.so`, CHI) implements. It cannot add missing processing.
 
-| Feature | Xiaomi 14 Ultra | Xiaomi 17 Ultra | Xiaomi 18 Pro Max |
-| ------- | --------------- | --------------- | ----------------- |
-| Palette and Parameters | ✅ | ✅ | ✅ |
-| Film filters | ✅ | ✅ | ✅ |
-| Original colour style (Photo) | ✅ | ✅ | ✅ |
-| **Original portrait style (software)** | ⚠️ Opt-in — post-capture, uses depth map | ✅ (on by default, native) | ✅ (on by default, native) |
-| Leica Essential (M3/M9) | ⚠️ stock HAL cannot process; Moment App post-capture | ✅ | ✅ |
-| Moment App pipeline (M3/M9) | ⚠️ Off by default; enable in settings | ✅ | ✅ |
-| CMOS (M10R) | ❌ HAL limitation | Experimental — HAL has no M10R | ✅ Native (HAL + Camera 6.8) |
+| Feature | Xiaomi 13 Ultra | Xiaomi 14 Ultra | Xiaomi 17 Ultra | Xiaomi 18 Pro Max |
+| ------- | --------------- | --------------- | --------------- | ----------------- |
+| Palette and Parameters | ✅ (preview; no 18PM HAL bridge) | ✅ | ✅ | ✅ |
+| Film filters | ✅ | ✅ | ✅ | ✅ |
+| Original colour style (Photo) | ❌ HAL hangs (disabled on `ishtar`) | ✅ | ✅ | ✅ |
+| **Original portrait style (software)** | ⚠️ Needs scene depth verification | ⚠️ Opt-in — post-capture, uses depth map | ✅ (on by default, native) | ✅ (on by default, native) |
+| Leica Essential (M3/M9) | ⚠️ Moment App post-capture | ⚠️ stock HAL cannot process; Moment App post-capture | ✅ | ✅ |
+| Moment App pipeline (M3/M9) | ✅ (fallback when `essential_mode_enabled` is on) | ⚠️ Off by default; enable in settings | ✅ | ✅ |
+| CMOS (M10R) | ⚠️ Moment App post-capture | ❌ HAL limitation | Experimental — HAL has no M10R | ✅ Native (HAL + Camera 6.8) |
 
 **14 Ultra HAL limitation.** M3, M9, M10R and native Original portrait cannot work on the 14 Ultra because its camera hardware layer does not implement the processing they need:
 
@@ -70,6 +71,12 @@ The module can only expose what the phone's camera hardware layer (`camera.qcom.
 - **Moment App pipeline (v1.1.0+)** — **Post-capture implementation** using the genuine Moment App parametric filter (`libm9base.so`) + Monopan grain (`libmialgo_monopan.so`) in a private module process. Off by default; enable in settings.
 
 These are firmware limitations for native processing. The module provides **software post-capture alternatives** for Original Portrait and M3/M9 on 14 Ultra.
+
+**13 Ultra (`ishtar`) notes (Camera `6.7.000280.0`, HyperOS `3.0.308.0.WMACNXM`):**
+- `camera.debug.mivi3.output.jpeg=true` must **not** be enabled on `ishtar`: MIVI3 outputs raw 12 MiB (`4096×3072`) non-JPEG buffers instead of valid JPEGs (`camera-mod-ksu` skips setting this property on `ishtar`).
+- **Original style in Photo mode** hangs the `ishtar` HAL, so `STYLIZATION_ORIGINAL` is skipped on `ishtar`.
+- Tapping the **Aperture** toggle inside the swipe-down menu crashes Camera `6.7.000280.0` (`TopConfigItem` NPE); moving the Aperture toggle to the top bar works normally.
+- `hcm-palette-18pm` (18PM Palette HAL Bridge) does not apply to `ishtar` because `/odm/lib64/camera/plugins/com.xiaomi.plugin.filter.so` is not present on 13 Ultra.
 
 ## Native HAL Backport Path (Experimental, Requires Device)
 

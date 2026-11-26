@@ -15,6 +15,7 @@ public final class DeviceSupport {
     public static final int XIAOMI_14_ULTRA = 1;
     public static final int XIAOMI_17_ULTRA = 2;
     public static final int XIAOMI_18_PRO_MAX = 3;
+    public static final int XIAOMI_13_ULTRA = 4;
 
     private DeviceSupport() {
     }
@@ -36,6 +37,9 @@ public final class DeviceSupport {
         // 14 Ultra codenames are aurora (China) and aurorapro (global).
         if (name.contains("14 ULTRA") || device.contains("aurora")) {
             return XIAOMI_14_ULTRA;
+        }
+        if (name.contains("13 ULTRA") || device.contains("ishtar")) {
+            return XIAOMI_13_ULTRA;
         }
         return UNKNOWN;
     }

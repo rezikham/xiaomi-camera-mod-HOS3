@@ -24,7 +24,9 @@ for lut in $LUTS; do
     fi
 done
 
-resetprop -n camera.debug.mivi3.output.jpeg true
+if [ "$(getprop ro.product.device)" != "ishtar" ]; then
+    resetprop -n camera.debug.mivi3.output.jpeg true
+fi
 
 log -t HyperCameraMod "hotinstall: LUTs staged"
 exit 0

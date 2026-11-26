@@ -717,7 +717,7 @@ public class ModuleMain extends XposedModule {
     // ---- 2. Original colour style -------------------------------------------------------------
 
     private void installStylizationHook() {
-        if (stylizationHooked) {
+        if (stylizationHooked || DeviceSupport.family() == DeviceSupport.XIAOMI_13_ULTRA) {
             return;
         }
         try {
@@ -835,11 +835,12 @@ public class ModuleMain extends XposedModule {
                                 if (!isCameraPhoto(f)) {
                                     continue;
                                 }
-                                if (processed.add(f.getAbsolutePath())) {
+                                if (!processed.contains(f.getAbsolutePath())) {
                                     log(Log.INFO, TAG, "LUT saw new file " + f.getName());
                                     long size = f.length();
                                     Thread.sleep(1500);
                                     if (f.length() == size && size > 50000) {
+                                        processed.add(f.getAbsolutePath());
                                         applyLutToFile(f);
                                     }
                                 }
@@ -1269,7 +1270,7 @@ public class ModuleMain extends XposedModule {
         } catch (Throwable t) {
             log(Log.WARN, TAG, "cannot read " + ESSENTIAL_PIPELINE_KEY + ": " + t);
         }
-        return false;
+        return essentialStdEnabled();
     }
 
     // ---- 2b. Legendary request bridge -----------------------------------------------------------
@@ -2317,7 +2318,7 @@ public class ModuleMain extends XposedModule {
 
     private static Drawable stripLabel(Resources res, int which) {
         float density = res == null ? 2.75f : res.getDisplayMetrics().density;
-        int size = Math.round(36 * density);
+        int size = Math.round(50 * density);
         Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bitmap);
         Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
@@ -2327,9 +2328,10 @@ public class ModuleMain extends XposedModule {
         String top = which == 3 || which == 4 ? "FLM" : "ESTL";
         String bottom = which == 1 ? "M3" : which == 2 ? "M9"
                 : which == 3 ? "POS" : which == 4 ? "NEG" : which == 5 ? "M10R" : "NEG";
-        paint.setTextSize(size * 0.335f);
-        canvas.drawText(top, size / 2f, size * 0.47f, paint);
-        canvas.drawText(bottom, size / 2f, size * 0.80f, paint);
+        paint.setTextSize(size * 0.44f);
+        paint.setTextScaleX(0.88f);
+        canvas.drawText(top, size / 2f, size * 0.45f, paint);
+        canvas.drawText(bottom, size / 2f, size * 0.86f, paint);
         return new BitmapDrawable(res, bitmap);
     }
 
