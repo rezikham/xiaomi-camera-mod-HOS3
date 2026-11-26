@@ -954,6 +954,9 @@ public class ModuleMain extends XposedModule {
                     try {
                         java.nio.file.Files.move(processedFile.toPath(), file.toPath(), 
                             java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                        android.media.MediaScannerConnection.scanFile(
+                                context, new String[]{file.getAbsolutePath()},
+                                new String[]{"image/jpeg"}, null);
                         log(Log.INFO, TAG, "Original Portrait post-process applied to " + file.getName());
                     } catch (Throwable t) {
                         log(Log.WARN, TAG, "Failed to replace file after Original Portrait post-process: " + t);
@@ -3012,18 +3015,115 @@ public class ModuleMain extends XposedModule {
                 Object res = chain.proceed();
                 if (res instanceof android.os.Bundle bundle) {
                     String method = (String) chain.getArg(0);
-                    if ("method_is_legend_available".equals(method)) {
+                    if ("method_is_refocus_support".equals(method)) {
+                        // 18PM Gallery only enables the Portrait capsule when MediaEditor does NOT
+                        // claim refocus, then routes to ExtraPhoto (the stock 14U path).
+                        bundle.putBoolean("key_common_is_support", false);
+                    } else if ("method_is_legend_available".equals(method)
+                            || "method_is_xm_legend_available".equals(method)) {
                         bundle.putBoolean("key_common_is_available", true);
-                    } else if (bundle.containsKey("method_is_legend_available")) {
-                        bundle.putBoolean("method_is_legend_available", true);
+                    } else {
+                        if (bundle.containsKey("method_is_legend_available")) {
+                            bundle.putBoolean("method_is_legend_available", true);
+                        }
+                        if (bundle.containsKey("method_is_xm_legend_available")) {
+                            bundle.putBoolean("method_is_xm_legend_available", true);
+                        }
                     }
                 }
                 return res;
             });
+
+            try {
+                Class<?> xmLegendGate = Class.forName("ft.t", false, loader);
+                boolean hasMadridSet = false;
+                for (java.lang.reflect.Field f : xmLegendGate.getDeclaredFields()) {
+                    if (java.lang.reflect.Modifier.isStatic(f.getModifiers())
+                            && java.util.Set.class.isAssignableFrom(f.getType())) {
+                        f.setAccessible(true);
+                        Object v = f.get(null);
+                        if (v instanceof java.util.Set<?> set && set.contains("madrid")) {
+                            hasMadridSet = true;
+                            break;
+                        }
+                    }
+                }
+                if (hasMadridSet) {
+                    Method m = xmLegendGate.getDeclaredMethod("a");
+                    if (m.getReturnType() == boolean.class
+                            && java.lang.reflect.Modifier.isStatic(m.getModifiers())) {
+                        hook(m).intercept(chain -> Boolean.TRUE);
+                        log(Log.INFO, TAG, "MediaEditor XM Legend (ft.t.a) hook installed");
+                    }
+                }
+            } catch (Throwable t) {
+                log(Log.DEBUG, TAG, "MediaEditor XM Legend hook skipped: " + t);
+            }
+
+            installMediaEditorRefocusHook(loader);
+
             mediaEditorHooked = true;
             log(Log.INFO, TAG, "MediaEditor Essential hooks installed");
         } catch (Throwable t) {
             log(Log.WARN, TAG, "MediaEditor Essential hooks failed: " + t);
+        }
+    }
+
+    /**
+     * Enables portrait blur re-editing on 14 Ultra ({@code aurora}) in 18PM MiMediaEditor, whose
+     * device support enum ({@code jt.a.EnumC0484a}) dropped {@code aurora} even though 14U ships
+     * compatible {@code libmiphone_capture_bokeh.so} and {@code dualcam_bokeh_params_pro.json}.
+     */
+    private void installMediaEditorRefocusHook(ClassLoader loader) {
+        if (!new java.io.File("/odm/lib64/libmiphone_capture_bokeh.so").exists()) {
+            return;
+        }
+        try {
+            Class<?> cls = Class.forName("jt.a", true, loader);
+            Field f = cls.getDeclaredField("a");
+            if (!java.lang.reflect.Modifier.isStatic(f.getModifiers())
+                    || !Enum.class.isAssignableFrom(f.getType())) {
+                return;
+            }
+            Object[] constants = f.getType().getEnumConstants();
+            if (constants == null) {
+                return;
+            }
+            Object target = null;
+            boolean hasMadrid = false;
+            for (Object c : constants) {
+                String name = ((Enum<?>) c).name();
+                if ("haotian".equals(name)) {
+                    target = c;
+                } else if ("madrid".equals(name)) {
+                    hasMadrid = true;
+                }
+            }
+            if (target == null || !hasMadrid) {
+                return;
+            }
+            f.setAccessible(true);
+            Object current = f.get(null);
+            if (current != null) {
+                log(Log.INFO, TAG, "MediaEditor portrait refocus already active (jt.a.a = " + current + ")");
+                return;
+            }
+            try {
+                f.set(null, target);
+            } catch (IllegalAccessException e) {
+                Field accessFlags = Field.class.getDeclaredField("accessFlags");
+                accessFlags.setAccessible(true);
+                accessFlags.setInt(f, f.getModifiers() & ~java.lang.reflect.Modifier.FINAL);
+                f.set(null, target);
+            }
+            Object after = f.get(null);
+            if (after != null) {
+                log(Log.INFO, TAG, "MediaEditor portrait refocus enabled (jt.a.a = " + after + ")");
+            } else {
+                log(Log.WARN, TAG, "MediaEditor portrait refocus failed: jt.a.a still null");
+            }
+        } catch (Throwable t) {
+            log(Log.DEBUG, TAG, "MediaEditor refocus hook skipped: " + t);
         }
     }
 }

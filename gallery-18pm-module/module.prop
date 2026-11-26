@@ -1,0 +1,6 @@
+id=hcm-gallery-18pm
+name=HCM 18PM Gallery Libraries
+version=1.2
+versionCode=3
+author=HyperCameraMod
+description=Adds libmisqlite3.so, libbytehook.so, 18PM Hyper Flutter engine (3.38.3-mi-1.17.25), and non-panicking 14U libhyper_os_network_private.dylib.so so unmodified 18PM Rust Gallery runs cleanly on 14U (including over VPN/Tailscale).

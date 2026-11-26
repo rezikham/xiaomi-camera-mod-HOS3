@@ -210,7 +210,7 @@ final class EssentialProcessor {
                 return null;
             }
             byte[] withExif = copyExif(jpeg, encoded.toByteArray());
-            return ExifUtils.injectLegendMode(withExif, legend);
+            return ExifUtils.finalizeLegend(withExif, jpeg, legend);
         } catch (Throwable t) {
             Log.e(TAG, "pipeline failed", t);
             return null;
