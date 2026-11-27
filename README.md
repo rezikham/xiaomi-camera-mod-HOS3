@@ -76,7 +76,7 @@ These are firmware limitations for native processing. The module provides **soft
 - `camera.debug.mivi3.output.jpeg=true` must **not** be enabled on `ishtar`: MIVI3 outputs raw 12 MiB (`4096×3072`) non-JPEG buffers instead of valid JPEGs (`camera-mod-ksu` skips setting this property on `ishtar`).
 - **Original style in Photo mode (`LEICA ORIG`):** Stock `ishtar` `/odm/lib64/hw/com.qti.chi.override.so` has an off-by-one UBSan bounds check in `ExtensionModule::GetbokehFallbackLuxThreshold` (`cmp w9, #0x2` before a `[2][8]` array), causing `SIGABRT` when `stylizationType == 2`. Patching it with `tools/hal-port/ishtar/patch_chi_original_13u.py` (`hcm-ishtar-original-v1.0.zip`, which also sets `camera.feature.ishtar_original_photo=1`) makes native Original Photo work cleanly with zero crashes. Without the patch, `STYLIZATION_ORIGINAL` stays disabled on `ishtar`.
 - **Essential Moment tap-to-focus:** Camera 6.7 sets `com.xiaomi.sessionparams.bokehRole` (`0x819d0004`) on repeating requests in mode `256` but omits it from one-shot AF triggers, forcing Camera3 stream reconfiguration on every tap; HyperCameraMod strips `bokehRole` in Essential Moment so touch AF locks normally.
-- Tapping the **Aperture** toggle inside the swipe-down menu crashes Camera `6.7.000280.0` (`TopConfigItem` NPE); moving the Aperture toggle to the top bar works normally.
+- **Swipe-down menu Aperture toggle:** Camera `6.7.000280.0` throws a `TopConfigItem` `NullPointerException` in `F9.f.f(View)` when expanding sub-menus in the swipe-down grid due to empty/spacer child views with `tag == null`; `HyperCameraMod` hooks `F9.f.f` to return `false` for tagless views so Aperture expands and switches cleanly inside the swipe-down menu.
 - `hcm-palette-18pm` (18PM Palette HAL Bridge) does not apply to `ishtar` because `/odm/lib64/camera/plugins/com.xiaomi.plugin.filter.so` is not present on 13 Ultra.
 
 ## Native HAL Backport Path (Experimental, Requires Device)
@@ -157,6 +157,13 @@ For native Original Portrait on 14 Ultra (requires device testing):
 5. Open Camera app → Portrait → Original style
 
 **Requirements**: nomount metamodule enabled, HyperOS 3.0.304.0.WNAMIXM, Camera 6.7.000280.0
+
+### 13 Ultra Original Photo HAL Fix (KernelSU)
+For native Original colour style (`LEICA ORIG`) in Photo mode on Xiaomi 13 Ultra (`ishtar`, HyperOS `3.0.308.0.WMACNXM`):
+
+1. Flash `hcm-ishtar-original-v1.0.zip` via KernelSU (or patch your ROM's `/odm/lib64/hw/com.qti.chi.override.so` with `tools/hal-port/ishtar/patch_chi_original_13u.py`).
+2. Reboot device.
+3. This fixes the off-by-one UBSan bounds check in `ExtensionModule::GetbokehFallbackLuxThreshold` and sets `camera.feature.ishtar_original_photo=1`.
 
 ### System properties (fallback)
 
