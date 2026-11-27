@@ -164,6 +164,7 @@ public class ModuleMain extends XposedModule {
     private volatile boolean paletteCaptureHooked;
     private volatile boolean galleryHooked;
     private volatile boolean mediaEditorHooked;
+    private volatile boolean menuExpandHooked;
     // -1 = not read yet, 0 = off, 1 = on. Read once per Camera process.
     private volatile int originalPortraitState = -1;
     // LUT files staged to /data/vendor/camera/ on first M3/M9 selection.
@@ -226,6 +227,7 @@ public class ModuleMain extends XposedModule {
         installPaletteCaptureHook(loader);
         installLeicaLooksEntries(loader);
         installFilterStripEntries(loader);
+        installMenuExpandHook(loader);
         if (!problems.isEmpty() && stage.equals("onPackageLoaded")) {
             // onPackageReady tries once more; report only what is still wrong after it
             problems.clear();
@@ -2952,6 +2954,37 @@ public class ModuleMain extends XposedModule {
                 log(Log.WARN, TAG, "colour style layout " + profile.name()
                         + " does not match: " + t);
             }
+        }
+    }
+
+    private void installMenuExpandHook(ClassLoader loader) {
+        if (menuExpandHooked) {
+            return;
+        }
+        try {
+            Class<?> animClass = loader.loadClass("F9.f");
+            Method f = animClass.getDeclaredMethod("f", android.view.View.class);
+            if (!java.lang.reflect.Modifier.isStatic(f.getModifiers())
+                    || f.getReturnType() != boolean.class) {
+                return;
+            }
+            hook(f).intercept(chain -> {
+                android.view.View view = (android.view.View) chain.getArg(0);
+                if (view == null || view.getTag() == null) {
+                    return false;
+                }
+                try {
+                    return chain.proceed();
+                } catch (ClassCastException | NullPointerException ignored) {
+                    return false;
+                }
+            });
+            menuExpandHooked = true;
+            log(Log.INFO, TAG, "hooked F9.f.f (swipe-down menu expand guard)");
+        } catch (ClassNotFoundException ignored) {
+            // Only present in Camera 6.7 builds with this obfuscation
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "could not hook F9.f.f: " + t);
         }
     }
 
