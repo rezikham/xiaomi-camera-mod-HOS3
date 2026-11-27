@@ -24,7 +24,8 @@ for lut in $LUTS; do
     fi
 done
 
-if [ "$(getprop ro.product.device)" != "ishtar" ]; then
+DEV=$(getprop ro.product.device)
+if [ "$DEV" != "ishtar" ] && [ "$DEV" != "shennong" ]; then
     resetprop -n camera.debug.mivi3.output.jpeg true
 fi
 

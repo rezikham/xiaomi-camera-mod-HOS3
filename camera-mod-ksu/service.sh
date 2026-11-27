@@ -30,8 +30,9 @@ for lut in $LUTS; do
 done
 
 
-# setprop is safe in late_start service mode (skip on 13U ishtar where it outputs raw 12MB buffers)
-if [ "$(getprop ro.product.device)" != "ishtar" ]; then
+# setprop is safe in late_start service mode (skip on 13U ishtar / 14 Pro Ti shennong where it outputs raw 12MB buffers)
+DEV=$(getprop ro.product.device)
+if [ "$DEV" != "ishtar" ] && [ "$DEV" != "shennong" ]; then
     setprop camera.debug.mivi3.output.jpeg true
 fi
 

@@ -32,7 +32,7 @@ Package: `io.rezikham.hypercameramod`
 | ------ | ---------------- | -- | ------ | -------- |
 | Xiaomi 14 Ultra | `24031PN0DC` / aurora | HyperOS `3.0.304.0.WNAMIXM` (Android 16) | `6.7.000280.0` | Original Portrait toggle (software), film filters, HAL module experimental |
 | Xiaomi 13 Ultra | `2304FPN6DC` / ishtar | HyperOS `3.0.308.0.WMACNXM` (Android 16) | `6.7.000280.0` | Leica Looks (M3/M9/M10R, POS/NEG), film filters, Moment App post-capture + tap-to-focus, Portrait, Original Photo (with `hcm-ishtar-original` HAL fix) |
-| Xiaomi 14 Pro Ti | `23116PN5BC` / shennong | HyperOS `3.0.310.0.WNBCNXM` (Android 16) | `6.4.000430.0` | film filters |
+| Xiaomi 14 Pro Ti | `23116PN5BC` / shennong | HyperOS `3.0.310.0.WNBCNXM` (Android 16) | `6.4.000430.0`, `6.7.000280.0` | `6.4`: film filters; `6.7`: Photo (`ORIG`/`VIBR`), Palette, Leica Looks, Film filters, Moment App (`M3`/`M9`/`M10R`) + tap-to-focus, Portrait (`ORIG`), swipe-down Aperture (`F1.42–F4.0`) |
 | Xiaomi 18 Pro Max | `M154FF` / madrid | HyperOS `4.0.29.0.XEOCNXM` (Android 17) | `6.8.002230.0` | film filters (static, needs a device log); Legend/M10R native |
 
 The 17 Ultra results below come from the upstream project (HyperOS 4, Camera 6.7); this fork has not re-tested that phone.

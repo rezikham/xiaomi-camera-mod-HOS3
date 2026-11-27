@@ -39,7 +39,10 @@ if [ -x /data/adb/ksud ]; then
     log -t HyperCameraMod "post-fs-data: applied platform_app LUT read policy"
 fi
 
-# resetprop in post-fs-data (setprop can deadlock this early)
-resetprop -n camera.debug.mivi3.output.jpeg true
+# resetprop in post-fs-data (setprop can deadlock this early; skip on ishtar/shennong where it outputs raw 12MB buffers)
+DEV=$(getprop ro.product.device)
+if [ "$DEV" != "ishtar" ] && [ "$DEV" != "shennong" ]; then
+    resetprop -n camera.debug.mivi3.output.jpeg true
+fi
 
 log -t HyperCameraMod "post-fs-data: LUT stage complete (no libraries mounted)"
